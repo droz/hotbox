@@ -26,8 +26,15 @@ MIRROR_HEIGHT_M = 1.22  # ~48 in
 MIRROR_POST_HEIGHT_M = 0.95
 MIRROR_BACK_TO_ROTATION_OFFSET_M = 0.10
 
-SIM_SAMPLES_U = 65
-SIM_SAMPLES_V = 65
+# Solar absorber: vertical rectangle, center at (0, 0, center_height); normal in horizontal plane.
+# normal_angle_from_x_deg: 0° = +x (east), 90° = +y (north), 180° = −x (west), 270° = −y (south).
+ABSORBER_WIDTH_M = 0.30
+ABSORBER_HEIGHT_M = 0.30
+ABSORBER_CENTER_HEIGHT_M = 1.20
+ABSORBER_NORMAL_ANGLE_FROM_X_DEG = 90.0
+
+SIM_SAMPLES_U = 250
+SIM_SAMPLES_V = 250
 
 # Site (must match SunModel in build_default_simulation)
 SITE_LATITUDE_DEG = 40.7864
@@ -146,10 +153,10 @@ def build_default_simulation() -> HotboxSimulation:
         dni_w_per_m2=1000.0,
     )
     absorber = SolarAbsorber(
-        width_m=0.230,
-        height_m=0.230,
-        center_height_m=1.20,
-        normal_angle_from_x_deg=180.0,  # Facing approximately -x
+        width_m=ABSORBER_WIDTH_M,
+        height_m=ABSORBER_HEIGHT_M,
+        center_height_m=ABSORBER_CENTER_HEIGHT_M,
+        normal_angle_from_x_deg=ABSORBER_NORMAL_ANGLE_FROM_X_DEG,
     )
 
     xy_list = mirror_rotation_xy_on_arc(

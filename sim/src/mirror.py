@@ -68,100 +68,102 @@ class CylindricalMirror:
         )
         return pts
 
-    def intersect_and_reflect(
-        self,
-        rays: RayBundle,
-        target_point: np.ndarray | None = None,
-    ) -> tuple[np.ndarray, np.ndarray, RayBundle]:
+    def intersect_and_reflect(self, rays: RayBundle) -> tuple[np.ndarray, np.ndarray, RayBundle]:
+        """
+        Intersect parallel rays with the convex cylindrical patch and reflect.
+
+        We use a right-handed cylinder frame with origin on the axis at the curvature
+        center line (same as the infinite cylinder used for intersection):
+          e_z = axis (along the cylinder),
+          e_x = curved_dir (meridional tangent at patch center),
+          e_y = e_z × e_x (completes the basis).
+
+        In that frame the infinite cylinder is x² + y² = R² with generators || e_z.
+        Rays are expressed in that frame for the quadratic solve, then candidate hits are
+        checked in world coordinates against finite width/height and front-face lighting.
+
+        Two positive roots mean the line meets the infinite cylinder twice; only roots that
+        lie on the **finite mirror patch** count. If both do, we keep the smaller t (first
+        encounter along the ray from the bundle origin, i.e. closest to the sun side).
+        """
+        r = self.radius_of_curvature_m
         c0 = self.curvature_center_line_point
-        a = self.axis
         c = self.center
+        a = self.axis
         b = self.curved_dir
         n0 = self.normal
-        r = self.radius_of_curvature_m
 
         p = rays.origins
         d = rays.directions
         m = p - c0
-        m_perp = m - (m @ a)[:, None] * a
-        d_perp = d - (d @ a)[:, None] * a
 
-        aa = np.sum(d_perp * d_perp, axis=1)
-        bb = 2.0 * np.sum(m_perp * d_perp, axis=1)
-        cc = np.sum(m_perp * m_perp, axis=1) - r**2
-        disc = bb**2 - 4.0 * aa * cc
+        # --- Cylinder-local frame (origin c0 on axis): e_z || axis, e_x || meridian at patch center ---
+        ez = a
+        ex = b
+        ey = normalize(np.cross(ez, ex).reshape(1, 3))[0]
+        e = np.stack([ex, ey, ez], axis=1)
 
-        valid = (aa > 1e-12) & (disc >= 0.0)
-        t = np.full(p.shape[0], np.nan, dtype=float)
-        sqrt_disc = np.zeros_like(disc)
-        sqrt_disc[valid] = np.sqrt(disc[valid])
-        t1 = np.full_like(t, np.nan)
-        t2 = np.full_like(t, np.nan)
-        t1[valid] = (-bb[valid] - sqrt_disc[valid]) / (2.0 * aa[valid])
-        t2[valid] = (-bb[valid] + sqrt_disc[valid]) / (2.0 * aa[valid])
+        # --- World → local: row i is (p·e_x, p·e_y, p·e_z) in the cylinder basis ---
+        ml = m @ e
+        dl = d @ e
 
-        t_candidate = np.stack([t1, t2], axis=1)
-        positive = t_candidate > 1e-8
-        has_pos = np.any(positive, axis=1)
-        valid &= has_pos
+        # --- Intersect ray (ml + t*dl) with infinite cylinder: (xy)^2 = r^2, z free ---
+        a_quad = dl[:, 0] ** 2 + dl[:, 1] ** 2
+        b_quad = 2.0 * (ml[:, 0] * dl[:, 0] + ml[:, 1] * dl[:, 1])
+        c_quad = ml[:, 0] ** 2 + ml[:, 1] ** 2 - r**2
+        disc = b_quad**2 - 4.0 * a_quad * c_quad
 
-        # Default: nearest physical intersection.
-        t[has_pos] = np.min(np.where(positive[has_pos], t_candidate[has_pos], np.inf), axis=1)
+        eps_a = 1e-12
+        eps_t = 1e-8
+        eps_disc = 1e-10
+        # Degenerate: ray parallel to axis in the cylinder wall plane, or tangent hit.
+        can_solve = (a_quad > eps_a) & (disc > eps_disc)
 
-        # If a target is provided, choose the root that best aims the reflected ray toward it.
-        if target_point is not None and np.any(valid):
-            idx = np.where(valid)[0]
-            p_idx = p[idx]
-            d_idx = d[idx]
-            tc = t_candidate[idx]  # (M, 2)
-            pos = positive[idx]
+        sqrt_disc = np.sqrt(np.maximum(disc, 0.0))
+        t1 = np.full(p.shape[0], np.nan, dtype=float)
+        t2 = np.full_like(t1, np.nan)
+        t1[can_solve] = (-b_quad[can_solve] - sqrt_disc[can_solve]) / (2.0 * a_quad[can_solve])
+        t2[can_solve] = (-b_quad[can_solve] + sqrt_disc[can_solve]) / (2.0 * a_quad[can_solve])
 
-            tc_safe = np.where(pos, tc, np.nan)
-            points_c = p_idx[:, None, :] + tc_safe[:, :, None] * d_idx[:, None, :]
+        g1 = can_solve & (t1 > eps_t)
+        g2 = can_solve & (t2 > eps_t)
+        pts1 = p + t1[:, None] * d
+        pts2 = p + t2[:, None] * d
 
-            u_c = np.sum((points_c - c) * a, axis=2)
-            axis_points_c = c0 + u_c[:, :, None] * a
-            radial_c = points_c - axis_points_c
-            radial_norm_c = np.linalg.norm(radial_c, axis=2)
-            nonzero_c = radial_norm_c > 1e-10
-            normals_c = np.zeros_like(radial_c)
-            normals_c[nonzero_c] = radial_c[nonzero_c] / radial_norm_c[nonzero_c, None]
+        ok1, ru1 = self._patch_front_mask_and_radial(
+            pts1, d, r, c0, c, a, b, n0, self.width_m, self.height_m
+        )
+        ok2, ru2 = self._patch_front_mask_and_radial(
+            pts2, d, r, c0, c, a, b, n0, self.width_m, self.height_m
+        )
+        ok1 &= g1
+        ok2 &= g2
 
-            dot_dn_c = np.sum(d_idx[:, None, :] * normals_c, axis=2)
-            reflected_c = d_idx[:, None, :] - 2.0 * dot_dn_c[:, :, None] * normals_c
-            reflected_c = normalize(reflected_c.reshape(-1, 3)).reshape(-1, 2, 3)
+        # --- Choose valid root(s): prefer smallest t among patch-valid hits (nearest to sun) ---
+        only1 = ok1 & ~ok2
+        only2 = ok2 & ~ok1
+        both = ok1 & ok2
+        prefer1 = both & (t1 <= t2)
+        prefer2 = both & (t1 > t2)
 
-            to_target = target_point.reshape(1, 1, 3) - points_c
-            to_target = normalize(to_target.reshape(-1, 3)).reshape(-1, 2, 3)
-            score = np.sum(reflected_c * to_target, axis=2)
-            score[~pos] = -np.inf
+        t_hit = np.full(p.shape[0], np.nan, dtype=float)
+        radial_unit = np.zeros_like(p)
+        t_hit[only1] = t1[only1]
+        t_hit[only2] = t2[only2]
+        t_hit[prefer1] = t1[prefer1]
+        t_hit[prefer2] = t2[prefer2]
+        radial_unit[only1] = ru1[only1]
+        radial_unit[only2] = ru2[only2]
+        radial_unit[prefer1] = ru1[prefer1]
+        radial_unit[prefer2] = ru2[prefer2]
 
-            choose_second = score[:, 1] > score[:, 0]
-            chosen_t = np.where(choose_second, tc[:, 1], tc[:, 0])
-            t[idx] = chosen_t
+        hit_mask = ok1 | ok2
+        points = p + t_hit[:, None] * d
 
-        points = p + t[:, None] * d
-        rel = points - c
-        u = rel @ a
-        inside_width = np.abs(u) <= 0.5 * self.width_m
-
-        axis_points = c0 + u[:, None] * a
-        radial = points - axis_points
-        radial_norm = np.linalg.norm(radial, axis=1)
-        nonzero = radial_norm > 1e-10
-        radial_unit = np.zeros_like(radial)
-        radial_unit[nonzero] = radial[nonzero] / radial_norm[nonzero, None]
-
-        sin_theta = radial_unit @ b
-        cos_theta = -(radial_unit @ n0)
-        s = r * np.arctan2(sin_theta, cos_theta)
-        inside_height = np.abs(s) <= 0.5 * self.height_m
-
-        hit_mask = valid & inside_width & inside_height & nonzero
-        normals = radial_unit
-
-        dot_dn = np.sum(d * normals, axis=1)
-        reflected_dirs = d - 2.0 * dot_dn[:, None] * normals
+        # --- Reflect in world frame (normal = outward radial from axis) ---
+        dot_dn = np.sum(d * radial_unit, axis=1)
+        reflected_dirs = d.copy()
+        reflected_dirs[hit_mask] = d[hit_mask] - 2.0 * dot_dn[hit_mask, None] * radial_unit[hit_mask]
         reflected_dirs = normalize(reflected_dirs)
 
         reflected = RayBundle(
@@ -171,3 +173,47 @@ class CylindricalMirror:
         )
         reflected.powers_w[~hit_mask] = 0.0
         return hit_mask, points, reflected
+
+    @staticmethod
+    def _patch_front_mask_and_radial(
+        points: np.ndarray,
+        d: np.ndarray,
+        r: float,
+        c0: np.ndarray,
+        c: np.ndarray,
+        a: np.ndarray,
+        b: np.ndarray,
+        n0: np.ndarray,
+        width_m: float,
+        height_m: float,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Return (mask, unit_radial) for candidate hit points on the infinite cylinder:
+        finite strip along a (width), meridional arc s (height), non-degenerate radius,
+        and d·n < 0 for the oriented outward normal n.
+        """
+        u = (points - c) @ a
+        inside_width = np.abs(u) <= 0.5 * width_m
+
+        axis_points = c0 + ((points - c0) @ a)[:, None] * a
+        radial = points - axis_points
+        radial_norm = np.linalg.norm(radial, axis=1)
+        nonzero_r = radial_norm > 1e-10
+        radial_unit = np.zeros_like(radial)
+        radial_geom = np.zeros_like(radial)
+        radial_geom[nonzero_r] = radial[nonzero_r] / radial_norm[nonzero_r, None]
+
+        # Meridional arc from patch normal (geometry only; sign of radial_geom arbitrary here).
+        sin_theta = radial_geom @ b
+        cos_theta = -(radial_geom @ n0)
+        s = r * np.arctan2(sin_theta, cos_theta)
+        inside_height = np.abs(s) <= 0.5 * height_m
+
+        # Reflective normal: radial from axis, oriented so incident light hits the front (d·n < 0).
+        dot_dn = np.sum(d * radial_geom, axis=1)
+        n_out = np.where((dot_dn > 0.0)[:, None], -radial_geom, radial_geom)
+        dot_dn = np.sum(d * n_out, axis=1)
+        front = dot_dn < 0.0
+
+        mask = nonzero_r & inside_width & inside_height & front
+        return mask, n_out

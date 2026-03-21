@@ -70,10 +70,7 @@ class HotboxSimulation:
                 samples_u=self.samples_u,
                 samples_v=self.samples_v,
             )
-            mirror_hit_mask, mirror_hit_points, reflected = mirror.intersect_and_reflect(
-                incoming,
-                target_point=self.absorber.center,
-            )
+            mirror_hit_mask, mirror_hit_points, reflected = mirror.intersect_and_reflect(incoming)
             absorber_hit_mask, absorber_hit_points = self.absorber.intersect(reflected)
             absorber_hit_mask &= reflected.powers_w > 0.0
             per_mirror.append(
