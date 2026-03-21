@@ -67,6 +67,7 @@ class HotboxSimulation:
         per_mirror: list[MirrorResult] = []
         for i, mirror in enumerate(self.mirrors):
             incoming = self.sun.sample_parallel_bundle(
+                when_utc=when_utc,
                 center=mirror.center,
                 ray_direction=sun_dir,
                 cylinder_radius_m=mirror.sampling_radius_m,

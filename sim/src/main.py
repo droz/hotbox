@@ -173,7 +173,6 @@ def build_default_simulation() -> HotboxSimulation:
         latitude_deg=SITE_LATITUDE_DEG,
         longitude_deg=SITE_LONGITUDE_DEG,
         altitude_m=SITE_ALTITUDE_M,
-        dni_w_per_m2=1000.0,
     )
     absorber = SolarAbsorber(
         width_m=ABSORBER_WIDTH_M,

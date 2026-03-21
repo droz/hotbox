@@ -13,4 +13,4 @@ The script prints power statistics and opens Plotly figures:
 - Spot pattern on absorber plane
 - Delivered power vs local time (sunrise–sunset on the configured day, every 10 minutes)
 
-Edit parameters in `src/main.py` to try different geometry and conditions.
+Edit parameters in `src/main.py` to try different geometry and conditions. Incoming ray power uses **pvlib** clear-sky DNI (Ineichen) at the simulation time for the configured site lat/lon/altitude.

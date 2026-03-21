@@ -4,7 +4,9 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import numpy as np
+import pandas as pd
 import pvlib
+from pvlib.location import Location
 
 from src.geometry import az_el_to_unit, orthonormal_basis_from_direction
 from src.rays import RayBundle
@@ -15,7 +17,6 @@ class SunModel:
     latitude_deg: float
     longitude_deg: float
     altitude_m: float
-    dni_w_per_m2: float = 1000.0
 
     def ray_direction(self, when_utc: datetime) -> np.ndarray:
         ts = when_utc.astimezone(timezone.utc)
@@ -31,8 +32,28 @@ class SunModel:
         sun_to_world = az_el_to_unit(azimuth_deg=azimuth_deg, elevation_deg=elevation_deg)
         return -sun_to_world
 
+    def clear_sky_dni_w_per_m2(self, when_utc: datetime) -> float:
+        """
+        Direct normal irradiance (W/m²) from pvlib's clear-sky model (Ineichen, via
+        ``Location.get_clearsky``), for this site's lat/lon/altitude at ``when_utc``.
+        """
+        ts = when_utc.astimezone(timezone.utc)
+        idx = pd.DatetimeIndex([ts])
+        loc = Location(
+            self.latitude_deg,
+            self.longitude_deg,
+            tz="UTC",
+            altitude=self.altitude_m,
+        )
+        cs = loc.get_clearsky(idx)
+        dni = float(cs["dni"].iloc[0])
+        if not np.isfinite(dni) or dni < 0.0:
+            return 0.0
+        return dni
+
     def sample_parallel_bundle(
         self,
+        when_utc: datetime,
         center: np.ndarray,
         ray_direction: np.ndarray,
         cylinder_radius_m: float,
@@ -54,6 +75,7 @@ class SunModel:
 
         du = (2.0 * cylinder_radius_m) / max(samples_u - 1, 1)
         dv = (2.0 * cylinder_radius_m) / max(samples_v - 1, 1)
-        ray_power = self.dni_w_per_m2 * du * dv
+        dni = self.clear_sky_dni_w_per_m2(when_utc)
+        ray_power = dni * du * dv
         powers_w = np.full(num, ray_power, dtype=float)
         return RayBundle(origins=origins, directions=directions, powers_w=powers_w)
