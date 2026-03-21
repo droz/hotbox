@@ -10,6 +10,9 @@ from src.mirror import CylindricalMirror
 from src.rays import RayBundle
 from src.sun import SunModel
 
+# Ignore shadow ordering when hits are within this (m) along the ray (numerical tie-break).
+_SHADOW_TOL_M = 1e-5
+
 
 @dataclass(slots=True)
 class MirrorResult:
@@ -62,7 +65,7 @@ class HotboxSimulation:
     def run(self, when_utc: datetime) -> SimulationResult:
         sun_dir = self.sun.ray_direction(when_utc)
         per_mirror: list[MirrorResult] = []
-        for mirror in self.mirrors:
+        for i, mirror in enumerate(self.mirrors):
             incoming = self.sun.sample_parallel_bundle(
                 center=mirror.center,
                 ray_direction=sun_dir,
@@ -71,6 +74,21 @@ class HotboxSimulation:
                 samples_v=self.samples_v,
             )
             mirror_hit_mask, mirror_hit_points, reflected = mirror.intersect_and_reflect(incoming)
+
+            # Mutual shadowing: another mirror patch closer to the sun along the same sun ray
+            # blocks this hit (incoming path intersects the other mirror first).
+            o = incoming.origins
+            d = incoming.directions
+            t_i = np.sum((mirror_hit_points - o) * d, axis=1)
+            shadowed = np.zeros_like(mirror_hit_mask, dtype=bool)
+            for j, other in enumerate(self.mirrors):
+                if j == i:
+                    continue
+                t_j = other.incoming_first_patch_hit_t(o, d)
+                shadowed |= mirror_hit_mask & np.isfinite(t_j) & (t_j + _SHADOW_TOL_M < t_i)
+            mirror_hit_mask = mirror_hit_mask & ~shadowed
+            reflected.powers_w[shadowed] = 0.0
+
             absorber_hit_mask, absorber_hit_points = self.absorber.intersect(reflected)
             absorber_hit_mask &= reflected.powers_w > 0.0
             per_mirror.append(

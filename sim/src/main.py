@@ -33,8 +33,8 @@ ABSORBER_HEIGHT_M = 0.30
 ABSORBER_CENTER_HEIGHT_M = 1.20
 ABSORBER_NORMAL_ANGLE_FROM_X_DEG = 90.0
 
-SIM_SAMPLES_U = 200
-SIM_SAMPLES_V = 200
+SIM_SAMPLES_U = 100
+SIM_SAMPLES_V = 100
 
 # Site (must match SunModel in build_default_simulation)
 SITE_LATITUDE_DEG = 40.7864
@@ -46,7 +46,7 @@ DAY_CURVE_YEAR = 2026
 DAY_CURVE_MONTH = 9
 DAY_CURVE_DAY = 3
 DAY_CURVE_TZ = ZoneInfo("America/Los_Angeles")
-DAY_CURVE_STEP_MINUTES = 10
+DAY_CURVE_STEP_MINUTES = 30
 
 
 def local_times_sunrise_to_sunset(
@@ -190,7 +190,7 @@ def build_default_simulation() -> HotboxSimulation:
 
 def main() -> None:
     sim = build_default_simulation()
-    when = datetime(DAY_CURVE_YEAR, DAY_CURVE_MONTH, DAY_CURVE_DAY, 13, 0, 0, tzinfo=DAY_CURVE_TZ)
+    when = datetime(DAY_CURVE_YEAR, DAY_CURVE_MONTH, DAY_CURVE_DAY, 9, 0, 0, tzinfo=DAY_CURVE_TZ)
 
     mirror_rel_positions = [m.rotation_point - sim.absorber.center for m in sim.mirrors]
     absorber_orientation_from_north_deg = 90.0 - sim.absorber.normal_angle_from_x_deg

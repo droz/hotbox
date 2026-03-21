@@ -91,23 +91,13 @@ class CylindricalMirror:
         )
         return pts
 
-    def intersect_and_reflect(self, rays: RayBundle) -> tuple[np.ndarray, np.ndarray, RayBundle]:
+    def _incoming_hit_t_radial(
+        self, p: np.ndarray, d: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
-        Intersect parallel rays with the convex cylindrical patch and reflect.
-
-        We use a right-handed cylinder frame with origin on the axis at the curvature
-        center line (same as the infinite cylinder used for intersection):
-          e_z = axis (along the cylinder),
-          e_x = curved_dir (meridional tangent at patch center),
-          e_y = e_z × e_x (completes the basis).
-
-        In that frame the infinite cylinder is x² + y² = R² with generators || e_z.
-        Rays are expressed in that frame for the quadratic solve, then candidate hits are
-        checked in world coordinates against finite width/height and front-face lighting.
-
-        Two positive roots mean the line meets the infinite cylinder twice; only roots that
-        lie on the **finite mirror patch** count. If both do, we keep the smaller t (first
-        encounter along the ray from the bundle origin, i.e. closest to the sun side).
+        For each ray p + t d, smallest t > 0 where the line hits this mirror's finite
+        illuminated patch. Returns (t_hit, hit_mask, radial_unit_for_reflection).
+        t_hit is nan where there is no such hit.
         """
         r = self.radius_of_curvature_m
         c0 = self.curvature_center_line_point
@@ -115,22 +105,16 @@ class CylindricalMirror:
         a = self.axis
         b = self.curved_dir
         n0 = self.normal
-
-        p = rays.origins
-        d = rays.directions
         m = p - c0
 
-        # --- Cylinder-local frame (origin c0 on axis): e_z || axis, e_x || meridian at patch center ---
         ez = a
         ex = b
         ey = normalize(np.cross(ez, ex).reshape(1, 3))[0]
         e = np.stack([ex, ey, ez], axis=1)
 
-        # --- World → local: row i is (p·e_x, p·e_y, p·e_z) in the cylinder basis ---
         ml = m @ e
         dl = d @ e
 
-        # --- Intersect ray (ml + t*dl) with infinite cylinder: (xy)^2 = r^2, z free ---
         a_quad = dl[:, 0] ** 2 + dl[:, 1] ** 2
         b_quad = 2.0 * (ml[:, 0] * dl[:, 0] + ml[:, 1] * dl[:, 1])
         c_quad = ml[:, 0] ** 2 + ml[:, 1] ** 2 - r**2
@@ -139,7 +123,6 @@ class CylindricalMirror:
         eps_a = 1e-12
         eps_t = 1e-8
         eps_disc = 1e-10
-        # Degenerate: ray parallel to axis in the cylinder wall plane, or tangent hit.
         can_solve = (a_quad > eps_a) & (disc > eps_disc)
 
         sqrt_disc = np.sqrt(np.maximum(disc, 0.0))
@@ -164,7 +147,6 @@ class CylindricalMirror:
         ok1 &= g1
         ok2 &= g2
 
-        # --- Choose valid root(s): prefer smallest t among patch-valid hits (nearest to sun) ---
         only1 = ok1 & ~ok2
         only2 = ok2 & ~ok1
         both = ok1 & ok2
@@ -183,9 +165,41 @@ class CylindricalMirror:
         radial_unit[prefer2] = ru2[prefer2]
 
         hit_mask = ok1 | ok2
+        return t_hit, hit_mask, radial_unit
+
+    def incoming_first_patch_hit_t(self, origins: np.ndarray, directions: np.ndarray) -> np.ndarray:
+        """
+        Distance along each ray from its origin (first encounter with this mirror's patch).
+        np.inf if the ray misses this mirror. Used for mutual shadowing (closer hit = upstream).
+        """
+        t_hit, hit_mask, _ = self._incoming_hit_t_radial(origins, directions)
+        out = np.full(origins.shape[0], np.inf, dtype=float)
+        out[hit_mask] = t_hit[hit_mask]
+        return out
+
+    def intersect_and_reflect(self, rays: RayBundle) -> tuple[np.ndarray, np.ndarray, RayBundle]:
+        """
+        Intersect parallel rays with the convex cylindrical patch and reflect.
+
+        We use a right-handed cylinder frame with origin on the axis at the curvature
+        center line (same as the infinite cylinder used for intersection):
+          e_z = axis (along the cylinder),
+          e_x = curved_dir (meridional tangent at patch center),
+          e_y = e_z × e_x (completes the basis).
+
+        In that frame the infinite cylinder is x² + y² = R² with generators || e_z.
+        Rays are expressed in that frame for the quadratic solve, then candidate hits are
+        checked in world coordinates against finite width/height and front-face lighting.
+
+        Two positive roots mean the line meets the infinite cylinder twice; only roots that
+        lie on the **finite mirror patch** count. If both do, we keep the smaller t (first
+        encounter along the ray from the bundle origin, i.e. closest to the sun side).
+        """
+        p = rays.origins
+        d = rays.directions
+        t_hit, hit_mask, radial_unit = self._incoming_hit_t_radial(p, d)
         points = p + t_hit[:, None] * d
 
-        # --- Reflect in world frame (normal = outward radial from axis) ---
         dot_dn = np.sum(d * radial_unit, axis=1)
         reflected_dirs = d.copy()
         reflected_dirs[hit_mask] = d[hit_mask] - 2.0 * dot_dn[hit_mask, None] * radial_unit[hit_mask]
