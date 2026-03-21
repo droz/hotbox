@@ -1,15 +1,18 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import numpy as np
+import pandas as pd
+from pvlib.location import Location
 
 from src.absorber import SolarAbsorber
 from src.controller import Controller
 from src.mirror import CylindricalMirror
 from src.simulation import HotboxSimulation
 from src.sun import SunModel
-from src.visualizer import SceneVisualizer
+from src.visualizer import SceneVisualizer, build_day_delivered_power_figure
 
 # --- Layout (automated mirror arc) ---
 NUM_MIRRORS = 3
@@ -25,6 +28,76 @@ MIRROR_BACK_TO_ROTATION_OFFSET_M = 0.10
 
 SIM_SAMPLES_U = 65
 SIM_SAMPLES_V = 65
+
+# Site (must match SunModel in build_default_simulation)
+SITE_LATITUDE_DEG = 40.7864
+SITE_LONGITUDE_DEG = -119.2065
+SITE_ALTITUDE_M = 1190.0
+
+# Day curve: local sunrise → sunset on this calendar day (Pacific TZ), every N minutes.
+DAY_CURVE_YEAR = 2026
+DAY_CURVE_MONTH = 9
+DAY_CURVE_DAY = 3
+DAY_CURVE_TZ = ZoneInfo("America/Los_Angeles")
+DAY_CURVE_STEP_MINUTES = 10
+
+
+def local_times_sunrise_to_sunset(
+    latitude_deg: float,
+    longitude_deg: float,
+    altitude_m: float,
+    year: int,
+    month: int,
+    day: int,
+    tz: ZoneInfo,
+    step_minutes: int,
+) -> tuple[list[datetime], datetime | None, datetime | None]:
+    """
+    10-minute samples from first step on/after sunrise through last on/before sunset.
+    Sunrise/sunset from pvlib SPA for the given site and local date.
+    """
+    tz_key = tz.key
+    loc = Location(latitude_deg, longitude_deg, tz_key, altitude=altitude_m)
+    day_midnight = pd.Timestamp(year=year, month=month, day=day, tz=tz_key).normalize()
+    idx = pd.DatetimeIndex([day_midnight])
+    rs = loc.get_sun_rise_set_transit(idx, method="spa")
+    sunrise_ts = rs["sunrise"].iloc[0]
+    sunset_ts = rs["sunset"].iloc[0]
+    if pd.isna(sunrise_ts) or pd.isna(sunset_ts):
+        return [], None, None
+
+    sunrise_ts = sunrise_ts.floor("s")
+    sunset_ts = sunset_ts.floor("s")
+    sunrise = sunrise_ts.to_pydatetime()
+    sunset = sunset_ts.to_pydatetime()
+    step = timedelta(minutes=step_minutes)
+    midnight = datetime(year, month, day, 0, 0, 0, tzinfo=tz)
+    t = midnight
+    while t < sunrise:
+        t += step
+    out: list[datetime] = []
+    while t <= sunset:
+        out.append(t)
+        t += step
+    return out, sunrise, sunset
+
+
+def simulate_delivered_power_over_times(
+    sim: HotboxSimulation,
+    controller: Controller,
+    times: list[datetime],
+) -> tuple[list[datetime], list[float]]:
+    powers: list[float] = []
+    for when in times:
+        controller.apply_for_time(
+            when_utc=when,
+            sun=sim.sun,
+            absorber_center=sim.absorber.center,
+            mirrors=sim.mirrors,
+        )
+        result = sim.run(when)
+        powers.append(result.total_delivered_power_w)
+    return times, powers
 
 
 def mirror_rotation_xy_on_arc(
@@ -67,9 +140,9 @@ def mirror_rotation_xy_on_arc(
 
 def build_default_simulation() -> HotboxSimulation:
     sun = SunModel(
-        latitude_deg=40.7864,  # Black Rock City area
-        longitude_deg=-119.2065,
-        altitude_m=1190.0,
+        latitude_deg=SITE_LATITUDE_DEG,
+        longitude_deg=SITE_LONGITUDE_DEG,
+        altitude_m=SITE_ALTITUDE_M,
         dni_w_per_m2=1000.0,
     )
     absorber = SolarAbsorber(
@@ -144,6 +217,38 @@ def main() -> None:
     _plotly_config = {"responsive": False}
     scene_fig.show(config=_plotly_config)
     spot_fig.show(config=_plotly_config)
+
+    day_times, sr, ss = local_times_sunrise_to_sunset(
+        SITE_LATITUDE_DEG,
+        SITE_LONGITUDE_DEG,
+        SITE_ALTITUDE_M,
+        DAY_CURVE_YEAR,
+        DAY_CURVE_MONTH,
+        DAY_CURVE_DAY,
+        DAY_CURVE_TZ,
+        DAY_CURVE_STEP_MINUTES,
+    )
+    if sr is not None and ss is not None:
+        print(
+            f"Day curve: sunrise {sr.strftime('%Y-%m-%d %H:%M:%S %Z')}, "
+            f"sunset {ss.strftime('%Y-%m-%d %H:%M:%S %Z')} ({len(day_times)} samples)"
+        )
+    if day_times:
+        _, day_powers = simulate_delivered_power_over_times(sim, controller, day_times)
+        sr_s = sr.strftime("%H:%M") if sr else "?"
+        ss_s = ss.strftime("%H:%M") if ss else "?"
+        day_fig = build_day_delivered_power_figure(
+            day_times,
+            day_powers,
+            title=(
+                f"Delivered power — {DAY_CURVE_MONTH}/{DAY_CURVE_DAY}/{DAY_CURVE_YEAR} "
+                f"(sunrise–sunset {sr_s}–{ss_s} {DAY_CURVE_TZ.key}, "
+                f"every {DAY_CURVE_STEP_MINUTES} min)"
+            ),
+        )
+        day_fig.show(config=_plotly_config)
+    else:
+        print("Day curve: no daylight samples (polar night or missing rise/set).")
 
 
 if __name__ == "__main__":

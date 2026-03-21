@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 import numpy as np
 import plotly.graph_objects as go
 
@@ -254,3 +256,37 @@ class SceneVisualizer:
                 name="Mirror",
             )
         )
+
+
+def build_day_delivered_power_figure(
+    times_local: list[datetime],
+    powers_w: list[float],
+    *,
+    title: str = "Delivered optical power vs time",
+    y_axis_title: str = "Delivered power [W]",
+) -> go.Figure:
+    """Line chart of total delivered absorber power over a list of local timestamps."""
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=times_local,
+            y=powers_w,
+            mode="lines+markers",
+            name="Delivered",
+            line={"color": "#d62728", "width": 2},
+            marker={"size": 5},
+        )
+    )
+    fig.update_layout(
+        title=title,
+        template="plotly_white",
+        xaxis_title="Local time (America/Los_Angeles)",
+        yaxis_title=y_axis_title,
+        hovermode="x unified",
+        width=900,
+        height=480,
+        margin={"l": 60, "r": 20, "t": 50, "b": 55},
+        legend={"yanchor": "top", "y": 0.99, "xanchor": "left", "x": 0.01},
+    )
+    fig.update_xaxes(tickformat="%H:%M")
+    return fig
