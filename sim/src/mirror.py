@@ -55,6 +55,29 @@ class CylindricalMirror:
     def sampling_radius_m(self) -> float:
         return 0.6 * np.sqrt(self.width_m**2 + self.height_m**2)
 
+    @property
+    def meridional_half_angle_rad(self) -> float:
+        """Half the meridional arc in radians: (height/2) / R (matches surface_grid theta range)."""
+        return 0.5 * self.height_m / self.radius_of_curvature_m
+
+    @property
+    def patch_half_extent_curved_dir_m(self) -> float:
+        """
+        Half-width along curved_dir (b) of the axis-aligned box that encloses the meridional arc.
+        For theta in [-alpha, alpha], R*sin(theta) lies in [-R*sin(alpha), R*sin(alpha)].
+        """
+        r = self.radius_of_curvature_m
+        return r * np.sin(self.meridional_half_angle_rad)
+
+    @property
+    def patch_max_extent_normal_m(self) -> float:
+        """
+        Maximum offset along mirror normal (n0) from patch center for points on that arc.
+        R*(1 - cos(theta)) is in [0, R*(1 - cos(alpha))] for theta in [-alpha, alpha].
+        """
+        r = self.radius_of_curvature_m
+        return r * (1.0 - np.cos(self.meridional_half_angle_rad))
+
     def surface_grid(self, nu: int = 25, nv: int = 35) -> np.ndarray:
         u = np.linspace(-0.5 * self.width_m, 0.5 * self.width_m, nu)
         s = np.linspace(-0.5 * self.height_m, 0.5 * self.height_m, nv)
@@ -130,11 +153,13 @@ class CylindricalMirror:
         pts1 = p + t1[:, None] * d
         pts2 = p + t2[:, None] * d
 
-        ok1, ru1 = self._patch_front_mask_and_radial(
-            pts1, d, r, c0, c, a, b, n0, self.width_m, self.height_m
+        hb = self.patch_half_extent_curved_dir_m
+        zn = self.patch_max_extent_normal_m
+        ok1, ru1 = self._finite_patch_mask_and_outward_normal(
+            pts1, d, c0, c, a, b, n0, self.width_m, hb, zn
         )
-        ok2, ru2 = self._patch_front_mask_and_radial(
-            pts2, d, r, c0, c, a, b, n0, self.width_m, self.height_m
+        ok2, ru2 = self._finite_patch_mask_and_outward_normal(
+            pts2, d, c0, c, a, b, n0, self.width_m, hb, zn
         )
         ok1 &= g1
         ok2 &= g2
@@ -175,41 +200,55 @@ class CylindricalMirror:
         return hit_mask, points, reflected
 
     @staticmethod
-    def _patch_front_mask_and_radial(
+    def _finite_patch_mask_and_outward_normal(
         points: np.ndarray,
         d: np.ndarray,
-        r: float,
         c0: np.ndarray,
         c: np.ndarray,
         a: np.ndarray,
         b: np.ndarray,
         n0: np.ndarray,
         width_m: float,
-        height_m: float,
+        patch_half_extent_b_m: float,
+        patch_max_extent_n0_m: float,
     ) -> tuple[np.ndarray, np.ndarray]:
         """
-        Return (mask, unit_radial) for candidate hit points on the infinite cylinder:
-        finite strip along a (width), meridional arc s (height), non-degenerate radius,
-        and d·n < 0 for the oriented outward normal n.
-        """
-        u = (points - c) @ a
-        inside_width = np.abs(u) <= 0.5 * width_m
+        Clip infinite-cylinder hits to the finite mirror and build the shading normal.
 
+        Meridional bounds use a fixed axis-aligned box in (curved_dir b, normal n0), derived
+        once from height_m and R (same parametrization as surface_grid). That box slightly
+        over-covers the circular arc at the corners (conservative). Per ray we only take
+        dot products — no atan2.
+
+        - Width: |(p - c)·a| <= width/2 (along cylinder axis).
+        - Meridional slab: |(p - c)·b| <= patch_half_extent_b_m,
+          0 <= (p - c)·n0 <= patch_max_extent_n0_m.
+        """
+        eps = 1e-9
+        rel = points - c
+
+        # --- Width along cylinder axis (patch center c). ---
+        u = rel @ a
+        inside_width = np.abs(u) <= 0.5 * width_m + eps
+
+        # --- Meridional AABB in world (b, n0), precomputed from arc half-angle. ---
+        along_b = rel @ b
+        along_n0 = rel @ n0
+        inside_height = (
+            (np.abs(along_b) <= patch_half_extent_b_m + eps)
+            & (along_n0 >= -eps)
+            & (along_n0 <= patch_max_extent_n0_m + eps)
+        )
+
+        # --- Unit radial from axis (for reflection normal); same as before. ---
         axis_points = c0 + ((points - c0) @ a)[:, None] * a
         radial = points - axis_points
         radial_norm = np.linalg.norm(radial, axis=1)
         nonzero_r = radial_norm > 1e-10
-        radial_unit = np.zeros_like(radial)
         radial_geom = np.zeros_like(radial)
         radial_geom[nonzero_r] = radial[nonzero_r] / radial_norm[nonzero_r, None]
 
-        # Meridional arc from patch normal (geometry only; sign of radial_geom arbitrary here).
-        sin_theta = radial_geom @ b
-        cos_theta = -(radial_geom @ n0)
-        s = r * np.arctan2(sin_theta, cos_theta)
-        inside_height = np.abs(s) <= 0.5 * height_m
-
-        # Reflective normal: radial from axis, oriented so incident light hits the front (d·n < 0).
+        # --- Outward normal for reflection; flip so incident ray meets the front face (d·n < 0). ---
         dot_dn = np.sum(d * radial_geom, axis=1)
         n_out = np.where((dot_dn > 0.0)[:, None], -radial_geom, radial_geom)
         dot_dn = np.sum(d * n_out, axis=1)
