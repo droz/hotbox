@@ -15,10 +15,10 @@ from src.sun import SunModel
 from src.visualizer import SceneVisualizer, build_day_delivered_power_figure
 
 # --- Layout (automated mirror arc) ---
-NUM_MIRRORS = 3
-MIRROR_RADIUS_OF_CURVATURE_M = 10
+NUM_MIRRORS = 6
+MIRROR_RADIUS_OF_CURVATURE_M = 6
 # Arc length along the circle (radius R/2) between adjacent mirror rotation points.
-MIRROR_SPACING_M = 0.75
+MIRROR_SPACING_M = 0.5
 
 # Mirror sheet / mount (shared by all mirrors in this demo)
 MIRROR_WIDTH_M = 0.305  # ~12 in
@@ -33,8 +33,8 @@ ABSORBER_HEIGHT_M = 0.30
 ABSORBER_CENTER_HEIGHT_M = 1.20
 ABSORBER_NORMAL_ANGLE_FROM_X_DEG = 90.0
 
-SIM_SAMPLES_U = 250
-SIM_SAMPLES_V = 250
+SIM_SAMPLES_U = 200
+SIM_SAMPLES_V = 200
 
 # Site (must match SunModel in build_default_simulation)
 SITE_LATITUDE_DEG = 40.7864
@@ -190,7 +190,7 @@ def build_default_simulation() -> HotboxSimulation:
 
 def main() -> None:
     sim = build_default_simulation()
-    when = datetime(2026, 8, 28, 20, 0, 0, tzinfo=timezone.utc)
+    when = datetime(DAY_CURVE_YEAR, DAY_CURVE_MONTH, DAY_CURVE_DAY, 13, 0, 0, tzinfo=DAY_CURVE_TZ)
 
     mirror_rel_positions = [m.rotation_point - sim.absorber.center for m in sim.mirrors]
     absorber_orientation_from_north_deg = 90.0 - sim.absorber.normal_angle_from_x_deg
