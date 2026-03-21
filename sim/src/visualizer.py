@@ -85,12 +85,24 @@ class SceneVisualizer:
                 )
                 reflected_added = True
 
+        # Square layout + autosize off avoids the browser stretching a 3D subplot. Plotly's
+        # WebGL viewer often makes Z look ~2× taller than X/Y at 1:1:1; aspectratio.z=0.5
+        # compresses displayed Z so one meter vertically matches one meter horizontally.
         fig.update_layout(
             title="Hot-box optical scene",
+            autosize=False,
+            width=720,
+            height=720,
+            margin={"l": 0, "r": 0, "t": 50, "b": 0},
             scene={
                 "xaxis_title": "x (east) [m]",
                 "yaxis_title": "y (north) [m]",
-                "aspectmode": "cube",
+                "aspectmode": "manual",
+                "aspectratio": {"x": 1, "y": 1, "z": 0.5},
+                "camera": {
+                    "projection": {"type": "orthographic"},
+                    "eye": {"x": 1.35, "y": -1.35, "z": 0.9},
+                },
                 "xaxis": {
                     "showbackground": False,
                     "showgrid": False,
@@ -163,13 +175,28 @@ class SceneVisualizer:
                 name="Absorber boundary",
             )
         )
+        # Equal data units on both axes and a square figure so a square absorber stays square.
+        lim = 0.55 * max(self.absorber.width_m, self.absorber.height_m)
         fig.update_layout(
             title="Spot pattern on absorber",
+            template="plotly_white",
+            width=640,
+            height=640,
+            margin={"l": 60, "r": 20, "t": 50, "b": 55},
             xaxis_title="absorber horizontal axis [m]",
             yaxis_title="z [m]",
-            xaxis={"scaleanchor": "y", "scaleratio": 1},
-            yaxis={"constrain": "domain"},
-            template="plotly_white",
+            xaxis={
+                "range": [-lim, lim],
+                "scaleanchor": "y",
+                "scaleratio": 1,
+                "constrain": "domain",
+            },
+            yaxis={
+                "range": [-lim, lim],
+                "scaleanchor": "x",
+                "scaleratio": 1,
+                "constrain": "domain",
+            },
         )
         return fig
 
@@ -192,18 +219,23 @@ class SceneVisualizer:
         )
 
     def _add_absorber(self, fig: go.Figure) -> None:
+        # Explicit planar quad (two triangles) so the patch is exactly the absorber rectangle.
         c = self.absorber.corners()
-        x = np.array([[c[0, 0], c[1, 0]], [c[3, 0], c[2, 0]]])
-        y = np.array([[c[0, 1], c[1, 1]], [c[3, 1], c[2, 1]]])
-        z = np.array([[c[0, 2], c[1, 2]], [c[3, 2], c[2, 2]]])
+        x = c[:, 0].tolist()
+        y = c[:, 1].tolist()
+        z = c[:, 2].tolist()
+        # Winding: (0,1,2) and (0,2,3) matches corners order from SolarAbsorber.corners().
         fig.add_trace(
-            go.Surface(
+            go.Mesh3d(
                 x=x,
                 y=y,
                 z=z,
+                i=[0, 0],
+                j=[1, 2],
+                k=[2, 3],
+                color="#2ca02c",
                 opacity=0.5,
-                showscale=False,
-                colorscale=[[0.0, "#2ca02c"], [1.0, "#2ca02c"]],
+                flatshading=True,
                 name="Absorber",
             )
         )
