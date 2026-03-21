@@ -16,22 +16,22 @@ from src.visualizer import SceneVisualizer, build_day_delivered_power_figure
 
 # --- Layout (automated mirror arc) ---
 NUM_MIRRORS = 6
-MIRROR_RADIUS_OF_CURVATURE_M = 6
+MIRROR_RADIUS_OF_CURVATURE_M = 6.0
 # Arc length along the circle (radius R/2) between adjacent mirror rotation points.
 MIRROR_SPACING_M = 0.5
 
 # Mirror sheet / mount (shared by all mirrors in this demo)
 MIRROR_WIDTH_M = 0.305  # ~12 in
 MIRROR_HEIGHT_M = 1.22  # ~48 in
-MIRROR_POST_HEIGHT_M = 0.95
+MIRROR_POST_HEIGHT_M = 0.7
 MIRROR_BACK_TO_ROTATION_OFFSET_M = 0.10
 
 # Solar absorber: vertical rectangle, center at (0, 0, center_height); normal in horizontal plane.
 # normal_angle_from_x_deg: 0° = +x (east), 90° = +y (north), 180° = −x (west), 270° = −y (south).
 ABSORBER_WIDTH_M = 0.30
 ABSORBER_HEIGHT_M = 0.30
-ABSORBER_CENTER_HEIGHT_M = 1.20
-ABSORBER_NORMAL_ANGLE_FROM_X_DEG = 90.0
+ABSORBER_CENTER_HEIGHT_M = 1.0
+ABSORBER_NORMAL_ANGLE_FROM_X_DEG = 60.0
 
 SIM_SAMPLES_U = 100
 SIM_SAMPLES_V = 100
@@ -41,12 +41,16 @@ SITE_LATITUDE_DEG = 40.7864
 SITE_LONGITUDE_DEG = -119.2065
 SITE_ALTITUDE_M = 1190.0
 
-# Day curve: local sunrise → sunset on this calendar day (Pacific TZ), every N minutes.
+# Day curve: local sunrise → sunset (Pacific TZ), every N minutes. Int or same-length lists.
 DAY_CURVE_YEAR = 2026
-DAY_CURVE_MONTH = 9
-DAY_CURVE_DAY = 3
+DAY_CURVE_MONTH = [8, 9]
+DAY_CURVE_DAY = [30, 7]
 DAY_CURVE_TZ = ZoneInfo("America/Los_Angeles")
-DAY_CURVE_STEP_MINUTES = 30
+DAY_CURVE_STEP_MINUTES = 20
+
+# Local wall time for the 3D scene / absorber spot figures and printed snapshot
+# (controller aim, mirror angles, ray bundle). Independent of DAY_CURVE_* curve list.
+SCENE_VIS_WHEN = datetime(DAY_CURVE_YEAR, DAY_CURVE_MONTH[0], DAY_CURVE_DAY[0], 12, 0, 0, tzinfo=DAY_CURVE_TZ)
 
 
 def local_times_sunrise_to_sunset(
@@ -87,6 +91,25 @@ def local_times_sunrise_to_sunset(
         out.append(t)
         t += step
     return out, sunrise, sunset
+
+
+def day_curve_month_day_pairs(
+    month: int | list[int] | tuple[int, ...],
+    day: int | list[int] | tuple[int, ...],
+) -> list[tuple[int, int]]:
+    """Expand scalar or parallel lists into (month, day) pairs for each simulated curve."""
+    months = list(month) if isinstance(month, (list, tuple)) else [month]
+    days = list(day) if isinstance(day, (list, tuple)) else [day]
+    if len(months) == 1 and len(days) != 1:
+        months = months * len(days)
+    elif len(days) == 1 and len(months) != 1:
+        days = days * len(months)
+    if len(months) != len(days):
+        raise ValueError(
+            "DAY_CURVE_MONTH and DAY_CURVE_DAY must be the same length, "
+            "or one must be a single int to broadcast."
+        )
+    return list(zip(months, days))
 
 
 def simulate_delivered_power_over_times(
@@ -190,7 +213,8 @@ def build_default_simulation() -> HotboxSimulation:
 
 def main() -> None:
     sim = build_default_simulation()
-    when = datetime(DAY_CURVE_YEAR, DAY_CURVE_MONTH, DAY_CURVE_DAY, 9, 0, 0, tzinfo=DAY_CURVE_TZ)
+    day_specs = day_curve_month_day_pairs(DAY_CURVE_MONTH, DAY_CURVE_DAY)
+    when = SCENE_VIS_WHEN
 
     mirror_rel_positions = [m.rotation_point - sim.absorber.center for m in sim.mirrors]
     absorber_orientation_from_north_deg = 90.0 - sim.absorber.normal_angle_from_x_deg
@@ -225,37 +249,63 @@ def main() -> None:
     scene_fig.show(config=_plotly_config)
     spot_fig.show(config=_plotly_config)
 
-    day_times, sr, ss = local_times_sunrise_to_sunset(
-        SITE_LATITUDE_DEG,
-        SITE_LONGITUDE_DEG,
-        SITE_ALTITUDE_M,
-        DAY_CURVE_YEAR,
-        DAY_CURVE_MONTH,
-        DAY_CURVE_DAY,
-        DAY_CURVE_TZ,
-        DAY_CURVE_STEP_MINUTES,
-    )
-    if sr is not None and ss is not None:
-        print(
-            f"Day curve: sunrise {sr.strftime('%Y-%m-%d %H:%M:%S %Z')}, "
-            f"sunset {ss.strftime('%Y-%m-%d %H:%M:%S %Z')} ({len(day_times)} samples)"
+    day_series: list[tuple[str, list[datetime], list[float]]] = []
+    single_curve_sr_ss: tuple[datetime | None, datetime | None] | None = None
+    for month_i, day_i in day_specs:
+        day_times, sr, ss = local_times_sunrise_to_sunset(
+            SITE_LATITUDE_DEG,
+            SITE_LONGITUDE_DEG,
+            SITE_ALTITUDE_M,
+            DAY_CURVE_YEAR,
+            month_i,
+            day_i,
+            DAY_CURVE_TZ,
+            DAY_CURVE_STEP_MINUTES,
         )
-    if day_times:
-        _, day_powers = simulate_delivered_power_over_times(sim, controller, day_times)
-        sr_s = sr.strftime("%H:%M") if sr else "?"
-        ss_s = ss.strftime("%H:%M") if ss else "?"
+        label = f"{month_i}/{day_i}/{DAY_CURVE_YEAR}"
+        if sr is not None and ss is not None:
+            print(
+                f"Day curve {label}: sunrise {sr.strftime('%Y-%m-%d %H:%M:%S %Z')}, "
+                f"sunset {ss.strftime('%Y-%m-%d %H:%M:%S %Z')} ({len(day_times)} samples)"
+            )
+        else:
+            print(f"Day curve {label}: no sunrise/sunset (polar night or missing rise/set).")
+        if day_times:
+            _, day_powers = simulate_delivered_power_over_times(sim, controller, day_times)
+            day_series.append((label, day_times, day_powers))
+            if len(day_specs) == 1:
+                single_curve_sr_ss = (sr, ss)
+
+    if day_series:
+        x_axis_title = f"Local time ({DAY_CURVE_TZ.key})"
+        if len(day_series) == 1 and len(day_specs) == 1 and single_curve_sr_ss is not None:
+            sr0, ss0 = single_curve_sr_ss
+            month_i, day_i = day_specs[0]
+            sr_s = sr0.strftime("%H:%M") if sr0 else "?"
+            ss_s = ss0.strftime("%H:%M") if ss0 else "?"
+            day_title = (
+                f"Delivered power — {month_i}/{day_i}/{DAY_CURVE_YEAR} "
+                f"(sunrise–sunset {sr_s}–{ss_s}, every {DAY_CURVE_STEP_MINUTES} min)"
+            )
+        else:
+            dates_s = ", ".join(name for name, _, _ in day_series)
+            day_title = (
+                f"Delivered power — {DAY_CURVE_YEAR} ({dates_s}), "
+                f"sunrise–sunset local, every {DAY_CURVE_STEP_MINUTES} min"
+            )
         day_fig = build_day_delivered_power_figure(
-            day_times,
-            day_powers,
-            title=(
-                f"Delivered power — {DAY_CURVE_MONTH}/{DAY_CURVE_DAY}/{DAY_CURVE_YEAR} "
-                f"(sunrise–sunset {sr_s}–{ss_s} {DAY_CURVE_TZ.key}, "
-                f"every {DAY_CURVE_STEP_MINUTES} min)"
+            day_series,
+            title=day_title,
+            x_axis_title=(
+                "Local time of day [h] (wall clock)"
+                if len(day_series) > 1
+                else x_axis_title
             ),
+            same_day_time_scale=len(day_series) > 1,
         )
         day_fig.show(config=_plotly_config)
-    else:
-        print("Day curve: no daylight samples (polar night or missing rise/set).")
+    elif day_specs:
+        print("Day curve: no daylight samples for any selected day.")
 
 
 if __name__ == "__main__":

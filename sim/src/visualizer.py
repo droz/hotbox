@@ -27,20 +27,6 @@ class SceneVisualizer:
         for mirror in self.mirrors:
             self._add_mirror(fig, mirror)
 
-        sun_dir = result.sun_direction
-        sun_start = np.array([0.0, 0.0, 5.5])
-        sun_end = sun_start - 2.0 * sun_dir
-        fig.add_trace(
-            go.Scatter3d(
-                x=[sun_start[0], sun_end[0]],
-                y=[sun_start[1], sun_end[1]],
-                z=[sun_start[2], sun_end[2]],
-                mode="lines",
-                line={"color": "gold", "width": 6},
-                name="Sun direction",
-            )
-        )
-
         incoming_added = False
         reflected_added = False
         for mirror_result in result.per_mirror:
@@ -87,9 +73,9 @@ class SceneVisualizer:
                 )
                 reflected_added = True
 
-        # Square layout + autosize off avoids the browser stretching a 3D subplot. Plotly's
-        # WebGL viewer often makes Z look ~2× taller than X/Y at 1:1:1; aspectratio.z=0.5
-        # compresses displayed Z so one meter vertically matches one meter horizontally.
+        # Square figure + autosize=False limits div stretching. aspectmode="data" is Plotly's
+        # 3D equivalent of matplotlib axis("equal"): one meter along x, y, or z is the same
+        # length on screen (orthogonal to camera view).
         fig.update_layout(
             title="Hot-box optical scene",
             autosize=False,
@@ -99,8 +85,7 @@ class SceneVisualizer:
             scene={
                 "xaxis_title": "x (east) [m]",
                 "yaxis_title": "y (north) [m]",
-                "aspectmode": "manual",
-                "aspectratio": {"x": 1, "y": 1, "z": 0.5},
+                "aspectmode": "data",
                 "camera": {
                     "projection": {"type": "orthographic"},
                     "eye": {"x": 1.35, "y": -1.35, "z": 0.9},
@@ -258,29 +243,78 @@ class SceneVisualizer:
         )
 
 
+def _local_hours_since_midnight(dt: datetime) -> float:
+    """Wall-clock time of day in hours (uses dt's own tz/calendar components)."""
+    return (
+        dt.hour
+        + dt.minute / 60.0
+        + dt.second / 3600.0
+        + dt.microsecond / 3_600_000_000.0
+    )
+
+
 def build_day_delivered_power_figure(
-    times_local: list[datetime],
-    powers_w: list[float],
+    series: list[tuple[str, list[datetime], list[float]]],
     *,
     title: str = "Delivered optical power vs time",
     y_axis_title: str = "Delivered power [W]",
+    x_axis_title: str = "Local time",
+    same_day_time_scale: bool = False,
 ) -> go.Figure:
-    """Line chart of total delivered absorber power over a list of local timestamps."""
-    fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(
-            x=times_local,
-            y=powers_w,
-            mode="lines+markers",
-            name="Delivered",
-            line={"color": "#d62728", "width": 2},
-            marker={"size": 5},
-        )
+    """Line chart of total delivered absorber power; one trace per (label, local times, powers).
+
+    If ``same_day_time_scale`` is True, x is hours since local midnight so multiple calendar
+    days share one axis (wall-clock alignment). Hover still shows the actual timestamp.
+    """
+    palette = (
+        "#d62728",
+        "#1f77b4",
+        "#2ca02c",
+        "#ff7f0e",
+        "#9467bd",
+        "#8c564b",
+        "#e377c2",
+        "#7f7f7f",
+        "#bcbd22",
+        "#17becf",
     )
+    fig = go.Figure()
+    for i, (name, times_local, powers_w) in enumerate(series):
+        c = palette[i % len(palette)]
+        if same_day_time_scale:
+            x_plot = [_local_hours_since_midnight(t) for t in times_local]
+            stamp = [
+                t.strftime("%Y-%m-%d %H:%M")
+                + (f" {t.tzname()}" if t.tzinfo is not None else "")
+                for t in times_local
+            ]
+            fig.add_trace(
+                go.Scatter(
+                    x=x_plot,
+                    y=powers_w,
+                    mode="lines+markers",
+                    name=name,
+                    line={"color": c, "width": 2},
+                    marker={"size": 5},
+                    customdata=stamp,
+                    hovertemplate="%{customdata}<br>%{y:.1f} W<extra></extra>",
+                )
+            )
+        else:
+            fig.add_trace(
+                go.Scatter(
+                    x=times_local,
+                    y=powers_w,
+                    mode="lines+markers",
+                    name=name,
+                    line={"color": c, "width": 2},
+                    marker={"size": 5},
+                )
+            )
     fig.update_layout(
         title=title,
         template="plotly_white",
-        xaxis_title="Local time (America/Los_Angeles)",
+        xaxis_title=x_axis_title,
         yaxis_title=y_axis_title,
         hovermode="x unified",
         width=900,
@@ -288,5 +322,13 @@ def build_day_delivered_power_figure(
         margin={"l": 60, "r": 20, "t": 50, "b": 55},
         legend={"yanchor": "top", "y": 0.99, "xanchor": "left", "x": 0.01},
     )
-    fig.update_xaxes(tickformat="%H:%M")
+    if same_day_time_scale:
+        tick_h = list(range(0, 25, 2))
+        fig.update_xaxes(
+            tickmode="array",
+            tickvals=tick_h,
+            ticktext=[f"{h:02d}:00" for h in tick_h],
+        )
+    else:
+        fig.update_xaxes(tickformat="%H:%M")
     return fig
