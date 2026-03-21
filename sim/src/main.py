@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from src.absorber import SolarAbsorber
+from src.controller import Controller
 from src.mirror import CylindricalMirror
 from src.simulation import HotboxSimulation
 from src.sun import SunModel
@@ -17,8 +18,8 @@ def build_default_simulation() -> HotboxSimulation:
         dni_w_per_m2=1000.0,
     )
     absorber = SolarAbsorber(
-        width_m=0.80,
-        height_m=1.00,
+        width_m=0.230,
+        height_m=0.230,
         center_height_m=1.20,
         normal_angle_from_x_deg=180.0,  # Facing approximately -x
     )
@@ -50,9 +51,25 @@ def build_default_simulation() -> HotboxSimulation:
 def main() -> None:
     sim = build_default_simulation()
     when = datetime(2026, 8, 28, 20, 0, 0, tzinfo=timezone.utc)
+
+    mirror_rel_positions = [m.rotation_point - sim.absorber.center for m in sim.mirrors]
+    absorber_orientation_from_north_deg = 90.0 - sim.absorber.normal_angle_from_x_deg
+    controller = Controller(
+        mirror_positions_relative_to_absorber=mirror_rel_positions,
+        absorber_orientation_relative_to_north_deg=absorber_orientation_from_north_deg,
+    )
+    orientations = controller.apply_for_time(
+        when_utc=when,
+        sun=sim.sun,
+        absorber_center=sim.absorber.center,
+        mirrors=sim.mirrors,
+    )
+
     result = sim.run(when)
 
     print(f"Sun ray direction (world xyz): {result.sun_direction}")
+    for idx, (az, el) in enumerate(orientations):
+        print(f"Controller mirror {idx}: azimuth={az:.2f} deg, elevation={el:.2f} deg")
     for idx, mr in enumerate(result.per_mirror):
         print(
             f"Mirror {idx}: incident={mr.incident_power_w:.1f} W, "

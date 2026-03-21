@@ -23,6 +23,13 @@ def az_el_to_unit(azimuth_deg: float, elevation_deg: float) -> np.ndarray:
     )
 
 
+def unit_to_az_el(direction: np.ndarray) -> tuple[float, float]:
+    d = normalize(direction.reshape(1, 3))[0]
+    elevation_deg = float(np.rad2deg(np.arcsin(np.clip(d[2], -1.0, 1.0))))
+    azimuth_deg = float(np.rad2deg(np.arctan2(d[0], d[1]))) % 360.0
+    return azimuth_deg, elevation_deg
+
+
 def orthonormal_basis_from_direction(direction: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Return two unit vectors orthogonal to direction."""
     d = normalize(direction.reshape(1, 3))[0]
