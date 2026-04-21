@@ -4,6 +4,7 @@ from datetime import datetime
 
 import numpy as np
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 from src.absorber import SolarAbsorber
 from src.mirror import CylindricalMirror
@@ -254,17 +255,20 @@ def _local_hours_since_midnight(dt: datetime) -> float:
 
 
 def build_day_delivered_power_figure(
-    series: list[tuple[str, list[datetime], list[float]]],
+    series: list[tuple[str, list[datetime], list[float], list[list[tuple[float, float]]]]],
     *,
     title: str = "Delivered optical power vs time",
     y_axis_title: str = "Delivered power [W]",
     x_axis_title: str = "Local time",
     same_day_time_scale: bool = False,
 ) -> go.Figure:
-    """Line chart of total delivered absorber power; one trace per (label, local times, powers).
+    """Two stacked panels: delivered power (top), mirror azimuth / elevation per mirror (bottom).
 
-    If ``same_day_time_scale`` is True, x is hours since local midnight so multiple calendar
-    days share one axis (wall-clock alignment). Hover still shows the actual timestamp.
+    Each series entry is ``(label, local times, powers_w, orientations)`` where ``orientations``
+    has the same length as ``times``; each element is ``[(az_deg, el_deg), ...]`` per mirror.
+
+    If ``same_day_time_scale`` is True, x is hours since local midnight for overlaying different
+    calendar days; hover still shows the actual timestamp.
     """
     palette = (
         "#d62728",
@@ -278,9 +282,24 @@ def build_day_delivered_power_figure(
         "#bcbd22",
         "#17becf",
     )
-    fig = go.Figure()
-    for i, (name, times_local, powers_w) in enumerate(series):
-        c = palette[i % len(palette)]
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.1,
+        row_heights=[0.5, 0.5],
+        subplot_titles=(
+            "Delivered power",
+            "Mirror angles (solid = azimuth, dashed = elevation)",
+        ),
+        specs=[[{"secondary_y": False}], [{"secondary_y": True}]],
+    )
+
+    for series_i, (name, times_local, powers_w, orient_data) in enumerate(series):
+        if len(orient_data) != len(times_local) or len(powers_w) != len(times_local):
+            raise ValueError("times, powers, and orientations must have the same length.")
+        n_m = len(orient_data[0]) if orient_data else 0
+
         if same_day_time_scale:
             x_plot = [_local_hours_since_midnight(t) for t in times_local]
             stamp = [
@@ -288,47 +307,100 @@ def build_day_delivered_power_figure(
                 + (f" {t.tzname()}" if t.tzinfo is not None else "")
                 for t in times_local
             ]
-            fig.add_trace(
-                go.Scatter(
-                    x=x_plot,
-                    y=powers_w,
-                    mode="lines+markers",
-                    name=name,
-                    line={"color": c, "width": 2},
-                    marker={"size": 5},
-                    customdata=stamp,
-                    hovertemplate="%{customdata}<br>%{y:.1f} W<extra></extra>",
-                )
-            )
         else:
-            fig.add_trace(
-                go.Scatter(
-                    x=times_local,
-                    y=powers_w,
-                    mode="lines+markers",
-                    name=name,
-                    line={"color": c, "width": 2},
-                    marker={"size": 5},
-                )
+            x_plot = list(times_local)
+            stamp = None
+
+        c_power = palette[series_i % len(palette)]
+        power_trace = go.Scatter(
+            x=x_plot,
+            y=powers_w,
+            mode="lines+markers",
+            name=name,
+            line={"color": c_power, "width": 2},
+            marker={"size": 5},
+        )
+        if stamp is not None:
+            power_trace.update(
+                customdata=stamp,
+                hovertemplate="%{customdata}<br>%{y:.1f} W<extra></extra>",
             )
+        fig.add_trace(power_trace, row=1, col=1)
+
+        for m in range(n_m):
+            az = [orient_data[t][m][0] for t in range(len(times_local))]
+            el = [orient_data[t][m][1] for t in range(len(times_local))]
+            c_m = palette[(series_i * max(n_m, 1) + m) % len(palette)]
+            lg = f"{name}_m{m}"
+            az_trace = go.Scatter(
+                x=x_plot,
+                y=az,
+                mode="lines+markers",
+                name=f"{name} M{m} az",
+                legendgroup=lg,
+                line={"color": c_m, "width": 1.5},
+                marker={"size": 3},
+            )
+            el_trace = go.Scatter(
+                x=x_plot,
+                y=el,
+                mode="lines+markers",
+                name=f"{name} M{m} el",
+                legendgroup=lg,
+                line={"color": c_m, "width": 1.5, "dash": "dash"},
+                marker={"size": 3},
+            )
+            if stamp is not None:
+                az_trace.update(
+                    customdata=stamp,
+                    hovertemplate="%{customdata}<br>azimuth %{y:.2f}°<extra></extra>",
+                )
+                el_trace.update(
+                    customdata=stamp,
+                    hovertemplate="%{customdata}<br>elevation %{y:.2f}°<extra></extra>",
+                )
+            fig.add_trace(az_trace, row=2, col=1, secondary_y=False)
+            fig.add_trace(el_trace, row=2, col=1, secondary_y=True)
+
     fig.update_layout(
         title=title,
         template="plotly_white",
-        xaxis_title=x_axis_title,
-        yaxis_title=y_axis_title,
         hovermode="x unified",
-        width=900,
-        height=480,
-        margin={"l": 60, "r": 20, "t": 50, "b": 55},
-        legend={"yanchor": "top", "y": 0.99, "xanchor": "left", "x": 0.01},
+        width=920,
+        height=780,
+        margin={"l": 58, "r": 58, "t": 90, "b": 60},
+        legend={
+            "yanchor": "top",
+            "y": 1.0,
+            "xanchor": "left",
+            "x": 1.01,
+        },
     )
+    fig.update_yaxes(title_text=y_axis_title, row=1, col=1)
+    fig.update_yaxes(title_text="Azimuth [deg]", secondary_y=False, row=2, col=1)
+    fig.update_yaxes(title_text="Elevation [deg]", secondary_y=True, row=2, col=1)
+    fig.update_xaxes(title_text=x_axis_title, row=2, col=1)
+    fig.update_xaxes(showticklabels=False, row=1, col=1)
+
     if same_day_time_scale:
         tick_h = list(range(0, 25, 2))
+        tick_labels = [f"{h:02d}:00" for h in tick_h]
         fig.update_xaxes(
             tickmode="array",
             tickvals=tick_h,
-            ticktext=[f"{h:02d}:00" for h in tick_h],
+            ticktext=tick_labels,
+            row=1,
+            col=1,
+        )
+        fig.update_xaxes(
+            tickmode="array",
+            tickvals=tick_h,
+            ticktext=tick_labels,
+            row=2,
+            col=1,
         )
     else:
-        fig.update_xaxes(tickformat="%H:%M")
+        fig.update_xaxes(tickformat="%H:%M", row=1, col=1)
+        fig.update_xaxes(tickformat="%H:%M", row=2, col=1)
+
     return fig

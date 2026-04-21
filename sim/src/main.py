@@ -28,8 +28,8 @@ MIRROR_BACK_TO_ROTATION_OFFSET_M = 0.10
 
 # Solar absorber: vertical rectangle, center at (0, 0, center_height); normal in horizontal plane.
 # normal_angle_from_x_deg: 0° = +x (east), 90° = +y (north), 180° = −x (west), 270° = −y (south).
-ABSORBER_WIDTH_M = 0.30
-ABSORBER_HEIGHT_M = 0.30
+ABSORBER_WIDTH_M = 0.40
+ABSORBER_HEIGHT_M = 0.40
 ABSORBER_CENTER_HEIGHT_M = 1.0
 ABSORBER_NORMAL_ANGLE_FROM_X_DEG = 60.0
 
@@ -116,10 +116,12 @@ def simulate_delivered_power_over_times(
     sim: HotboxSimulation,
     controller: Controller,
     times: list[datetime],
-) -> tuple[list[datetime], list[float]]:
+) -> tuple[list[datetime], list[float], list[list[tuple[float, float]]]]:
+    """For each time: total delivered power and controller (azimuth, elevation) per mirror [deg]."""
     powers: list[float] = []
+    orientations_per_time: list[list[tuple[float, float]]] = []
     for when in times:
-        controller.apply_for_time(
+        az_el = controller.apply_for_time(
             when_utc=when,
             sun=sim.sun,
             absorber_center=sim.absorber.center,
@@ -127,7 +129,8 @@ def simulate_delivered_power_over_times(
         )
         result = sim.run(when)
         powers.append(result.total_delivered_power_w)
-    return times, powers
+        orientations_per_time.append(list(az_el))
+    return times, powers, orientations_per_time
 
 
 def mirror_rotation_xy_on_arc(
@@ -248,7 +251,7 @@ def main() -> None:
     scene_fig.show(config=_plotly_config)
     spot_fig.show(config=_plotly_config)
 
-    day_series: list[tuple[str, list[datetime], list[float]]] = []
+    day_series: list[tuple[str, list[datetime], list[float], list[list[tuple[float, float]]]]] = []
     single_curve_sr_ss: tuple[datetime | None, datetime | None] | None = None
     for month_i, day_i in day_specs:
         day_times, sr, ss = local_times_sunrise_to_sunset(
@@ -270,8 +273,10 @@ def main() -> None:
         else:
             print(f"Day curve {label}: no sunrise/sunset (polar night or missing rise/set).")
         if day_times:
-            _, day_powers = simulate_delivered_power_over_times(sim, controller, day_times)
-            day_series.append((label, day_times, day_powers))
+            _, day_powers, day_orients = simulate_delivered_power_over_times(
+                sim, controller, day_times
+            )
+            day_series.append((label, day_times, day_powers, day_orients))
             if len(day_specs) == 1:
                 single_curve_sr_ss = (sr, ss)
 
@@ -287,7 +292,7 @@ def main() -> None:
                 f"(sunrise–sunset {sr_s}–{ss_s}, every {DAY_CURVE_STEP_MINUTES} min)"
             )
         else:
-            dates_s = ", ".join(name for name, _, _ in day_series)
+            dates_s = ", ".join(name for name, _, _, _ in day_series)
             day_title = (
                 f"Delivered power — {DAY_CURVE_YEAR} ({dates_s}), "
                 f"sunrise–sunset local, every {DAY_CURVE_STEP_MINUTES} min"
