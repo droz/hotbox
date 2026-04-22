@@ -1,6 +1,6 @@
 # hotbox sim
 
-Simple, vectorized optical raytrace for a cylindrical-mirror solar oven concept.
+Simple, vectorized optical raytrace for a flat-mirror solar oven concept (rigid **5×5** grid of square facets on one **alt–az** mount; facet tilts are set for a configurable **design** sun time).
 
 ## Run with uv
 
@@ -9,7 +9,7 @@ uv run hotbox-sim
 ```
 
 The script prints power statistics and opens Plotly figures:
-- 3D scene (ground, absorber, mirror, incoming and reflected rays)
+- 3D scene (ground, absorber, mirror tiles, incoming and reflected rays)
 - Spot pattern on absorber plane
 - Delivered power vs local time (sunrise–sunset on the configured day, every 10 minutes)
 

@@ -6,9 +6,12 @@ from datetime import datetime
 import numpy as np
 
 from src.absorber import SolarAbsorber
+from src.flat_mirror_grid import AltAzFlatMirrorGrid
 from src.mirror import CylindricalMirror
 from src.rays import RayBundle
 from src.sun import SunModel
+
+MirrorLike = CylindricalMirror | AltAzFlatMirrorGrid
 
 # Ignore shadow ordering when hits are within this (m) along the ray (numerical tie-break).
 _SHADOW_TOL_M = 1e-5
@@ -16,7 +19,7 @@ _SHADOW_TOL_M = 1e-5
 
 @dataclass(slots=True)
 class MirrorResult:
-    mirror: CylindricalMirror
+    mirror: MirrorLike
     incoming: RayBundle
     mirror_hit_mask: np.ndarray
     mirror_hit_points: np.ndarray
@@ -52,7 +55,7 @@ class HotboxSimulation:
         self,
         sun: SunModel,
         absorber: SolarAbsorber,
-        mirrors: list[CylindricalMirror],
+        mirrors: list[MirrorLike],
         samples_u: int = 60,
         samples_v: int = 60,
     ) -> None:

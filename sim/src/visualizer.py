@@ -1,18 +1,20 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from src.absorber import SolarAbsorber
+from src.flat_mirror_grid import AltAzFlatMirrorGrid
 from src.mirror import CylindricalMirror
 from src.simulation import SimulationResult
 
 
 class SceneVisualizer:
-    def __init__(self, absorber: SolarAbsorber, mirrors: list[CylindricalMirror]) -> None:
+    def __init__(self, absorber: SolarAbsorber, mirrors: list[Any]) -> None:
         self.absorber = absorber
         self.mirrors = mirrors
 
@@ -229,7 +231,24 @@ class SceneVisualizer:
         )
 
     @staticmethod
-    def _add_mirror(fig: go.Figure, mirror: CylindricalMirror) -> None:
+    def _add_mirror(fig: go.Figure, mirror: Any) -> None:
+        if isinstance(mirror, AltAzFlatMirrorGrid):
+            first = True
+            for surf in mirror.tile_surface_grids():
+                fig.add_trace(
+                    go.Surface(
+                        x=surf[..., 0],
+                        y=surf[..., 1],
+                        z=surf[..., 2],
+                        opacity=0.45,
+                        showscale=False,
+                        colorscale=[[0.0, "#4c78a8"], [1.0, "#4c78a8"]],
+                        name="Mirror tiles",
+                        showlegend=first,
+                    )
+                )
+                first = False
+            return
         surf = mirror.surface_grid()
         fig.add_trace(
             go.Surface(
@@ -262,10 +281,13 @@ def build_day_delivered_power_figure(
     x_axis_title: str = "Local time",
     same_day_time_scale: bool = False,
 ) -> go.Figure:
-    """Two stacked panels: delivered power (top), mirror azimuth / elevation per mirror (bottom).
+    """Two stacked panels: delivered power (top), mirror orientation per mirror (bottom).
 
     Each series entry is ``(label, local times, powers_w, orientations)`` where ``orientations``
-    has the same length as ``times``; each element is ``[(az_deg, el_deg), ...]`` per mirror.
+    has the same length as ``times``; each element is ``[(az_deg, second_deg), ...]`` per mirror.
+    For ``AltAzFlatMirrorGrid``, ``second_deg`` is lattice-plane tilt (0° vertical, 90° horizontal
+    toward zenith), not the raw ``(azimuth_deg, elevation_deg)`` joint tuple on the grid. For cylindrical mirrors, ``second_deg`` is
+    elevation of the mirror normal [deg].
 
     If ``same_day_time_scale`` is True, x is hours since local midnight for overlaying different
     calendar days; hover still shows the actual timestamp.
@@ -290,7 +312,7 @@ def build_day_delivered_power_figure(
         row_heights=[0.5, 0.5],
         subplot_titles=(
             "Delivered power",
-            "Mirror angles (solid = azimuth, dashed = elevation)",
+            "Lattice plane (solid = azimuth, dashed = tilt 0°=vertical, 90°=horizontal zenith)",
         ),
         specs=[[{"secondary_y": False}], [{"secondary_y": True}]],
     )
@@ -311,9 +333,14 @@ def build_day_delivered_power_figure(
             x_plot = list(times_local)
             stamp = None
 
+        # Slight x shift per overlay curve so traces at the same wall time do not paint on top
+        # of each other (otherwise a bad/zero series can hide a good one).
+        x_shift_h = 0.012 * series_i if (same_day_time_scale and len(series) > 1) else 0.0
+        x_plot_used = [x + x_shift_h for x in x_plot] if x_shift_h else x_plot
+
         c_power = palette[series_i % len(palette)]
         power_trace = go.Scatter(
-            x=x_plot,
+            x=x_plot_used,
             y=powers_w,
             mode="lines+markers",
             name=name,
@@ -333,7 +360,7 @@ def build_day_delivered_power_figure(
             c_m = palette[(series_i * max(n_m, 1) + m) % len(palette)]
             lg = f"{name}_m{m}"
             az_trace = go.Scatter(
-                x=x_plot,
+                x=x_plot_used,
                 y=az,
                 mode="lines+markers",
                 name=f"{name} M{m} az",
@@ -342,10 +369,10 @@ def build_day_delivered_power_figure(
                 marker={"size": 3},
             )
             el_trace = go.Scatter(
-                x=x_plot,
+                x=x_plot_used,
                 y=el,
                 mode="lines+markers",
-                name=f"{name} M{m} el",
+                name=f"{name} M{m} tilt",
                 legendgroup=lg,
                 line={"color": c_m, "width": 1.5, "dash": "dash"},
                 marker={"size": 3},
@@ -357,7 +384,7 @@ def build_day_delivered_power_figure(
                 )
                 el_trace.update(
                     customdata=stamp,
-                    hovertemplate="%{customdata}<br>elevation %{y:.2f}°<extra></extra>",
+                    hovertemplate="%{customdata}<br>tilt %{y:.2f}°<extra></extra>",
                 )
             fig.add_trace(az_trace, row=2, col=1, secondary_y=False)
             fig.add_trace(el_trace, row=2, col=1, secondary_y=True)
@@ -378,7 +405,7 @@ def build_day_delivered_power_figure(
     )
     fig.update_yaxes(title_text=y_axis_title, row=1, col=1)
     fig.update_yaxes(title_text="Azimuth [deg]", secondary_y=False, row=2, col=1)
-    fig.update_yaxes(title_text="Elevation [deg]", secondary_y=True, row=2, col=1)
+    fig.update_yaxes(title_text="Tilt [deg]", secondary_y=True, row=2, col=1)
     fig.update_xaxes(title_text=x_axis_title, row=2, col=1)
     fig.update_xaxes(showticklabels=False, row=1, col=1)
 

@@ -9,22 +9,18 @@ from pvlib.location import Location
 
 from src.absorber import SolarAbsorber
 from src.controller import Controller
-from src.mirror import CylindricalMirror
+from src.flat_mirror_grid import AltAzFlatMirrorGrid
 from src.simulation import HotboxSimulation
 from src.sun import SunModel
 from src.visualizer import SceneVisualizer, build_day_delivered_power_figure
 
-# --- Layout (automated mirror arc) ---
-NUM_MIRRORS = 6
-MIRROR_RADIUS_OF_CURVATURE_M = 6.0
-# Arc length along the circle (radius R/2) between adjacent mirror rotation points.
-MIRROR_SPACING_M = 0.5
-
-# Mirror sheet / mount (shared by all mirrors in this demo)
-MIRROR_WIDTH_M = 0.305  # ~12 in
-MIRROR_HEIGHT_M = 1.22  # ~48 in
-MIRROR_POST_HEIGHT_M = 0.7
-MIRROR_BACK_TO_ROTATION_OFFSET_M = 0.10
+# --- Rigid flat mirror grid (one alt-az mount) ---
+INCH_M = 0.0254
+MIRROR_GRID_N = 5
+MIRROR_TILE_SIDE_IN = 10.0
+MIRROR_GRID_PITCH_IN = 10.0  # center-to-center spacing [in]
+MIRROR_GRID_DISTANCE_ALONG_NORMAL_M = 2.2  # mount pivot xy offset along absorber outward normal
+MIRROR_GRID_MOUNT_HEIGHT_M = 0.85  # mount pivot z [m]; facet centers lie on the design tilted plane through the pivot
 
 # Solar absorber: vertical rectangle, center at (0, 0, center_height); normal in horizontal plane.
 # normal_angle_from_x_deg: 0° = +x (east), 90° = +y (north), 180° = −x (west), 270° = −y (south).
@@ -48,9 +44,12 @@ DAY_CURVE_DAY = [30, 7]
 DAY_CURVE_TZ = ZoneInfo("America/Los_Angeles")
 DAY_CURVE_STEP_MINUTES = 20
 
+# Facet tilts are chosen so each center ray reflects to the absorber at this instant (mount at 0,0).
+MIRROR_GRID_DESIGN_WHEN = datetime(2026, 8, 31, 12, 0, 0, tzinfo=DAY_CURVE_TZ)
+
 # Local wall time for the 3D scene / absorber spot figures and printed snapshot
 # (controller aim, mirror angles, ray bundle). Independent of DAY_CURVE_* curve list.
-SCENE_VIS_WHEN = datetime(DAY_CURVE_YEAR, DAY_CURVE_MONTH[0], DAY_CURVE_DAY[0], 12, 0, 0, tzinfo=DAY_CURVE_TZ)
+SCENE_VIS_WHEN = datetime(2026, 9, 7, 11, 0, 0, tzinfo=DAY_CURVE_TZ)
 
 
 def local_times_sunrise_to_sunset(
@@ -117,7 +116,7 @@ def simulate_delivered_power_over_times(
     controller: Controller,
     times: list[datetime],
 ) -> tuple[list[datetime], list[float], list[list[tuple[float, float]]]]:
-    """For each time: total delivered power and controller (azimuth, elevation) per mirror [deg]."""
+    """For each time: total delivered power and controller orientation per mirror [deg]."""
     powers: list[float] = []
     orientations_per_time: list[list[tuple[float, float]]] = []
     for when in times:
@@ -133,44 +132,6 @@ def simulate_delivered_power_over_times(
     return times, powers, orientations_per_time
 
 
-def mirror_rotation_xy_on_arc(
-    absorber: SolarAbsorber,
-    num_mirrors: int,
-    radius_of_curvature_m: float,
-    spacing_along_arc_m: float,
-) -> list[tuple[float, float]]:
-    """
-    Place mirror rotation points on a horizontal arc in front of the absorber.
-
-    All points lie on a circle of radius R/2 in the horizontal plane, centered on
-    the absorber axis (x,y of absorber center). The arc is symmetric about the
-    absorber outward normal; spacing is uniform arc length between neighbors.
-    """
-    r = 0.5 * radius_of_curvature_m
-    center_xy = absorber.center[:2]
-    forward_xy = absorber.normal[:2]
-    perp_xy = absorber.horizontal_axis[:2]
-
-    if num_mirrors < 1:
-        return []
-
-    if num_mirrors == 1:
-        thetas = np.array([0.0], dtype=float)
-    else:
-        arc_total = (num_mirrors - 1) * spacing_along_arc_m
-        phi = arc_total / r
-        thetas = np.linspace(-0.5 * phi, 0.5 * phi, num_mirrors)
-
-    positions: list[tuple[float, float]] = []
-    for th in thetas:
-        direction_xy = np.cos(th) * forward_xy + np.sin(th) * perp_xy
-        offset = r * direction_xy
-        xy = center_xy + offset
-        positions.append((float(xy[0]), float(xy[1])))
-
-    return positions
-
-
 def build_default_simulation() -> HotboxSimulation:
     sun = SunModel(
         latitude_deg=SITE_LATITUDE_DEG,
@@ -184,30 +145,29 @@ def build_default_simulation() -> HotboxSimulation:
         normal_angle_from_x_deg=ABSORBER_NORMAL_ANGLE_FROM_X_DEG,
     )
 
-    xy_list = mirror_rotation_xy_on_arc(
-        absorber,
-        NUM_MIRRORS,
-        MIRROR_RADIUS_OF_CURVATURE_M,
-        MIRROR_SPACING_M,
+    a = np.asarray(absorber.center, dtype=float)
+    fw = np.asarray(absorber.normal, dtype=float)
+    dist = MIRROR_GRID_DISTANCE_ALONG_NORMAL_M
+    mount_world = np.array(
+        [a[0] + dist * fw[0], a[1] + dist * fw[1], MIRROR_GRID_MOUNT_HEIGHT_M],
+        dtype=float,
     )
-    mirrors = [
-        CylindricalMirror(
-            radius_of_curvature_m=MIRROR_RADIUS_OF_CURVATURE_M,
-            width_m=MIRROR_WIDTH_M,
-            height_m=MIRROR_HEIGHT_M,
-            post_height_m=MIRROR_POST_HEIGHT_M,
-            back_to_rotation_offset_m=MIRROR_BACK_TO_ROTATION_OFFSET_M,
-            position_xy_m=xy,
-            azimuth_deg=0.0,
-            elevation_deg=0.0,
-        )
-        for xy in xy_list
-    ]
+    tile_half_m = 0.5 * MIRROR_TILE_SIDE_IN * INCH_M
+    pitch_m = MIRROR_GRID_PITCH_IN * INCH_M
+    grid = AltAzFlatMirrorGrid(
+        mount_world=mount_world,
+        design_when_utc=MIRROR_GRID_DESIGN_WHEN,
+        absorber_center=a.copy(),
+        grid_n=MIRROR_GRID_N,
+        pitch_m=pitch_m,
+        tile_half_m=tile_half_m,
+        sun=sun,
+    )
 
     return HotboxSimulation(
         sun=sun,
         absorber=absorber,
-        mirrors=mirrors,
+        mirrors=[grid],
         samples_u=SIM_SAMPLES_U,
         samples_v=SIM_SAMPLES_V,
     )
@@ -234,8 +194,11 @@ def main() -> None:
     result = sim.run(when)
 
     print(f"Sun ray direction (world xyz): {result.sun_direction}")
-    for idx, (az, el) in enumerate(orientations):
-        print(f"Controller mirror {idx}: azimuth={az:.2f} deg, elevation={el:.2f} deg")
+    for idx, (az, tilt) in enumerate(orientations):
+        print(
+            f"Controller mirror {idx}: azimuth={az:.2f} deg, "
+            f"lattice tilt={tilt:.2f} deg (0=vertical plane, 90=horizontal toward zenith)"
+        )
     for idx, mr in enumerate(result.per_mirror):
         print(
             f"Mirror {idx}: incident={mr.incident_power_w:.1f} W, "

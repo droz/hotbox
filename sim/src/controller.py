@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 import numpy as np
 
+from src.flat_mirror_grid import AltAzFlatMirrorGrid
 from src.geometry import normalize, unit_to_az_el
 from src.mirror import CylindricalMirror
 from src.sun import SunModel
@@ -49,8 +51,14 @@ class Controller:
         when_utc: datetime,
         sun: SunModel,
         absorber_center: np.ndarray,
-        mirrors: list[CylindricalMirror],
+        mirrors: list[Any],
     ) -> list[tuple[float, float]]:
+        if len(mirrors) == 1 and isinstance(mirrors[0], AltAzFlatMirrorGrid):
+            g = mirrors[0]
+            g.solve_mount_angles(when_utc, absorber_center)
+            # Report physical lattice-plane angles (not raw R_z @ R_x joint parameters).
+            return [(g.physical_mount_azimuth_deg(), g.physical_mount_tilt_deg())]
+
         back_offsets = [m.back_to_rotation_offset_m for m in mirrors]
         az_el = self.compute_mirror_orientations(
             when_utc=when_utc,
