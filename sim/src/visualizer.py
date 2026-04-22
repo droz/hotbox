@@ -22,9 +22,9 @@ class SceneVisualizer:
 
     def _scene_xy_limits(self, incoming_ray_length_m: float) -> tuple[list[float], list[float]]:
         """
-        Compute tight x/y limits around absorber + mirrors for the 3D scene.
+        Tight x/y span for the ground patch only (not used to force scene axis ranges).
 
-        Returns ``(x_range, y_range, ground_half_size)`` in meters.
+        Returns ``(x_range, y_range)`` in meters.
         """
         pts_xy: list[np.ndarray] = [self.absorber.corners()[:, :2]]
         for mirror in self.mirrors:
@@ -207,9 +207,10 @@ class SceneVisualizer:
                 )
                 reflected_added = True
 
-        # Square figure + autosize=False limits div stretching. aspectmode="data" is Plotly's
-        # 3D equivalent of matplotlib axis("equal"): one meter along x, y, or z is the same
-        # length on screen (orthogonal to camera view).
+        # Square figure + autosize=False avoids non-uniform div stretching in the page.
+        # aspectmode="auto" (Plotly default): like "data" (proportional axis box) unless one
+        # axis span is >4× the other two, then "cube" — avoids an ultra-thin vertical slab when
+        # x/y footprint ≫ height (which reads as "flattened" with aspectmode="data" alone).
         fig.update_layout(
             title=scene_title,
             autosize=False,
@@ -219,7 +220,7 @@ class SceneVisualizer:
             scene={
                 "xaxis_title": "x (east) [m]",
                 "yaxis_title": "y (north) [m]",
-                "aspectmode": "data",
+                "aspectmode": "auto",
                 "camera": {
                     "projection": {"type": "orthographic"},
                     "eye": {"x": 1.35, "y": -1.35, "z": 0.9},
@@ -228,13 +229,11 @@ class SceneVisualizer:
                     "showbackground": False,
                     "showgrid": False,
                     "zeroline": True,
-                    "range": x_range,
                 },
                 "yaxis": {
                     "showbackground": False,
                     "showgrid": False,
                     "zeroline": True,
-                    "range": y_range,
                 },
                 "zaxis": {
                     "visible": False,
