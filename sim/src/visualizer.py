@@ -114,9 +114,9 @@ class SceneVisualizer:
         )
         return fig
 
-    def build_absorber_spot_figure(self, result: SimulationResult, bins: int = 60) -> go.Figure:
-        pts = []
-        powers = []
+    def _spot_uv_and_powers(self, result: SimulationResult) -> tuple[np.ndarray, np.ndarray] | None:
+        pts: list[np.ndarray] = []
+        powers: list[np.ndarray] = []
         c = self.absorber.center
         u_axis = self.absorber.horizontal_axis
         v_axis = self.absorber.vertical_axis
@@ -132,22 +132,33 @@ class SceneVisualizer:
             pts.append(np.column_stack([u, v]))
             powers.append(mres.reflected.powers_w[mask])
 
+        if not pts:
+            return None
+        return np.vstack(pts), np.hstack(powers)
+
+    def _spot_power_heatmap_z(
+        self, uv: np.ndarray, pw: np.ndarray, bins: int
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        w = 0.5 * self.absorber.width_m
+        h = 0.5 * self.absorber.height_m
+        x_edges = np.linspace(-w, w, bins + 1)
+        y_edges = np.linspace(-h, h, bins + 1)
+        power_grid, _, _ = np.histogram2d(uv[:, 0], uv[:, 1], bins=[x_edges, y_edges], weights=pw)
+        x_centers = 0.5 * (x_edges[:-1] + x_edges[1:])
+        y_centers = 0.5 * (y_edges[:-1] + y_edges[1:])
+        return x_centers, y_centers, power_grid.T
+
+    def build_absorber_spot_figure(self, result: SimulationResult, bins: int = 60) -> go.Figure:
         fig = go.Figure()
-        if pts:
-            uv = np.vstack(pts)
-            pw = np.hstack(powers)
-            w = 0.5 * self.absorber.width_m
-            h = 0.5 * self.absorber.height_m
-            x_edges = np.linspace(-w, w, bins + 1)
-            y_edges = np.linspace(-h, h, bins + 1)
-            power_grid, _, _ = np.histogram2d(uv[:, 0], uv[:, 1], bins=[x_edges, y_edges], weights=pw)
-            x_centers = 0.5 * (x_edges[:-1] + x_edges[1:])
-            y_centers = 0.5 * (y_edges[:-1] + y_edges[1:])
+        spot = self._spot_uv_and_powers(result)
+        if spot is not None:
+            uv, pw = spot
+            x_centers, y_centers, z = self._spot_power_heatmap_z(uv, pw, bins)
             fig.add_trace(
                 go.Heatmap(
                     x=x_centers,
                     y=y_centers,
-                    z=power_grid.T,
+                    z=z,
                     colorscale="Inferno",
                     colorbar={"title": "Bin power [W]"},
                     name="Spot heatmap",
@@ -165,7 +176,6 @@ class SceneVisualizer:
                 name="Absorber boundary",
             )
         )
-        # Equal data units on both axes and a square figure so a square absorber stays square.
         lim = 0.55 * max(self.absorber.width_m, self.absorber.height_m)
         fig.update_layout(
             title="Spot pattern on absorber",
@@ -188,6 +198,137 @@ class SceneVisualizer:
                 "constrain": "domain",
             },
         )
+        return fig
+
+    def build_absorber_spot_figure_grid(
+        self,
+        labeled_results: list[tuple[str, SimulationResult]],
+        *,
+        bins: int = 72,
+        ncols: int = 4,
+    ) -> go.Figure:
+        """
+        Small multiples of absorber spot heatmaps (local time in subplot titles).
+
+        All panels share one color scale so irradiation patterns are comparable across the day.
+        """
+        n = len(labeled_results)
+        if n == 0:
+            return go.Figure()
+        nrows = int(np.ceil(n / ncols))
+        titles = [lab for lab, _ in labeled_results] + [""] * (nrows * ncols - n)
+        fig = make_subplots(
+            rows=nrows,
+            cols=ncols,
+            subplot_titles=titles[: nrows * ncols],
+            vertical_spacing=0.09,
+            horizontal_spacing=0.06,
+        )
+
+        lim = 0.55 * max(self.absorber.width_m, self.absorber.height_m)
+        w = 0.5 * self.absorber.width_m
+        h = 0.5 * self.absorber.height_m
+        bx = [-w, w, w, -w, -w]
+        by = [-h, -h, h, h, -h]
+
+        zmax = 0.0
+        cell_z: list[tuple[int, int, np.ndarray, np.ndarray, np.ndarray] | None] = []
+        for i, (_lab, res) in enumerate(labeled_results):
+            row = i // ncols + 1
+            col = i % ncols + 1
+            spot = self._spot_uv_and_powers(res)
+            if spot is None:
+                cell_z.append(None)
+                continue
+            uv, pw = spot
+            xc, yc, z = self._spot_power_heatmap_z(uv, pw, bins)
+            zm = float(np.nanmax(z)) if z.size else 0.0
+            zmax = max(zmax, zm)
+            cell_z.append((row, col, xc, yc, z))
+
+        zmax = max(zmax, 1e-30)
+
+        colorbar_shown = False
+        for i, cz in enumerate(cell_z):
+            row = i // ncols + 1
+            col = i % ncols + 1
+            if cz is None:
+                fig.add_trace(
+                    go.Scatter(
+                        x=bx,
+                        y=by,
+                        mode="lines",
+                        line={"color": "black", "width": 1},
+                        showlegend=False,
+                    ),
+                    row=row,
+                    col=col,
+                )
+                continue
+            _, _, xc, yc, z = cz
+            show_cbar = not colorbar_shown
+            if show_cbar:
+                colorbar_shown = True
+            fig.add_trace(
+                go.Heatmap(
+                    x=xc,
+                    y=yc,
+                    z=z,
+                    zmin=0.0,
+                    zmax=zmax,
+                    colorscale="Inferno",
+                    showscale=show_cbar,
+                    colorbar=(
+                        {"title": "Bin power [W]", "len": 0.92, "thickness": 14}
+                        if show_cbar
+                        else None
+                    ),
+                    hovertemplate="u %{x:.4f} m<br>v %{y:.4f} m<br>%{z:.3g} W<extra></extra>",
+                ),
+                row=row,
+                col=col,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=bx,
+                    y=by,
+                    mode="lines",
+                    line={"color": "black", "width": 1},
+                    showlegend=False,
+                ),
+                row=row,
+                col=col,
+            )
+
+        cell_px = 220
+        fig.update_layout(
+            title="Absorber spot pattern through the day (shared color scale)",
+            template="plotly_white",
+            width=min(40 + ncols * cell_px, 1400),
+            height=min(70 + nrows * cell_px, 1100),
+            margin={"l": 50, "r": 30, "t": 80, "b": 40},
+        )
+        for r in range(1, nrows + 1):
+            for c in range(1, ncols + 1):
+                ref = fig.get_subplot(row=r, col=c)
+                fig.update_xaxes(
+                    title_text="u [m]" if r == nrows else "",
+                    range=[-lim, lim],
+                    scaleanchor=ref.xaxis.anchor,
+                    scaleratio=1,
+                    constrain="domain",
+                    row=r,
+                    col=c,
+                )
+                fig.update_yaxes(
+                    title_text="v [m]" if c == 1 else "",
+                    range=[-lim, lim],
+                    scaleanchor=ref.yaxis.anchor,
+                    scaleratio=1,
+                    constrain="domain",
+                    row=r,
+                    col=c,
+                )
         return fig
 
     @staticmethod
@@ -274,16 +415,20 @@ def _local_hours_since_midnight(dt: datetime) -> float:
 
 
 def build_day_delivered_power_figure(
-    series: list[tuple[str, list[datetime], list[float], list[list[tuple[float, float]]]]],
+    series: list[
+        tuple[str, list[datetime], list[float], list[float], list[list[tuple[float, float]]]]
+    ],
     *,
-    title: str = "Delivered optical power vs time",
-    y_axis_title: str = "Delivered power [W]",
+    title: str = "Delivered & mirror-intercepted power vs time",
+    y_axis_title: str = "Power [W]",
     x_axis_title: str = "Local time",
     same_day_time_scale: bool = False,
 ) -> go.Figure:
-    """Two stacked panels: delivered power (top), mirror orientation per mirror (bottom).
+    """Two stacked panels: power (top), mirror orientation per mirror (bottom).
 
-    Each series entry is ``(label, local times, powers_w, orientations)`` where ``orientations``
+    Each series entry is ``(label, local times, delivered_w, intercepted_w, orientations)``.
+    ``intercepted_w`` is total power striking all mirrors (sum of per-mirror intercepted).
+    ``orientations``
     has the same length as ``times``; each element is ``[(az_deg, second_deg), ...]`` per mirror.
     For ``AltAzFlatMirrorGrid``, ``second_deg`` is lattice-plane tilt (0° vertical, 90° horizontal
     toward zenith), not the raw ``(azimuth_deg, elevation_deg)`` joint tuple on the grid. For cylindrical mirrors, ``second_deg`` is
@@ -311,15 +456,21 @@ def build_day_delivered_power_figure(
         vertical_spacing=0.1,
         row_heights=[0.5, 0.5],
         subplot_titles=(
-            "Delivered power",
+            "Delivered (solid) & power on mirrors (dashed)",
             "Lattice plane (solid = azimuth, dashed = tilt 0°=vertical, 90°=horizontal zenith)",
         ),
         specs=[[{"secondary_y": False}], [{"secondary_y": True}]],
     )
 
-    for series_i, (name, times_local, powers_w, orient_data) in enumerate(series):
-        if len(orient_data) != len(times_local) or len(powers_w) != len(times_local):
-            raise ValueError("times, powers, and orientations must have the same length.")
+    for series_i, (name, times_local, delivered_w, intercepted_w, orient_data) in enumerate(series):
+        if not (
+            len(orient_data) == len(times_local)
+            == len(delivered_w)
+            == len(intercepted_w)
+        ):
+            raise ValueError(
+                "times, delivered_w, intercepted_w, and orientations must have the same length."
+            )
         n_m = len(orient_data[0]) if orient_data else 0
 
         if same_day_time_scale:
@@ -339,20 +490,35 @@ def build_day_delivered_power_figure(
         x_plot_used = [x + x_shift_h for x in x_plot] if x_shift_h else x_plot
 
         c_power = palette[series_i % len(palette)]
-        power_trace = go.Scatter(
+        delivered_trace = go.Scatter(
             x=x_plot_used,
-            y=powers_w,
+            y=delivered_w,
             mode="lines+markers",
-            name=name,
+            name=f"{name} delivered",
+            legendgroup=f"{name}_pwr",
             line={"color": c_power, "width": 2},
             marker={"size": 5},
         )
+        intercept_trace = go.Scatter(
+            x=x_plot_used,
+            y=intercepted_w,
+            mode="lines+markers",
+            name=f"{name} on mirrors",
+            legendgroup=f"{name}_pwr",
+            line={"color": c_power, "width": 2, "dash": "dash"},
+            marker={"size": 5, "symbol": "diamond"},
+        )
         if stamp is not None:
-            power_trace.update(
+            delivered_trace.update(
                 customdata=stamp,
-                hovertemplate="%{customdata}<br>%{y:.1f} W<extra></extra>",
+                hovertemplate="%{customdata}<br>delivered %{y:.1f} W<extra></extra>",
             )
-        fig.add_trace(power_trace, row=1, col=1)
+            intercept_trace.update(
+                customdata=stamp,
+                hovertemplate="%{customdata}<br>on mirrors %{y:.1f} W<extra></extra>",
+            )
+        fig.add_trace(delivered_trace, row=1, col=1)
+        fig.add_trace(intercept_trace, row=1, col=1)
 
         for m in range(n_m):
             az = [orient_data[t][m][0] for t in range(len(times_local))]

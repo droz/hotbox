@@ -65,7 +65,15 @@ class HotboxSimulation:
         self.samples_u = samples_u
         self.samples_v = samples_v
 
-    def run(self, when_utc: datetime) -> SimulationResult:
+    def run(
+        self,
+        when_utc: datetime,
+        *,
+        samples_u: int | None = None,
+        samples_v: int | None = None,
+    ) -> SimulationResult:
+        su = self.samples_u if samples_u is None else samples_u
+        sv = self.samples_v if samples_v is None else samples_v
         sun_dir = self.sun.ray_direction(when_utc)
         per_mirror: list[MirrorResult] = []
         for i, mirror in enumerate(self.mirrors):
@@ -74,8 +82,8 @@ class HotboxSimulation:
                 center=mirror.center,
                 ray_direction=sun_dir,
                 cylinder_radius_m=mirror.sampling_radius_m,
-                samples_u=self.samples_u,
-                samples_v=self.samples_v,
+                samples_u=su,
+                samples_v=sv,
             )
             mirror_hit_mask, mirror_hit_points, reflected = mirror.intersect_and_reflect(incoming)
 

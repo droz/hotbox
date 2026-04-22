@@ -10,7 +10,7 @@ from pvlib.location import Location
 from src.absorber import SolarAbsorber
 from src.controller import Controller
 from src.flat_mirror_grid import AltAzFlatMirrorGrid
-from src.simulation import HotboxSimulation
+from src.simulation import HotboxSimulation, SimulationResult
 from src.sun import SunModel
 from src.visualizer import SceneVisualizer, build_day_delivered_power_figure
 
@@ -32,6 +32,13 @@ ABSORBER_NORMAL_ANGLE_FROM_X_DEG = 60.0
 SIM_SAMPLES_U = 100
 SIM_SAMPLES_V = 100
 
+# Higher ray count for the multi-panel absorber spot figure (main scene uses SIM_SAMPLES_*).
+SPOT_GRID_NUM_PANELS = 12
+SPOT_GRID_NCOLS = 4
+SPOT_GRID_SAMPLES_U = 500
+SPOT_GRID_SAMPLES_V = 500
+SPOT_GRID_BINS = 80
+
 # Site (must match SunModel in build_default_simulation)
 SITE_LATITUDE_DEG = 40.7864
 SITE_LONGITUDE_DEG = -119.2065
@@ -45,7 +52,7 @@ DAY_CURVE_TZ = ZoneInfo("America/Los_Angeles")
 DAY_CURVE_STEP_MINUTES = 20
 
 # Facet tilts are chosen so each center ray reflects to the absorber at this instant (mount at 0,0).
-MIRROR_GRID_DESIGN_WHEN = datetime(2026, 8, 31, 12, 0, 0, tzinfo=DAY_CURVE_TZ)
+MIRROR_GRID_DESIGN_WHEN = datetime(2026, 8, 31, 14, 0, 0, tzinfo=DAY_CURVE_TZ)
 
 # Local wall time for the 3D scene / absorber spot figures and printed snapshot
 # (controller aim, mirror angles, ray bundle). Independent of DAY_CURVE_* curve list.
@@ -111,13 +118,48 @@ def day_curve_month_day_pairs(
     return list(zip(months, days))
 
 
+def spot_pattern_sample_times(
+    latitude_deg: float,
+    longitude_deg: float,
+    altitude_m: float,
+    year: int,
+    month: int,
+    day: int,
+    tz: ZoneInfo,
+    step_minutes: int,
+    num_panels: int,
+) -> list[datetime]:
+    """
+    ``num_panels`` local times spread across sunrise–sunset for spot-pattern visualization.
+    Falls back to empty if there is no daylight interval.
+    """
+    day_times, _, _ = local_times_sunrise_to_sunset(
+        latitude_deg,
+        longitude_deg,
+        altitude_m,
+        year,
+        month,
+        day,
+        tz,
+        step_minutes,
+    )
+    if not day_times:
+        return []
+    if len(day_times) <= num_panels:
+        return list(day_times)
+    idx = np.linspace(0, len(day_times) - 1, num=num_panels, dtype=int)
+    idx = np.unique(idx)
+    return [day_times[int(j)] for j in idx]
+
+
 def simulate_delivered_power_over_times(
     sim: HotboxSimulation,
     controller: Controller,
     times: list[datetime],
-) -> tuple[list[datetime], list[float], list[list[tuple[float, float]]]]:
-    """For each time: total delivered power and controller orientation per mirror [deg]."""
-    powers: list[float] = []
+) -> tuple[list[datetime], list[float], list[float], list[list[tuple[float, float]]]]:
+    """For each time: total delivered power, total power hitting mirrors, orientations [deg]."""
+    delivered_w: list[float] = []
+    intercepted_w: list[float] = []
     orientations_per_time: list[list[tuple[float, float]]] = []
     for when in times:
         az_el = controller.apply_for_time(
@@ -127,9 +169,10 @@ def simulate_delivered_power_over_times(
             mirrors=sim.mirrors,
         )
         result = sim.run(when)
-        powers.append(result.total_delivered_power_w)
+        delivered_w.append(result.total_delivered_power_w)
+        intercepted_w.append(float(sum(m.intercepted_power_w for m in result.per_mirror)))
         orientations_per_time.append(list(az_el))
-    return times, powers, orientations_per_time
+    return times, delivered_w, intercepted_w, orientations_per_time
 
 
 def build_default_simulation() -> HotboxSimulation:
@@ -208,13 +251,49 @@ def main() -> None:
 
     viz = SceneVisualizer(sim.absorber, sim.mirrors)
     scene_fig = viz.build_scene_figure(result, ray_stride=100)
-    spot_fig = viz.build_absorber_spot_figure(result)
+
+    # Spot grid: same calendar day as SCENE_VIS_WHEN, sunrise→sunset (see SPOT_GRID_*).
+    spot_times = spot_pattern_sample_times(
+        SITE_LATITUDE_DEG,
+        SITE_LONGITUDE_DEG,
+        SITE_ALTITUDE_M,
+        SCENE_VIS_WHEN.year,
+        SCENE_VIS_WHEN.month,
+        SCENE_VIS_WHEN.day,
+        DAY_CURVE_TZ,
+        DAY_CURVE_STEP_MINUTES,
+        SPOT_GRID_NUM_PANELS,
+    )
+    if not spot_times:
+        spot_times = [when]
+    spot_labeled: list[tuple[str, SimulationResult]] = []
+    for t_spot in spot_times:
+        controller.apply_for_time(
+            when_utc=t_spot,
+            sun=sim.sun,
+            absorber_center=sim.absorber.center,
+            mirrors=sim.mirrors,
+        )
+        r_spot = sim.run(
+            t_spot,
+            samples_u=SPOT_GRID_SAMPLES_U,
+            samples_v=SPOT_GRID_SAMPLES_V,
+        )
+        label = t_spot.strftime("%H:%M")
+        spot_labeled.append((label, r_spot))
+    spot_fig = viz.build_absorber_spot_figure_grid(
+        spot_labeled,
+        bins=SPOT_GRID_BINS,
+        ncols=SPOT_GRID_NCOLS,
+    )
     # Prevent the browser from resizing the plot div (which distorts 3D aspect).
     _plotly_config = {"responsive": False}
     scene_fig.show(config=_plotly_config)
     spot_fig.show(config=_plotly_config)
 
-    day_series: list[tuple[str, list[datetime], list[float], list[list[tuple[float, float]]]]] = []
+    day_series: list[
+        tuple[str, list[datetime], list[float], list[float], list[list[tuple[float, float]]]]
+    ] = []
     single_curve_sr_ss: tuple[datetime | None, datetime | None] | None = None
     for month_i, day_i in day_specs:
         day_times, sr, ss = local_times_sunrise_to_sunset(
@@ -236,10 +315,10 @@ def main() -> None:
         else:
             print(f"Day curve {label}: no sunrise/sunset (polar night or missing rise/set).")
         if day_times:
-            _, day_powers, day_orients = simulate_delivered_power_over_times(
+            _, day_delivered, day_intercepted, day_orients = simulate_delivered_power_over_times(
                 sim, controller, day_times
             )
-            day_series.append((label, day_times, day_powers, day_orients))
+            day_series.append((label, day_times, day_delivered, day_intercepted, day_orients))
             if len(day_specs) == 1:
                 single_curve_sr_ss = (sr, ss)
 
@@ -251,13 +330,13 @@ def main() -> None:
             sr_s = sr0.strftime("%H:%M") if sr0 else "?"
             ss_s = ss0.strftime("%H:%M") if ss0 else "?"
             day_title = (
-                f"Delivered power — {month_i}/{day_i}/{DAY_CURVE_YEAR} "
+                f"Delivered & mirror-intercepted power — {month_i}/{day_i}/{DAY_CURVE_YEAR} "
                 f"(sunrise–sunset {sr_s}–{ss_s}, every {DAY_CURVE_STEP_MINUTES} min)"
             )
         else:
-            dates_s = ", ".join(name for name, _, _, _ in day_series)
+            dates_s = ", ".join(name for name, _, _, _, _ in day_series)
             day_title = (
-                f"Delivered power — {DAY_CURVE_YEAR} ({dates_s}), "
+                f"Delivered & mirror-intercepted power — {DAY_CURVE_YEAR} ({dates_s}), "
                 f"sunrise–sunset local, every {DAY_CURVE_STEP_MINUTES} min"
             )
         day_fig = build_day_delivered_power_figure(
