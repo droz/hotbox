@@ -55,13 +55,15 @@ class Controller:
         mirrors: list[Any],
         absorber: SolarAbsorber | None = None,
     ) -> list[tuple[float, float]]:
-        if len(mirrors) == 1 and isinstance(mirrors[0], AltAzFlatMirrorGrid):
-            g = mirrors[0]
+        if mirrors and all(isinstance(m, AltAzFlatMirrorGrid) for m in mirrors):
             if absorber is None:
                 raise TypeError("absorber= is required for AltAzFlatMirrorGrid mount solve.")
-            g.solve_mount_angles(when_utc, absorber_center, absorber)
-            # Report physical lattice-plane angles (not raw R_z @ R_x joint parameters).
-            return [(g.physical_mount_azimuth_deg(), g.physical_mount_tilt_deg())]
+            out: list[tuple[float, float]] = []
+            for g in mirrors:
+                g.solve_mount_angles(when_utc, absorber_center, absorber)
+                # Report physical lattice-plane angles (not raw R_z @ R_x joint parameters).
+                out.append((g.physical_mount_azimuth_deg(), g.physical_mount_tilt_deg()))
+            return out
 
         back_offsets = [m.back_to_rotation_offset_m for m in mirrors]
         az_el = self.compute_mirror_orientations(

@@ -10,6 +10,7 @@ from scipy.ndimage import gaussian_filter
 
 from src.absorber import SolarAbsorber
 from src.flat_mirror_grid import AltAzFlatMirrorGrid
+from src.geometry import normalize
 from src.mirror import CylindricalMirror
 from src.simulation import SimulationResult
 
@@ -19,14 +20,129 @@ class SceneVisualizer:
         self.absorber = absorber
         self.mirrors = mirrors
 
+    def _scene_xy_limits(self, incoming_ray_length_m: float) -> tuple[list[float], list[float]]:
+        """
+        Compute tight x/y limits around absorber + mirrors for the 3D scene.
+
+        Returns ``(x_range, y_range, ground_half_size)`` in meters.
+        """
+        pts_xy: list[np.ndarray] = [self.absorber.corners()[:, :2]]
+        for mirror in self.mirrors:
+            if isinstance(mirror, AltAzFlatMirrorGrid):
+                for surf in mirror.tile_surface_grids(nu=2, nv=2):
+                    pts_xy.append(surf.reshape(-1, 3)[:, :2])
+            elif isinstance(mirror, CylindricalMirror):
+                surf = mirror.surface_grid()
+                pts_xy.append(surf.reshape(-1, 3)[:, :2])
+            else:
+                c = np.asarray(mirror.center, dtype=float).reshape(3)
+                pts_xy.append(c.reshape(1, 3)[:, :2])
+
+        pts = np.vstack(pts_xy)
+        x_min = float(np.min(pts[:, 0]))
+        x_max = float(np.max(pts[:, 0]))
+        y_min = float(np.min(pts[:, 1]))
+        y_max = float(np.max(pts[:, 1]))
+        return [x_min, x_max], [y_min, y_max]
+
+    def _add_flat_grid_facet_center_rays(
+        self,
+        fig: go.Figure,
+        grid: AltAzFlatMirrorGrid,
+        sun_direction: np.ndarray,
+        *,
+        incoming_ray_length_m: float,
+        reflected_stub_m: float = 4.0,
+        incoming_legend: bool,
+        reflected_legend: bool,
+    ) -> tuple[bool, bool]:
+        """
+        One incoming + one reflected segment per facet, through the facet center (parallel sun).
+
+        Returns ``(drew_any_incoming, drew_any_reflected)`` for legend bookkeeping upstream.
+        """
+        d = normalize(np.asarray(sun_direction, dtype=float).reshape(1, 3))[0]
+        c_w, n_w, _, _ = grid._world_facets()
+        na = self.absorber.normal.reshape(3)
+        ca = self.absorber.center.reshape(3)
+
+        inc_leg = incoming_legend
+        ref_leg = reflected_legend
+        any_incoming = False
+        any_reflected = False
+
+        for f in range(c_w.shape[0]):
+            c = c_w[f]
+            n = n_w[f]
+            dn = float(np.dot(d, n))
+            if abs(dn) < 1e-10:
+                continue
+            if dn > 0.0:
+                continue
+
+            p_hit = c
+            p_in0 = c - incoming_ray_length_m * d
+            fig.add_trace(
+                go.Scatter3d(
+                    x=[p_in0[0], p_hit[0]],
+                    y=[p_in0[1], p_hit[1]],
+                    z=[p_in0[2], p_hit[2]],
+                    mode="lines",
+                    line={"color": "lightskyblue", "width": 1.5},
+                    opacity=0.45,
+                    name="Incoming (facet centers)",
+                    showlegend=inc_leg,
+                )
+            )
+            inc_leg = False
+            any_incoming = True
+
+            r = d - 2.0 * dn * n
+            rn = float(np.linalg.norm(r))
+            if rn < 1e-12:
+                continue
+            r /= rn
+            denom = float(np.dot(r, na))
+            if abs(denom) < 1e-12:
+                p_out = c + reflected_stub_m * r
+            else:
+                t = float(np.dot(ca - c, na) / denom)
+                if t > 1e-6:
+                    p_out = c + t * r
+                else:
+                    p_out = c + reflected_stub_m * r
+            fig.add_trace(
+                go.Scatter3d(
+                    x=[c[0], p_out[0]],
+                    y=[c[1], p_out[1]],
+                    z=[c[2], p_out[2]],
+                    mode="lines",
+                    line={"color": "tomato", "width": 1.5},
+                    opacity=0.5,
+                    name="Reflected (facet centers)",
+                    showlegend=ref_leg,
+                )
+            )
+            ref_leg = False
+            any_reflected = True
+
+        return any_incoming, any_reflected
+
     def build_scene_figure(
         self,
         result: SimulationResult,
         ray_stride: int = 120,
         incoming_ray_length_m: float = 2.0,
+        scene_when_local: datetime | None = None,
     ) -> go.Figure:
+        x_range, y_range = self._scene_xy_limits(incoming_ray_length_m)
+        scene_title = "Hot-box optical scene"
+        if scene_when_local is not None:
+            ts = scene_when_local.strftime("%Y-%m-%d %H:%M")
+            tz_s = scene_when_local.tzname() or ""
+            scene_title = f"Hot-box optical scene — {ts} {tz_s}".strip()
         fig = go.Figure()
-        self._add_ground(fig, size=8.0)
+        self._add_ground(fig, x_range, y_range)
         self._add_absorber(fig)
         for mirror in self.mirrors:
             self._add_mirror(fig, mirror)
@@ -34,6 +150,20 @@ class SceneVisualizer:
         incoming_added = False
         reflected_added = False
         for mirror_result in result.per_mirror:
+            mir = mirror_result.mirror
+            if isinstance(mir, AltAzFlatMirrorGrid):
+                inc_here, ref_here = self._add_flat_grid_facet_center_rays(
+                    fig,
+                    mir,
+                    result.sun_direction,
+                    incoming_ray_length_m=incoming_ray_length_m,
+                    incoming_legend=not incoming_added,
+                    reflected_legend=not reflected_added,
+                )
+                incoming_added = incoming_added or inc_here
+                reflected_added = reflected_added or ref_here
+                continue
+
             incoming = mirror_result.incoming
             mirror_hits = mirror_result.mirror_hit_points
             mask = mirror_result.mirror_hit_mask
@@ -81,7 +211,7 @@ class SceneVisualizer:
         # 3D equivalent of matplotlib axis("equal"): one meter along x, y, or z is the same
         # length on screen (orthogonal to camera view).
         fig.update_layout(
-            title="Hot-box optical scene",
+            title=scene_title,
             autosize=False,
             width=720,
             height=720,
@@ -98,11 +228,13 @@ class SceneVisualizer:
                     "showbackground": False,
                     "showgrid": False,
                     "zeroline": True,
+                    "range": x_range,
                 },
                 "yaxis": {
                     "showbackground": False,
                     "showgrid": False,
                     "zeroline": True,
+                    "range": y_range,
                 },
                 "zaxis": {
                     "visible": False,
@@ -145,9 +277,11 @@ class SceneVisualizer:
         x_edges = np.linspace(-w, w, bins + 1)
         y_edges = np.linspace(-h, h, bins + 1)
         power_grid, _, _ = np.histogram2d(uv[:, 0], uv[:, 1], bins=[x_edges, y_edges], weights=pw)
+        bin_area_m2 = ((2.0 * w) / bins) * ((2.0 * h) / bins)
+        irradiance_grid = power_grid / max(bin_area_m2, 1e-12)
         x_centers = 0.5 * (x_edges[:-1] + x_edges[1:])
         y_centers = 0.5 * (y_edges[:-1] + y_edges[1:])
-        return x_centers, y_centers, power_grid.T
+        return x_centers, y_centers, irradiance_grid.T
 
     @staticmethod
     def _smoothed_spot_power_grid(z: np.ndarray, sigma_px: float) -> np.ndarray:
@@ -179,8 +313,9 @@ class SceneVisualizer:
                     y=y_centers,
                     z=z,
                     colorscale="Inferno",
-                    colorbar={"title": "Bin power [W]"},
+                    colorbar={"title": "Irradiance [W/m²]"},
                     name="Spot heatmap",
+                    hovertemplate="u %{x:.4f} m<br>v %{y:.4f} m<br>%{z:.3g} W/m²<extra></extra>",
                 )
             )
 
@@ -196,8 +331,9 @@ class SceneVisualizer:
             )
         )
         lim = 0.55 * max(self.absorber.width_m, self.absorber.height_m)
+        total_w = float(result.total_delivered_power_w)
         fig.update_layout(
-            title="Spot pattern on absorber",
+            title=f"Spot pattern on absorber — total delivered {total_w:.1f} W",
             template="plotly_white",
             width=640,
             height=640,
@@ -236,7 +372,10 @@ class SceneVisualizer:
         if n == 0:
             return go.Figure()
         nrows = int(np.ceil(n / ncols))
-        titles = [lab for lab, _ in labeled_results] + [""] * (nrows * ncols - n)
+        titles = [
+            f"{lab}<br>{res.total_delivered_power_w:.1f} W"
+            for lab, res in labeled_results
+        ] + [""] * (nrows * ncols - n)
         fig = make_subplots(
             rows=nrows,
             cols=ncols,
@@ -300,11 +439,11 @@ class SceneVisualizer:
                     colorscale="Inferno",
                     showscale=show_cbar,
                     colorbar=(
-                        {"title": "Bin power [W]", "len": 0.92, "thickness": 14}
+                        {"title": "Irradiance [W/m²]", "len": 0.92, "thickness": 14}
                         if show_cbar
                         else None
                     ),
-                    hovertemplate="u %{x:.4f} m<br>v %{y:.4f} m<br>%{z:.3g} W<extra></extra>",
+                    hovertemplate="u %{x:.4f} m<br>v %{y:.4f} m<br>%{z:.3g} W/m²<extra></extra>",
                 ),
                 row=row,
                 col=col,
@@ -353,9 +492,9 @@ class SceneVisualizer:
         return fig
 
     @staticmethod
-    def _add_ground(fig: go.Figure, size: float) -> None:
-        x = np.array([-size, size])
-        y = np.array([-size, size])
+    def _add_ground(fig: go.Figure, x_range: list[float], y_range: list[float]) -> None:
+        x = np.array(x_range)
+        y = np.array(y_range)
         xx, yy = np.meshgrid(x, y)
         zz = np.zeros_like(xx)
         fig.add_trace(

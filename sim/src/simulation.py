@@ -116,6 +116,22 @@ class HotboxSimulation:
 
             absorber_hit_mask, absorber_hit_points = self.absorber.intersect(reflected)
             absorber_hit_mask &= reflected.powers_w > 0.0
+            # Outgoing-path occlusion: reflected rays that would hit the absorber can still be
+            # blocked by another mirror patch first.
+            t_abs = np.sum((absorber_hit_points - reflected.origins) * reflected.directions, axis=1)
+            blocked_out = np.zeros_like(absorber_hit_mask, dtype=bool)
+            for j, other in enumerate(self.mirrors):
+                if j == i:
+                    continue
+                t_j_out = other.incoming_first_patch_hit_t(reflected.origins, reflected.directions)
+                blocked_out |= (
+                    absorber_hit_mask
+                    & np.isfinite(t_j_out)
+                    & (t_j_out > 1e-8)
+                    & (t_j_out + _SHADOW_TOL_M < t_abs)
+                )
+            absorber_hit_mask &= ~blocked_out
+            reflected.powers_w[blocked_out] = 0.0
             per_mirror.append(
                 MirrorResult(
                     mirror=mirror,

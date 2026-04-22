@@ -19,7 +19,9 @@ INCH_M = 0.0254
 MIRROR_GRID_N = 5
 MIRROR_TILE_SIDE_IN = 10.0
 MIRROR_GRID_PITCH_IN = 10.0  # center-to-center spacing [in]
-MIRROR_GRID_DISTANCE_ALONG_NORMAL_M = 2.2  # mount pivot xy offset along absorber outward normal
+MIRROR_ASSEMBLY_COUNT = 2
+MIRROR_LOCATION_RING_RADIUS_M = 3.0  # mount pivot offset from absorber along absorber normal
+MIRROR_ASSEMBLY_SPACING_M = 1.5  # fixed center-to-center spacing between assemblies [m]
 MIRROR_GRID_MOUNT_HEIGHT_M = 0.85  # mount pivot z [m]; facet centers lie on the design tilted plane through the pivot
 
 # Solar absorber: vertical rectangle, center at (0, 0, center_height); normal in horizontal plane.
@@ -35,8 +37,8 @@ SIM_SAMPLES_V = 100
 # Higher ray count for the multi-panel absorber spot figure (main scene uses SIM_SAMPLES_*).
 SPOT_GRID_NUM_PANELS = 12
 SPOT_GRID_NCOLS = 4
-SPOT_GRID_SAMPLES_U = 500
-SPOT_GRID_SAMPLES_V = 500
+SPOT_GRID_SAMPLES_U = 400
+SPOT_GRID_SAMPLES_V = 400
 SPOT_GRID_BINS = 80
 
 # Site (must match SunModel in build_default_simulation)
@@ -191,27 +193,40 @@ def build_default_simulation() -> HotboxSimulation:
 
     a = np.asarray(absorber.center, dtype=float)
     fw = np.asarray(absorber.normal, dtype=float)
-    dist = MIRROR_GRID_DISTANCE_ALONG_NORMAL_M
-    mount_world = np.array(
-        [a[0] + dist * fw[0], a[1] + dist * fw[1], MIRROR_GRID_MOUNT_HEIGHT_M],
-        dtype=float,
-    )
+    fw_xy = np.array([fw[0], fw[1], 0.0], dtype=float)
+    fw_xy /= max(float(np.linalg.norm(fw_xy)), 1e-12)
+    # Horizontal tangent direction to lay out multiple assemblies on one side of the absorber.
+    tw_xy = np.array([-fw_xy[1], fw_xy[0], 0.0], dtype=float)
+    base_mount = a + MIRROR_LOCATION_RING_RADIUS_M * fw_xy
     tile_half_m = 0.5 * MIRROR_TILE_SIDE_IN * INCH_M
     pitch_m = MIRROR_GRID_PITCH_IN * INCH_M
-    grid = AltAzFlatMirrorGrid(
-        mount_world=mount_world,
-        design_when_utc=MIRROR_GRID_DESIGN_WHEN,
-        absorber_center=a.copy(),
-        grid_n=MIRROR_GRID_N,
-        pitch_m=pitch_m,
-        tile_half_m=tile_half_m,
-        sun=sun,
-    )
+    grids: list[AltAzFlatMirrorGrid] = []
+    for i in range(MIRROR_ASSEMBLY_COUNT):
+        offset = (i - 0.5 * (MIRROR_ASSEMBLY_COUNT - 1)) * MIRROR_ASSEMBLY_SPACING_M
+        mount_world = np.array(
+            [
+                base_mount[0] + offset * tw_xy[0],
+                base_mount[1] + offset * tw_xy[1],
+                MIRROR_GRID_MOUNT_HEIGHT_M,
+            ],
+            dtype=float,
+        )
+        grids.append(
+            AltAzFlatMirrorGrid(
+                mount_world=mount_world,
+                design_when_utc=MIRROR_GRID_DESIGN_WHEN,
+                absorber_center=a.copy(),
+                grid_n=MIRROR_GRID_N,
+                pitch_m=pitch_m,
+                tile_half_m=tile_half_m,
+                sun=sun,
+            )
+        )
 
     return HotboxSimulation(
         sun=sun,
         absorber=absorber,
-        mirrors=[grid],
+        mirrors=list(grids),
         samples_u=SIM_SAMPLES_U,
         samples_v=SIM_SAMPLES_V,
     )
@@ -252,7 +267,7 @@ def main() -> None:
     print(f"Total delivered power: {result.total_delivered_power_w:.1f} W")
 
     viz = SceneVisualizer(sim.absorber, sim.mirrors)
-    scene_fig = viz.build_scene_figure(result, ray_stride=100)
+    scene_fig = viz.build_scene_figure(result, ray_stride=100, scene_when_local=when)
 
     # Spot grid: same calendar day as SCENE_VIS_WHEN, sunrise→sunset (see SPOT_GRID_*).
     spot_times = spot_pattern_sample_times(
