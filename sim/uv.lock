@@ -167,6 +167,7 @@ dependencies = [
     { name = "numpy" },
     { name = "plotly" },
     { name = "pvlib" },
+    { name = "scipy" },
 ]
 
 [package.metadata]
@@ -174,6 +175,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.0.0" },
     { name = "plotly", specifier = ">=5.24.0" },
     { name = "pvlib", specifier = ">=0.11.0" },
+    { name = "scipy", specifier = ">=1.11.0" },
 ]
 
 [[package]]

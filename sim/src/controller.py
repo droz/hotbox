@@ -6,6 +6,7 @@ from typing import Any
 
 import numpy as np
 
+from src.absorber import SolarAbsorber
 from src.flat_mirror_grid import AltAzFlatMirrorGrid
 from src.geometry import normalize, unit_to_az_el
 from src.mirror import CylindricalMirror
@@ -52,10 +53,13 @@ class Controller:
         sun: SunModel,
         absorber_center: np.ndarray,
         mirrors: list[Any],
+        absorber: SolarAbsorber | None = None,
     ) -> list[tuple[float, float]]:
         if len(mirrors) == 1 and isinstance(mirrors[0], AltAzFlatMirrorGrid):
             g = mirrors[0]
-            g.solve_mount_angles(when_utc, absorber_center)
+            if absorber is None:
+                raise TypeError("absorber= is required for AltAzFlatMirrorGrid mount solve.")
+            g.solve_mount_angles(when_utc, absorber_center, absorber)
             # Report physical lattice-plane angles (not raw R_z @ R_x joint parameters).
             return [(g.physical_mount_azimuth_deg(), g.physical_mount_tilt_deg())]
 

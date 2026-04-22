@@ -167,6 +167,7 @@ def simulate_delivered_power_over_times(
             sun=sim.sun,
             absorber_center=sim.absorber.center,
             mirrors=sim.mirrors,
+            absorber=sim.absorber,
         )
         result = sim.run(when)
         delivered_w.append(result.total_delivered_power_w)
@@ -232,6 +233,7 @@ def main() -> None:
         sun=sim.sun,
         absorber_center=sim.absorber.center,
         mirrors=sim.mirrors,
+        absorber=sim.absorber,
     )
 
     result = sim.run(when)
@@ -273,6 +275,7 @@ def main() -> None:
             sun=sim.sun,
             absorber_center=sim.absorber.center,
             mirrors=sim.mirrors,
+            absorber=sim.absorber,
         )
         r_spot = sim.run(
             t_spot,

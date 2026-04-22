@@ -4,7 +4,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 import numpy as np
+from scipy.optimize import least_squares
 
+from src.absorber import SolarAbsorber
 from src.geometry import normalize, orthonormal_basis_from_direction
 from src.rays import RayBundle
 from src.sun import SunModel
@@ -35,7 +37,7 @@ def _normalize_mount_az_el(az_deg: float, el_deg: float) -> tuple[float, float]:
     """
     Mount convention (see ``grid_mount_rotation_matrix``):
 
-    - **Elevation** ``[0, 90]`` [deg]: right-handed rotation about **+world X** (east), then
+    - **Elevation** ``[-90, 90]`` [deg]: right-handed rotation about **+world X** (east), then
     - **Azimuth** ``[0, 360)``: rotation about **+world Z** (up): ``R = R_z(az) @ R_x(el)``.
 
     At ``(0, 0)`` the grid has the **design** attitude built in ``__post_init__`` (facet-center
@@ -45,7 +47,7 @@ def _normalize_mount_az_el(az_deg: float, el_deg: float) -> tuple[float, float]:
     el = float(el_deg)
     if not np.isfinite(el) or abs(el) > 720.0:
         el = 45.0
-    el = float(np.clip(el, 0.0, 90.0))
+    el = float(np.clip(el, -90.0, 90.0))
     return az, el
 
 
@@ -98,7 +100,7 @@ def coarse_mount_angles_align_lattice_normal(
     best_e = sqerr(best_az, best_el)
 
     for az in np.linspace(0.0, 359.0, 72, endpoint=True):  # ~5°
-        for el in np.linspace(0.0, 90.0, 19, endpoint=True):
+        for el in np.linspace(-90.0, 90.0, 37, endpoint=True):
             e = sqerr(float(az), float(el))
             if e < best_e:
                 best_e, best_az, best_el = e, float(az), float(el)
@@ -107,7 +109,7 @@ def coarse_mount_angles_align_lattice_normal(
         for daz in np.arange(-span_az, span_az + 0.001, step):
             for del_ in np.arange(-span_el, span_el + 0.001, step):
                 az = (best_az + float(daz)) % 360.0
-                el = float(np.clip(best_el + float(del_), 0.0, 90.0))
+                el = float(np.clip(best_el + float(del_), -90.0, 90.0))
                 e = sqerr(az, el)
                 if e < best_e:
                     best_e, best_az, best_el = e, az, el
@@ -261,13 +263,19 @@ class AltAzFlatMirrorGrid:
         hv = max(0.5 * (t1 - t0), 1e-6)
         return bundle_c.astype(float), float(hu), float(hv)
 
-    def _world_facets(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        r = grid_mount_rotation_matrix(self.azimuth_deg, self.elevation_deg)
+    def _world_facets_from_angles(
+        self, azimuth_deg: float, elevation_deg: float
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        az, el = _normalize_mount_az_el(float(azimuth_deg), float(elevation_deg))
+        r = grid_mount_rotation_matrix(az, el)
         c_w = self.mount_world + (r @ self._c_body.T).T
         n_w = (r @ self._n_body.T).T
         u_w = (r @ self._u_body.T).T
         v_w = (r @ self._v_body.T).T
         return c_w, n_w, u_w, v_w
+
+    def _world_facets(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        return self._world_facets_from_angles(self.azimuth_deg, self.elevation_deg)
 
     def physical_mount_tilt_deg(self) -> float:
         """
@@ -289,81 +297,101 @@ class AltAzFlatMirrorGrid:
         n_w = r @ self._lattice_plane_normal_body.reshape(3)
         return float(np.rad2deg(np.arctan2(float(n_w[0]), float(n_w[1]))) % 360.0)
 
+    def _facet_absorber_uv_residuals(
+        self,
+        azimuth_deg: float,
+        elevation_deg: float,
+        d_sun: np.ndarray,
+        absorber: SolarAbsorber,
+    ) -> np.ndarray:
+        """
+        For each facet, take the sun ray through the facet center, reflect off the facet plane,
+        intersect the **absorber plane**, and return ``(u, v)`` in the absorber frame
+        (``horizontal_axis``, ``vertical_axis`` through ``absorber.center``).
+
+        Stacked as length ``2 * n_facets``: ``[u0, v0, u1, v1, ...]`` — target ``0`` for all
+        (nonlinear least squares in ``solve_mount_angles``).
+        """
+        c_w, n_w, _, _ = self._world_facets_from_angles(azimuth_deg, elevation_deg)
+        d = np.asarray(d_sun, dtype=float).reshape(3)
+        d = d / max(float(np.linalg.norm(d)), 1e-15)
+        na = absorber.normal.reshape(3)
+        ca = absorber.center.reshape(3)
+        u_ax = absorber.horizontal_axis.reshape(3)
+        v_ax = absorber.vertical_axis.reshape(3)
+
+        dn = np.sum(n_w * d.reshape(1, 3), axis=1)
+        bad = np.abs(dn) < 1e-12
+        r_dir = d.reshape(1, 3) - 2.0 * dn[:, None] * n_w
+        denom = r_dir @ na
+        bad |= np.abs(denom) < 1e-12
+        t = np.sum((ca.reshape(1, 3) - c_w) * na.reshape(1, 3), axis=1) / np.where(
+            np.abs(denom) < 1e-15, np.nan, denom
+        )
+        bad |= ~np.isfinite(t) | (t <= 1e-9)
+
+        t_use = np.where(bad, 0.0, t)
+        pt = c_w + t_use[:, None] * r_dir
+        rel = pt - ca.reshape(1, 3)
+        u = np.sum(rel * u_ax.reshape(1, 3), axis=1)
+        v = np.sum(rel * v_ax.reshape(1, 3), axis=1)
+        pen = 1e3
+        u = np.where(bad, pen, u)
+        v = np.where(bad, pen, v)
+        return np.stack([u, v], axis=1).reshape(-1)
+
     def solve_mount_angles(
         self,
         when_utc: datetime,
         absorber_center: np.ndarray,
+        absorber: SolarAbsorber,
     ) -> tuple[float, float]:
         """
-        Find ``(azimuth_deg, elevation_deg)`` so the center facet reflects ``sun.ray_direction``
-        toward the absorber (Gauss–Newton on a vector cross-product residual).
+        Find ``(azimuth_deg, elevation_deg)`` by minimizing facet reflected-ray hits in the
+        absorber ``(u, v)`` frame (one sun ray per facet center, ``2 * n_facets`` residuals).
 
-        Each solve **reseeds** from ``coarse_mount_angles_align_lattice_normal``: the pivot-only
-        bisector normal ``unit_mirror_normal_at_point(d_sun, mount, absorber)`` is aligned to the
-        body lattice normal, so sequential day samples do not inherit a misleading warm start.
+        Uses ``scipy.optimize.least_squares`` with a seed from ``coarse_mount_angles_align_lattice_normal``.
+        ``absorber_center`` is kept for API compatibility; the target frame is ``absorber``.
         """
         d_sun = self.sun.ray_direction(when_utc)
-        a = np.asarray(absorber_center, dtype=float)
         m = np.asarray(self.mount_world, dtype=float).reshape(3)
-        # Pivot-only bisector normal (stable seed; avoids GN trapping from previous timestep).
+        a = np.asarray(absorber_center, dtype=float).reshape(3)
         n_flat = unit_mirror_normal_at_point(d_sun, m, a)
         az_seed, el_seed = coarse_mount_angles_align_lattice_normal(self._lattice_plane_normal_body, n_flat)
-        theta = np.array([az_seed, el_seed], dtype=float)
+        x0 = np.array([az_seed, el_seed], dtype=float)
 
-        def residual_vec(ang: np.ndarray) -> np.ndarray:
-            az, el = _normalize_mount_az_el(float(ang[0]), float(ang[1]))
-            r_m = grid_mount_rotation_matrix(az, el)
-            ic = self._center_facet
-            c = self.mount_world + r_m @ self._c_body[ic]
-            n = r_m @ self._n_body[ic]
-            dn = float(np.dot(d_sun, n))
-            if abs(dn) < 1e-10:
-                return np.array([1e3, 1e3, 1e3], dtype=float)
-            refl = d_sun - 2.0 * dn * n
-            tgt = normalize((a - c).reshape(1, 3))[0]
-            return np.cross(refl, tgt)
+        def fun(x: np.ndarray) -> np.ndarray:
+            az, el = _normalize_mount_az_el(float(x[0]), float(x[1]))
+            return self._facet_absorber_uv_residuals(az, el, d_sun, absorber)
 
-        def gn_solve(theta0: np.ndarray) -> tuple[np.ndarray, float]:
-            th = theta0.astype(float).copy()
-            th[0], th[1] = _normalize_mount_az_el(th[0], th[1])
-            for _ in range(18):
-                r0 = residual_vec(th)
-                r2 = float(np.dot(r0, r0))
-                if r2 < 1e-14:
-                    break
-                j = np.zeros((3, 2), dtype=float)
-                h = 0.05
-                for jcol in range(2):
-                    dt = np.zeros(2, dtype=float)
-                    dt[jcol] = h
-                    j[:, jcol] = (residual_vec(th + dt) - r0) / h
-                try:
-                    delta, _, rank, _ = np.linalg.lstsq(j, -r0, rcond=1e-9)
-                except np.linalg.LinAlgError:
-                    break
-                if rank < 2:
-                    delta = np.linalg.pinv(j) @ (-r0)
-                delta = np.clip(delta, -12.0, 12.0)
-                th = th + delta
-                th[0], th[1] = _normalize_mount_az_el(th[0], th[1])
-                if float(np.linalg.norm(delta)) < 1e-6:
-                    break
-            rfin = residual_vec(th)
-            return th, float(np.dot(rfin, rfin))
+        res = least_squares(
+            fun,
+            x0,
+            bounds=(np.array([0.0, -90.0]), np.array([360.0, 90.0])),
+            ftol=1e-12,
+            xtol=1e-10,
+            gtol=1e-10,
+            max_nfev=400,
+        )
+        best_x = res.x
+        best_cost = float(np.dot(res.fun, res.fun))
 
-        theta, r2 = gn_solve(theta)
-        #if r2 > 1e-8:
-        #    # Rare GN failure: retry from design mount (0, 0) and from a 180° azimuth flip.
-        #    candidates = (
-        #        np.array([0.0, 0.0], dtype=float),
-        #        np.array([(float(theta[0]) + 180.0) % 360.0, float(theta[1])], dtype=float),
-        #    )
-        #    for th0 in candidates:
-        #        t2, r22 = gn_solve(th0)
-        #        if r22 < r2:
-        #            theta, r2 = t2, r22
+        for alt in (np.array([0.0, 0.0], dtype=float), np.array([(float(x0[0]) + 180.0) % 360.0, float(x0[1])], dtype=float)):
+            alt_res = least_squares(
+                fun,
+                alt,
+                bounds=(np.array([0.0, -90.0]), np.array([360.0, 90.0])),
+                ftol=1e-12,
+                xtol=1e-10,
+                gtol=1e-10,
+                max_nfev=400,
+            )
+            c = float(np.dot(alt_res.fun, alt_res.fun))
+            if c < best_cost:
+                best_cost = c
+                best_x = alt_res.x
 
-        self.azimuth_deg, self.elevation_deg = _normalize_mount_az_el(float(theta[0]), float(theta[1]))
+        self.azimuth_deg, self.elevation_deg = _normalize_mount_az_el(float(best_x[0]), float(best_x[1]))
         return self.azimuth_deg, self.elevation_deg
 
     def tile_surface_grids(self, nu: int = 7, nv: int = 7) -> list[np.ndarray]:

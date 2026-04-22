@@ -6,6 +6,7 @@ from typing import Any
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from scipy.ndimage import gaussian_filter
 
 from src.absorber import SolarAbsorber
 from src.flat_mirror_grid import AltAzFlatMirrorGrid
@@ -148,12 +149,30 @@ class SceneVisualizer:
         y_centers = 0.5 * (y_edges[:-1] + y_edges[1:])
         return x_centers, y_centers, power_grid.T
 
-    def build_absorber_spot_figure(self, result: SimulationResult, bins: int = 60) -> go.Figure:
+    @staticmethod
+    def _smoothed_spot_power_grid(z: np.ndarray, sigma_px: float) -> np.ndarray:
+        """Apply light Gaussian smoothing while preserving total bin power."""
+        if sigma_px <= 0.0 or z.size == 0:
+            return z
+        total_before = float(np.sum(z))
+        z_smooth = gaussian_filter(z, sigma=float(sigma_px), mode="nearest")
+        total_after = float(np.sum(z_smooth))
+        if total_after > 1e-20:
+            z_smooth *= total_before / total_after
+        return z_smooth
+
+    def build_absorber_spot_figure(
+        self,
+        result: SimulationResult,
+        bins: int = 60,
+        smooth_sigma_px: float = 0.8,
+    ) -> go.Figure:
         fig = go.Figure()
         spot = self._spot_uv_and_powers(result)
         if spot is not None:
             uv, pw = spot
             x_centers, y_centers, z = self._spot_power_heatmap_z(uv, pw, bins)
+            z = self._smoothed_spot_power_grid(z, smooth_sigma_px)
             fig.add_trace(
                 go.Heatmap(
                     x=x_centers,
@@ -206,6 +225,7 @@ class SceneVisualizer:
         *,
         bins: int = 72,
         ncols: int = 4,
+        smooth_sigma_px: float = 1.2,
     ) -> go.Figure:
         """
         Small multiples of absorber spot heatmaps (local time in subplot titles).
@@ -242,6 +262,7 @@ class SceneVisualizer:
                 continue
             uv, pw = spot
             xc, yc, z = self._spot_power_heatmap_z(uv, pw, bins)
+            z = self._smoothed_spot_power_grid(z, smooth_sigma_px)
             zm = float(np.nanmax(z)) if z.size else 0.0
             zmax = max(zmax, zm)
             cell_z.append((row, col, xc, yc, z))
