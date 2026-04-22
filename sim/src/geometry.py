@@ -31,7 +31,12 @@ def unit_to_az_el(direction: np.ndarray) -> tuple[float, float]:
 
 
 def orthonormal_basis_from_direction(direction: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Return two unit vectors orthogonal to direction."""
+    """
+    Return two unit vectors ``(u, v)`` spanning the plane perpendicular to ``direction``.
+
+    Used by ``SunModel.sample_parallel_bundle`` and mirror-specific ray footprints; keep this
+    implementation stable so sampling planes match across modules.
+    """
     d = normalize(direction.reshape(1, 3))[0]
     ref = np.array([0.0, 0.0, 1.0])
     if abs(np.dot(d, ref)) > 0.9:

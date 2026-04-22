@@ -77,14 +77,27 @@ class HotboxSimulation:
         sun_dir = self.sun.ray_direction(when_utc)
         per_mirror: list[MirrorResult] = []
         for i, mirror in enumerate(self.mirrors):
-            incoming = self.sun.sample_parallel_bundle(
-                when_utc=when_utc,
-                center=mirror.center,
-                ray_direction=sun_dir,
-                cylinder_radius_m=mirror.sampling_radius_m,
-                samples_u=su,
-                samples_v=sv,
-            )
+            extents = getattr(mirror, "incoming_ray_bundle_extents", None)
+            if callable(extents):
+                bundle_c, hu, hv = extents(sun_dir)
+                incoming = self.sun.sample_parallel_bundle(
+                    when_utc=when_utc,
+                    center=bundle_c,
+                    ray_direction=sun_dir,
+                    samples_u=su,
+                    samples_v=sv,
+                    half_extent_u_m=hu,
+                    half_extent_v_m=hv,
+                )
+            else:
+                incoming = self.sun.sample_parallel_bundle(
+                    when_utc=when_utc,
+                    center=mirror.center,
+                    ray_direction=sun_dir,
+                    samples_u=su,
+                    samples_v=sv,
+                    cylinder_radius_m=mirror.sampling_radius_m,
+                )
             mirror_hit_mask, mirror_hit_points, reflected = mirror.intersect_and_reflect(incoming)
 
             # Mutual shadowing: another mirror patch closer to the sun along the same sun ray

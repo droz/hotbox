@@ -5,7 +5,7 @@ from datetime import datetime
 
 import numpy as np
 
-from src.geometry import normalize
+from src.geometry import normalize, orthonormal_basis_from_direction
 from src.rays import RayBundle
 from src.sun import SunModel
 
@@ -219,8 +219,47 @@ class AltAzFlatMirrorGrid:
 
     @property
     def sampling_radius_m(self) -> float:
+        """Conservative circle radius (legacy); ray sampling uses ``incoming_ray_bundle_extents``."""
         span = (self.grid_n - 1) * self.pitch_m + 2.0 * self.tile_half_m
         return 0.55 * span * np.sqrt(2.0)
+
+    def incoming_ray_bundle_extents(
+        self, world_ray_direction: np.ndarray
+    ) -> tuple[np.ndarray, float, float]:
+        """
+        Tight axis-aligned sampling footprint in the plane ⊥ ``world_ray_direction``.
+
+        Projects all tile corners onto the same ``(u, v)`` basis as ``SunModel.sample_parallel_bundle``
+        (via ``orthonormal_basis_from_direction``), takes their bounding rectangle, adds a small
+        margin, and returns ``(bundle_center_world, half_u_m, half_v_m)`` so parallel rays fill
+        that rectangle instead of a large circumscribing square from ``sampling_radius_m``.
+        """
+        d = normalize(np.asarray(world_ray_direction, dtype=float).reshape(1, 3))[0]
+        u_ax, v_ax = orthonormal_basis_from_direction(d)
+        c_w, _, u_w, v_w = self._world_facets()
+        h = self.tile_half_m
+        mount = self.center.reshape(3)
+
+        corners: list[np.ndarray] = []
+        for f in range(c_w.shape[0]):
+            for su in (-1.0, 1.0):
+                for sv in (-1.0, 1.0):
+                    corners.append(c_w[f] + su * h * u_w[f] + sv * h * v_w[f])
+        p = np.stack(corners, axis=0)
+        rel = p - mount.reshape(1, 3)
+        s = rel @ u_ax
+        t = rel @ v_ax
+        span_u = float(np.ptp(s))
+        span_t = float(np.ptp(t))
+        margin = max(1e-5, 0.02 * max(span_u, span_t, 1e-9))
+        s0, s1 = float(np.min(s)) - margin, float(np.max(s)) + margin
+        t0, t1 = float(np.min(t)) - margin, float(np.max(t)) + margin
+        mid_s = 0.5 * (s0 + s1)
+        mid_t = 0.5 * (t0 + t1)
+        bundle_c = mount + mid_s * u_ax + mid_t * v_ax
+        hu = max(0.5 * (s1 - s0), 1e-6)
+        hv = max(0.5 * (t1 - t0), 1e-6)
+        return bundle_c.astype(float), float(hu), float(hv)
 
     def _world_facets(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         r = grid_mount_rotation_matrix(self.azimuth_deg, self.elevation_deg)
@@ -313,16 +352,16 @@ class AltAzFlatMirrorGrid:
             return th, float(np.dot(rfin, rfin))
 
         theta, r2 = gn_solve(theta)
-        if r2 > 1e-8:
-            # Rare GN failure: retry from design mount (0, 0) and from a 180° azimuth flip.
-            candidates = (
-                np.array([0.0, 0.0], dtype=float),
-                np.array([(float(theta[0]) + 180.0) % 360.0, float(theta[1])], dtype=float),
-            )
-            for th0 in candidates:
-                t2, r22 = gn_solve(th0)
-                if r22 < r2:
-                    theta, r2 = t2, r22
+        #if r2 > 1e-8:
+        #    # Rare GN failure: retry from design mount (0, 0) and from a 180° azimuth flip.
+        #    candidates = (
+        #        np.array([0.0, 0.0], dtype=float),
+        #        np.array([(float(theta[0]) + 180.0) % 360.0, float(theta[1])], dtype=float),
+        #    )
+        #    for th0 in candidates:
+        #        t2, r22 = gn_solve(th0)
+        #        if r22 < r2:
+        #            theta, r2 = t2, r22
 
         self.azimuth_deg, self.elevation_deg = _normalize_mount_az_el(float(theta[0]), float(theta[1]))
         return self.azimuth_deg, self.elevation_deg

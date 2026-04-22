@@ -132,6 +132,17 @@ class TestAltAzFlatMirrorGridBodyLayout(unittest.TestCase):
         want = normalize((a - m).reshape(1, 3))[0]
         np.testing.assert_allclose(refl, want, atol=1e-9, rtol=0.0)
 
+    def test_incoming_ray_bundle_extents_are_finite(self) -> None:
+        g = self._make_grid()
+        g.azimuth_deg = 10.0
+        g.elevation_deg = 15.0
+        d = np.array([0.2, -0.3, -0.9], dtype=float)
+        d /= np.linalg.norm(d)
+        c, hu, hv = g.incoming_ray_bundle_extents(d)
+        self.assertEqual(c.shape, (3,))
+        self.assertGreater(hu, 0.0)
+        self.assertGreater(hv, 0.0)
+
     def test_world_positions_at_zero_mount_match_mount_plus_body(self) -> None:
         g = self._make_grid()
         g.azimuth_deg = 0.0
