@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
 
 import numpy as np
 import plotly.graph_objects as go
@@ -11,12 +10,11 @@ from scipy.ndimage import gaussian_filter
 from src.absorber import SolarAbsorber
 from src.flat_mirror_grid import AltAzFlatMirrorGrid
 from src.geometry import normalize
-from src.mirror import CylindricalMirror
 from src.simulation import SimulationResult
 
 
 class SceneVisualizer:
-    def __init__(self, absorber: SolarAbsorber, mirrors: list[Any]) -> None:
+    def __init__(self, absorber: SolarAbsorber, mirrors: list[AltAzFlatMirrorGrid]) -> None:
         self.absorber = absorber
         self.mirrors = mirrors
 
@@ -28,15 +26,8 @@ class SceneVisualizer:
         """
         pts_xy: list[np.ndarray] = [self.absorber.corners()[:, :2]]
         for mirror in self.mirrors:
-            if isinstance(mirror, AltAzFlatMirrorGrid):
-                for surf in mirror.tile_surface_grids(nu=2, nv=2):
-                    pts_xy.append(surf.reshape(-1, 3)[:, :2])
-            elif isinstance(mirror, CylindricalMirror):
-                surf = mirror.surface_grid()
+            for surf in mirror.tile_surface_grids(nu=2, nv=2):
                 pts_xy.append(surf.reshape(-1, 3)[:, :2])
-            else:
-                c = np.asarray(mirror.center, dtype=float).reshape(3)
-                pts_xy.append(c.reshape(1, 3)[:, :2])
 
         pts = np.vstack(pts_xy)
         x_min = float(np.min(pts[:, 0]))
@@ -131,7 +122,6 @@ class SceneVisualizer:
     def build_scene_figure(
         self,
         result: SimulationResult,
-        ray_stride: int = 120,
         incoming_ray_length_m: float = 2.0,
         scene_when_local: datetime | None = None,
     ) -> go.Figure:
@@ -151,61 +141,16 @@ class SceneVisualizer:
         reflected_added = False
         for mirror_result in result.per_mirror:
             mir = mirror_result.mirror
-            if isinstance(mir, AltAzFlatMirrorGrid):
-                inc_here, ref_here = self._add_flat_grid_facet_center_rays(
-                    fig,
-                    mir,
-                    result.sun_direction,
-                    incoming_ray_length_m=incoming_ray_length_m,
-                    incoming_legend=not incoming_added,
-                    reflected_legend=not reflected_added,
-                )
-                incoming_added = incoming_added or inc_here
-                reflected_added = reflected_added or ref_here
-                continue
-
-            incoming = mirror_result.incoming
-            mirror_hits = mirror_result.mirror_hit_points
-            mask = mirror_result.mirror_hit_mask
-            hit_indices = np.where(mask)[0][::ray_stride]
-            for i in hit_indices:
-                p1 = mirror_hits[i]
-                d = incoming.directions[i]
-                p0 = p1 - incoming_ray_length_m * d
-                fig.add_trace(
-                    go.Scatter3d(
-                        x=[p0[0], p1[0]],
-                        y=[p0[1], p1[1]],
-                        z=[p0[2], p1[2]],
-                        mode="lines",
-                        line={"color": "lightskyblue", "width": 2},
-                        opacity=0.5,
-                        name="Incoming rays",
-                        showlegend=not incoming_added,
-                    )
-                )
-                incoming_added = True
-
-            reflected = mirror_result.reflected
-            absorber_hits = mirror_result.absorber_hit_points
-            h2 = mirror_result.absorber_hit_mask
-            hit2_indices = np.where(h2)[0][::ray_stride]
-            for i in hit2_indices:
-                p0 = reflected.origins[i]
-                p1 = absorber_hits[i]
-                fig.add_trace(
-                    go.Scatter3d(
-                        x=[p0[0], p1[0]],
-                        y=[p0[1], p1[1]],
-                        z=[p0[2], p1[2]],
-                        mode="lines",
-                        line={"color": "tomato", "width": 2},
-                        opacity=0.55,
-                        name="Reflected rays",
-                        showlegend=not reflected_added,
-                    )
-                )
-                reflected_added = True
+            inc_here, ref_here = self._add_flat_grid_facet_center_rays(
+                fig,
+                mir,
+                result.sun_direction,
+                incoming_ray_length_m=incoming_ray_length_m,
+                incoming_legend=not incoming_added,
+                reflected_legend=not reflected_added,
+            )
+            incoming_added = incoming_added or inc_here
+            reflected_added = reflected_added or ref_here
 
         # Square figure + autosize=False avoids non-uniform div stretching in the page.
         # aspectmode="auto" (Plotly default): like "data" (proportional axis box) unless one
@@ -531,36 +476,22 @@ class SceneVisualizer:
         )
 
     @staticmethod
-    def _add_mirror(fig: go.Figure, mirror: Any) -> None:
-        if isinstance(mirror, AltAzFlatMirrorGrid):
-            first = True
-            for surf in mirror.tile_surface_grids():
-                fig.add_trace(
-                    go.Surface(
-                        x=surf[..., 0],
-                        y=surf[..., 1],
-                        z=surf[..., 2],
-                        opacity=0.45,
-                        showscale=False,
-                        colorscale=[[0.0, "#4c78a8"], [1.0, "#4c78a8"]],
-                        name="Mirror tiles",
-                        showlegend=first,
-                    )
+    def _add_mirror(fig: go.Figure, mirror: AltAzFlatMirrorGrid) -> None:
+        first = True
+        for surf in mirror.tile_surface_grids():
+            fig.add_trace(
+                go.Surface(
+                    x=surf[..., 0],
+                    y=surf[..., 1],
+                    z=surf[..., 2],
+                    opacity=0.45,
+                    showscale=False,
+                    colorscale=[[0.0, "#4c78a8"], [1.0, "#4c78a8"]],
+                    name="Mirror tiles",
+                    showlegend=first,
                 )
-                first = False
-            return
-        surf = mirror.surface_grid()
-        fig.add_trace(
-            go.Surface(
-                x=surf[..., 0],
-                y=surf[..., 1],
-                z=surf[..., 2],
-                opacity=0.45,
-                showscale=False,
-                colorscale=[[0.0, "#4c78a8"], [1.0, "#4c78a8"]],
-                name="Mirror",
             )
-        )
+            first = False
 
 
 def _local_hours_since_midnight(dt: datetime) -> float:
@@ -589,9 +520,8 @@ def build_day_delivered_power_figure(
     ``intercepted_w`` is total power striking all mirrors (sum of per-mirror intercepted).
     ``orientations``
     has the same length as ``times``; each element is ``[(az_deg, second_deg), ...]`` per mirror.
-    For ``AltAzFlatMirrorGrid``, ``second_deg`` is lattice-plane tilt (0° vertical, 90° horizontal
-    toward zenith), not the raw ``(azimuth_deg, elevation_deg)`` joint tuple on the grid. For cylindrical mirrors, ``second_deg`` is
-    elevation of the mirror normal [deg].
+    For each mirror, ``second_deg`` is lattice-plane tilt (0° vertical, 90° horizontal toward zenith),
+    not the raw ``(azimuth_deg, elevation_deg)`` joint tuple on the grid.
 
     If ``same_day_time_scale`` is True, x is hours since local midnight for overlaying different
     calendar days; hover still shows the actual timestamp.

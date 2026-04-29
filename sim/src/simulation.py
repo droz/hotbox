@@ -7,11 +7,8 @@ import numpy as np
 
 from src.absorber import SolarAbsorber
 from src.flat_mirror_grid import AltAzFlatMirrorGrid
-from src.mirror import CylindricalMirror
 from src.rays import RayBundle
 from src.sun import SunModel
-
-MirrorLike = CylindricalMirror | AltAzFlatMirrorGrid
 
 # Ignore shadow ordering when hits are within this (m) along the ray (numerical tie-break).
 _SHADOW_TOL_M = 1e-5
@@ -19,7 +16,7 @@ _SHADOW_TOL_M = 1e-5
 
 @dataclass(slots=True)
 class MirrorResult:
-    mirror: MirrorLike
+    mirror: AltAzFlatMirrorGrid
     incoming: RayBundle
     mirror_hit_mask: np.ndarray
     mirror_hit_points: np.ndarray
@@ -55,7 +52,7 @@ class HotboxSimulation:
         self,
         sun: SunModel,
         absorber: SolarAbsorber,
-        mirrors: list[MirrorLike],
+        mirrors: list[AltAzFlatMirrorGrid],
         samples_u: int = 60,
         samples_v: int = 60,
     ) -> None:
@@ -77,27 +74,16 @@ class HotboxSimulation:
         sun_dir = self.sun.ray_direction(when_utc)
         per_mirror: list[MirrorResult] = []
         for i, mirror in enumerate(self.mirrors):
-            extents = getattr(mirror, "incoming_ray_bundle_extents", None)
-            if callable(extents):
-                bundle_c, hu, hv = extents(sun_dir)
-                incoming = self.sun.sample_parallel_bundle(
-                    when_utc=when_utc,
-                    center=bundle_c,
-                    ray_direction=sun_dir,
-                    samples_u=su,
-                    samples_v=sv,
-                    half_extent_u_m=hu,
-                    half_extent_v_m=hv,
-                )
-            else:
-                incoming = self.sun.sample_parallel_bundle(
-                    when_utc=when_utc,
-                    center=mirror.center,
-                    ray_direction=sun_dir,
-                    samples_u=su,
-                    samples_v=sv,
-                    cylinder_radius_m=mirror.sampling_radius_m,
-                )
+            bundle_c, hu, hv = mirror.incoming_ray_bundle_extents(sun_dir)
+            incoming = self.sun.sample_parallel_bundle(
+                when_utc=when_utc,
+                center=bundle_c,
+                ray_direction=sun_dir,
+                samples_u=su,
+                samples_v=sv,
+                half_extent_u_m=hu,
+                half_extent_v_m=hv,
+            )
             mirror_hit_mask, mirror_hit_points, reflected = mirror.intersect_and_reflect(incoming)
 
             # Mutual shadowing: another mirror patch closer to the sun along the same sun ray

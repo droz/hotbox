@@ -8,7 +8,7 @@ import pandas as pd
 from pvlib.location import Location
 
 from src.absorber import SolarAbsorber
-from src.controller import Controller
+from src.controller import mirror_orientations_for_time
 from src.flat_mirror_grid import AltAzFlatMirrorGrid
 from src.simulation import HotboxSimulation, SimulationResult
 from src.sun import SunModel
@@ -57,7 +57,7 @@ DAY_CURVE_STEP_MINUTES = 20
 MIRROR_GRID_DESIGN_WHEN = datetime(2026, 8, 31, 14, 0, 0, tzinfo=DAY_CURVE_TZ)
 
 # Local wall time for the 3D scene / absorber spot figures and printed snapshot
-# (controller aim, mirror angles, ray bundle). Independent of DAY_CURVE_* curve list.
+# (mount solve, mirror angles, ray bundle). Independent of DAY_CURVE_* curve list.
 SCENE_VIS_WHEN = datetime(2026, 9, 7, 11, 0, 0, tzinfo=DAY_CURVE_TZ)
 
 
@@ -156,7 +156,6 @@ def spot_pattern_sample_times(
 
 def simulate_delivered_power_over_times(
     sim: HotboxSimulation,
-    controller: Controller,
     times: list[datetime],
 ) -> tuple[list[datetime], list[float], list[float], list[list[tuple[float, float]]]]:
     """For each time: total delivered power, total power hitting mirrors, orientations [deg]."""
@@ -164,7 +163,7 @@ def simulate_delivered_power_over_times(
     intercepted_w: list[float] = []
     orientations_per_time: list[list[tuple[float, float]]] = []
     for when in times:
-        az_el = controller.apply_for_time(
+        az_el = mirror_orientations_for_time(
             when_utc=when,
             sun=sim.sun,
             absorber_center=sim.absorber.center,
@@ -237,13 +236,7 @@ def main() -> None:
     day_specs = day_curve_month_day_pairs(DAY_CURVE_MONTH, DAY_CURVE_DAY)
     when = SCENE_VIS_WHEN
 
-    mirror_rel_positions = [m.rotation_point - sim.absorber.center for m in sim.mirrors]
-    absorber_orientation_from_north_deg = 90.0 - sim.absorber.normal_angle_from_x_deg
-    controller = Controller(
-        mirror_positions_relative_to_absorber=mirror_rel_positions,
-        absorber_orientation_relative_to_north_deg=absorber_orientation_from_north_deg,
-    )
-    orientations = controller.apply_for_time(
+    orientations = mirror_orientations_for_time(
         when_utc=when,
         sun=sim.sun,
         absorber_center=sim.absorber.center,
@@ -256,7 +249,7 @@ def main() -> None:
     print(f"Sun ray direction (world xyz): {result.sun_direction}")
     for idx, (az, tilt) in enumerate(orientations):
         print(
-            f"Controller mirror {idx}: azimuth={az:.2f} deg, "
+            f"Mirror {idx} mount: azimuth={az:.2f} deg, "
             f"lattice tilt={tilt:.2f} deg (0=vertical plane, 90=horizontal toward zenith)"
         )
     for idx, mr in enumerate(result.per_mirror):
@@ -267,7 +260,7 @@ def main() -> None:
     print(f"Total delivered power: {result.total_delivered_power_w:.1f} W")
 
     viz = SceneVisualizer(sim.absorber, sim.mirrors)
-    scene_fig = viz.build_scene_figure(result, ray_stride=100, scene_when_local=when)
+    scene_fig = viz.build_scene_figure(result, scene_when_local=when)
 
     # Spot grid: same calendar day as SCENE_VIS_WHEN, sunrise→sunset (see SPOT_GRID_*).
     spot_times = spot_pattern_sample_times(
@@ -285,7 +278,7 @@ def main() -> None:
         spot_times = [when]
     spot_labeled: list[tuple[str, SimulationResult]] = []
     for t_spot in spot_times:
-        controller.apply_for_time(
+        mirror_orientations_for_time(
             when_utc=t_spot,
             sun=sim.sun,
             absorber_center=sim.absorber.center,
@@ -334,7 +327,7 @@ def main() -> None:
             print(f"Day curve {label}: no sunrise/sunset (polar night or missing rise/set).")
         if day_times:
             _, day_delivered, day_intercepted, day_orients = simulate_delivered_power_over_times(
-                sim, controller, day_times
+                sim, day_times
             )
             day_series.append((label, day_times, day_delivered, day_intercepted, day_orients))
             if len(day_specs) == 1:

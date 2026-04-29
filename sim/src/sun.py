@@ -59,30 +59,20 @@ class SunModel:
         samples_u: int,
         samples_v: int,
         *,
-        cylinder_radius_m: float | None = None,
-        half_extent_u_m: float | None = None,
-        half_extent_v_m: float | None = None,
+        half_extent_u_m: float,
+        half_extent_v_m: float,
         upstream_distance_m: float = 50.0,
     ) -> RayBundle:
         """
         Parallel rays on a regular grid in the plane through ``center`` orthogonal to
         ``ray_direction``.
 
-        Provide either ``cylinder_radius_m`` (square of side ``2 * radius``) or both
-        ``half_extent_u_m`` and ``half_extent_v_m`` (half-widths along the ``(u, v)`` basis from
-        ``orthonormal_basis_from_direction``). The latter avoids sampling empty corners when the
-        mirror footprint is elongated in projection.
+        ``half_extent_u_m`` and ``half_extent_v_m`` are half-widths along the ``(u, v)`` basis from
+        ``orthonormal_basis_from_direction``, giving an axis-aligned footprint in that plane.
         """
         u_axis, v_axis = orthonormal_basis_from_direction(ray_direction)
-        if half_extent_u_m is not None and half_extent_v_m is not None:
-            hu = float(half_extent_u_m)
-            hv = float(half_extent_v_m)
-        elif cylinder_radius_m is not None:
-            hu = hv = float(cylinder_radius_m)
-        else:
-            raise TypeError(
-                "Provide cylinder_radius_m or both half_extent_u_m and half_extent_v_m"
-            )
+        hu = float(half_extent_u_m)
+        hv = float(half_extent_v_m)
         hu = max(hu, 1e-6)
         hv = max(hv, 1e-6)
 

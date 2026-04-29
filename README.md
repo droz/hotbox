@@ -8,7 +8,7 @@
 
 1. **Oven** — Standard electric/gas oven body; the back is rebuilt as an absorber (high absorptivity, low emissivity where it helps) sealed behind insulated double glazing so the cooking cavity stays familiar while the rear collects flux.
 
-2. **Mirrors** — 24" x 48" Acrylic sheets are formed into **cylindrical** (single-axis curvature) reflectors. Each mirror focuses in **one direction** only; combined placement and aiming bring a stripe or patch of concentrated light onto the absorber.
+2. **Mirrors** — Rigid **flat** mirror tiles on alt–az mounts; the simulation uses a regular grid of facets. Placement and per-time attitude bring concentrated light onto the absorber.
 
 3. **Tracking** — **Altitude–azimuth** mounts point each mirror at the sun. Firmware (or a control computer) computes sun position from **GPS latitude, longitude, altitude**, and **UTC time**.
 

@@ -219,12 +219,6 @@ class AltAzFlatMirrorGrid:
     def back_to_rotation_offset_m(self) -> float:
         return 0.0
 
-    @property
-    def sampling_radius_m(self) -> float:
-        """Conservative circle radius (legacy); ray sampling uses ``incoming_ray_bundle_extents``."""
-        span = (self.grid_n - 1) * self.pitch_m + 2.0 * self.tile_half_m
-        return 0.55 * span * np.sqrt(2.0)
-
     def incoming_ray_bundle_extents(
         self, world_ray_direction: np.ndarray
     ) -> tuple[np.ndarray, float, float]:
@@ -234,7 +228,7 @@ class AltAzFlatMirrorGrid:
         Projects all tile corners onto the same ``(u, v)`` basis as ``SunModel.sample_parallel_bundle``
         (via ``orthonormal_basis_from_direction``), takes their bounding rectangle, adds a small
         margin, and returns ``(bundle_center_world, half_u_m, half_v_m)`` so parallel rays fill
-        that rectangle instead of a large circumscribing square from ``sampling_radius_m``.
+        that rectangle instead of a loose circumscribing square.
         """
         d = normalize(np.asarray(world_ray_direction, dtype=float).reshape(1, 3))[0]
         u_ax, v_ax = orthonormal_basis_from_direction(d)
