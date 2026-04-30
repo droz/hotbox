@@ -130,15 +130,16 @@ def _tangent_basis(n: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 @dataclass(slots=True)
 class AltAzFlatMirrorGrid:
     """
-    Rigid N×N grid of square flat mirrors on one alt-az mount.
+    Rigid ``grid_nx``×``grid_ny`` grid of square flat mirrors on one alt-az mount.
 
     **Design (``design_when_utc``, mount joints 0)** — vector construction, no angles:
 
     - **Lattice plane** (facet centers): through ``mount_world`` with unit normal ``n_π``
       such that a **single** flat mirror with normal ``n_π`` would reflect the sun ray toward
       ``absorber_center`` (same rule as ``unit_mirror_normal_at_point`` at the pivot).
-    - Centers form a ``pitch_m`` square grid in that plane (two orthonormal in-plane axes from
-      ``n_π`` via cross products).
+    - Centers form a ``pitch_m`` rectangular grid in that plane (two orthonormal in-plane axes from
+      ``n_π`` via cross products). Both ``grid_nx`` and ``grid_ny`` must be **odd** so the pivot
+      sits at the geometric center tile.
     - Each tile still has its own unit normal (small cant) so the ray through **that** center
       reflects to the absorber at the design instant.
 
@@ -150,7 +151,8 @@ class AltAzFlatMirrorGrid:
     mount_world: np.ndarray  # pivot M (world); body vectors below are design-time ENU offsets
     design_when_utc: datetime
     absorber_center: np.ndarray
-    grid_n: int
+    grid_nx: int
+    grid_ny: int
     pitch_m: float
     tile_half_m: float
     sun: SunModel
@@ -166,11 +168,15 @@ class AltAzFlatMirrorGrid:
     _lattice_plane_normal_body: np.ndarray = field(init=False)  # unit; lattice π at design
 
     def __post_init__(self) -> None:
-        n = self.grid_n
-        if n < 1 or n % 2 == 0:
-            raise ValueError("grid_n must be a positive odd integer (e.g. 5).")
-        half = n // 2
-        self._center_facet = half * n + half
+        nx = int(self.grid_nx)
+        ny = int(self.grid_ny)
+        if nx < 1 or ny < 1:
+            raise ValueError("grid_nx and grid_ny must be positive.")
+        if nx % 2 == 0 or ny % 2 == 0:
+            raise ValueError("grid_nx and grid_ny must be odd so the mount pivot aligns with a facet center.")
+        half_x = nx // 2
+        half_y = ny // 2
+        self._center_facet = half_y * nx + half_x
 
         d_sun = self.sun.ray_direction(self.design_when_utc)
         m = np.asarray(self.mount_world, dtype=float).reshape(3)
@@ -186,10 +192,10 @@ class AltAzFlatMirrorGrid:
         us: list[np.ndarray] = []
         vs: list[np.ndarray] = []
 
-        for iy in range(n):
-            for ix in range(n):
-                du = (ix - half) * self.pitch_m
-                dv = (iy - half) * self.pitch_m
+        for iy in range(ny):
+            for ix in range(nx):
+                du = (ix - half_x) * self.pitch_m
+                dv = (iy - half_y) * self.pitch_m
                 c_body = du * e_u + dv * e_v
                 p_w = m + c_body
 

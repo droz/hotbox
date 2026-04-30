@@ -16,7 +16,8 @@ from src.visualizer import SceneVisualizer, build_day_delivered_power_figure
 
 # --- Rigid flat mirror grid (one alt-az mount) ---
 INCH_M = 0.0254
-MIRROR_GRID_N = 5
+MIRROR_GRID_NX = 3
+MIRROR_GRID_NY = 5
 MIRROR_TILE_SIDE_IN = 10.0
 MIRROR_GRID_PITCH_IN = 10.0  # center-to-center spacing [in]
 MIRROR_ASSEMBLY_COUNT = 2
@@ -58,7 +59,7 @@ MIRROR_GRID_DESIGN_WHEN = datetime(2026, 8, 31, 14, 0, 0, tzinfo=DAY_CURVE_TZ)
 
 # Local wall time for the 3D scene / absorber spot figures and printed snapshot
 # (mount solve, mirror angles, ray bundle). Independent of DAY_CURVE_* curve list.
-SCENE_VIS_WHEN = datetime(2026, 9, 7, 11, 0, 0, tzinfo=DAY_CURVE_TZ)
+SCENE_VIS_WHEN = datetime(2026, 9, 7, 9, 0, 0, tzinfo=DAY_CURVE_TZ)
 
 
 def local_times_sunrise_to_sunset(
@@ -215,7 +216,8 @@ def build_default_simulation() -> HotboxSimulation:
                 mount_world=mount_world,
                 design_when_utc=MIRROR_GRID_DESIGN_WHEN,
                 absorber_center=a.copy(),
-                grid_n=MIRROR_GRID_N,
+                grid_nx=MIRROR_GRID_NX,
+                grid_ny=MIRROR_GRID_NY,
                 pitch_m=pitch_m,
                 tile_half_m=tile_half_m,
                 sun=sun,

@@ -100,7 +100,8 @@ class TestAltAzFlatMirrorGridBodyLayout(unittest.TestCase):
             mount_world=np.array([2.0, -1.5, 0.9], dtype=float),
             design_when_utc=when,
             absorber_center=np.array([0.0, 0.0, 1.0], dtype=float),
-            grid_n=5,
+            grid_nx=5,
+            grid_ny=5,
             pitch_m=0.2,
             tile_half_m=0.08,
             sun=sun,
@@ -167,6 +168,23 @@ class TestAltAzFlatMirrorGridBodyLayout(unittest.TestCase):
             refl = d_sun - 2.0 * dn * n
             want = normalize((a - c).reshape(1, 3))[0]
             np.testing.assert_allclose(refl, want, atol=1e-6, rtol=0.0)
+
+    def test_rectangular_grid_counts_and_center_facet(self) -> None:
+        """Non-square nx×ny (e.g. 5×3): facet count and pivot-centered tile."""
+        sun = SunModel(latitude_deg=40.7864, longitude_deg=-119.2065, altitude_m=1190.0)
+        when = datetime(2026, 6, 21, 19, 0, 0, tzinfo=timezone.utc)
+        g = AltAzFlatMirrorGrid(
+            mount_world=np.array([2.0, -1.5, 0.9], dtype=float),
+            design_when_utc=when,
+            absorber_center=np.array([0.0, 0.0, 1.0], dtype=float),
+            grid_nx=5,
+            grid_ny=3,
+            pitch_m=0.2,
+            tile_half_m=0.08,
+            sun=sun,
+        )
+        self.assertEqual(g._c_body.shape[0], 15)
+        np.testing.assert_allclose(g._c_body[g._center_facet], np.zeros(3), atol=1e-12)
 
 
 if __name__ == "__main__":
