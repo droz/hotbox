@@ -12,6 +12,16 @@ from src.flat_mirror_grid import AltAzFlatMirrorGrid
 from src.geometry import normalize
 from src.simulation import SimulationResult
 
+# Distinct colors per mirror assembly (Plotly merges legend entries when trace names repeat).
+_SCENE_MIRROR_ASSEMBLY_COLORS = (
+    "#4c78a8",
+    "#f58518",
+    "#54a24b",
+    "#e45756",
+    "#b279a2",
+    "#9467bd",
+)
+
 
 class SceneVisualizer:
     def __init__(self, absorber: SolarAbsorber, mirrors: list[AltAzFlatMirrorGrid]) -> None:
@@ -134,8 +144,8 @@ class SceneVisualizer:
         fig = go.Figure()
         self._add_ground(fig, x_range, y_range)
         self._add_absorber(fig)
-        for mirror in self.mirrors:
-            self._add_mirror(fig, mirror)
+        for i, mirror in enumerate(self.mirrors):
+            self._add_mirror(fig, mirror, assembly_index=i)
 
         incoming_added = False
         reflected_added = False
@@ -476,7 +486,10 @@ class SceneVisualizer:
         )
 
     @staticmethod
-    def _add_mirror(fig: go.Figure, mirror: AltAzFlatMirrorGrid) -> None:
+    def _add_mirror(fig: go.Figure, mirror: AltAzFlatMirrorGrid, assembly_index: int) -> None:
+        c = _SCENE_MIRROR_ASSEMBLY_COLORS[assembly_index % len(_SCENE_MIRROR_ASSEMBLY_COLORS)]
+        colorscale = [[0.0, c], [1.0, c]]
+        trace_name = f"Mirror assembly {assembly_index}"
         first = True
         for surf in mirror.tile_surface_grids():
             fig.add_trace(
@@ -486,8 +499,8 @@ class SceneVisualizer:
                     z=surf[..., 2],
                     opacity=0.45,
                     showscale=False,
-                    colorscale=[[0.0, "#4c78a8"], [1.0, "#4c78a8"]],
-                    name="Mirror tiles",
+                    colorscale=colorscale,
+                    name=trace_name,
                     showlegend=first,
                 )
             )

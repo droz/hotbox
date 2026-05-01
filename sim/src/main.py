@@ -15,14 +15,13 @@ from src.sun import SunModel
 from src.visualizer import SceneVisualizer, build_day_delivered_power_figure
 
 # --- Rigid flat mirror grid (one alt-az mount) ---
-INCH_M = 0.0254
 MIRROR_GRID_NX = 3
 MIRROR_GRID_NY = 5
-MIRROR_TILE_SIDE_IN = 10.0
-MIRROR_GRID_PITCH_IN = 10.0  # center-to-center spacing [in]
-MIRROR_ASSEMBLY_COUNT = 2
+MIRROR_TILE_SIDE_M = 0.254
+MIRROR_GRID_PITCH_M = 0.254 + 0.01  # center-to-center spacing [m]
+MIRROR_ASSEMBLY_COUNT = 3
 MIRROR_LOCATION_RING_RADIUS_M = 3.0  # mount pivot offset from absorber along absorber normal
-MIRROR_ASSEMBLY_SPACING_M = 1.5  # fixed center-to-center spacing between assemblies [m]
+MIRROR_ASSEMBLY_SPACING_M = 1.0  # fixed center-to-center spacing between assemblies [m]
 MIRROR_GRID_MOUNT_HEIGHT_M = 0.85  # mount pivot z [m]; facet centers lie on the design tilted plane through the pivot
 
 # Solar absorber: vertical rectangle, center at (0, 0, center_height); normal in horizontal plane.
@@ -30,7 +29,7 @@ MIRROR_GRID_MOUNT_HEIGHT_M = 0.85  # mount pivot z [m]; facet centers lie on the
 ABSORBER_WIDTH_M = 0.40
 ABSORBER_HEIGHT_M = 0.40
 ABSORBER_CENTER_HEIGHT_M = 1.0
-ABSORBER_NORMAL_ANGLE_FROM_X_DEG = 60.0
+ABSORBER_NORMAL_ANGLE_FROM_X_DEG = 90.0
 
 SIM_SAMPLES_U = 100
 SIM_SAMPLES_V = 100
@@ -198,8 +197,8 @@ def build_default_simulation() -> HotboxSimulation:
     # Horizontal tangent direction to lay out multiple assemblies on one side of the absorber.
     tw_xy = np.array([-fw_xy[1], fw_xy[0], 0.0], dtype=float)
     base_mount = a + MIRROR_LOCATION_RING_RADIUS_M * fw_xy
-    tile_half_m = 0.5 * MIRROR_TILE_SIDE_IN * INCH_M
-    pitch_m = MIRROR_GRID_PITCH_IN * INCH_M
+    tile_half_m = 0.5 * MIRROR_TILE_SIDE_M
+    pitch_m = MIRROR_GRID_PITCH_M
     grids: list[AltAzFlatMirrorGrid] = []
     for i in range(MIRROR_ASSEMBLY_COUNT):
         offset = (i - 0.5 * (MIRROR_ASSEMBLY_COUNT - 1)) * MIRROR_ASSEMBLY_SPACING_M
@@ -235,6 +234,7 @@ def build_default_simulation() -> HotboxSimulation:
 
 def main() -> None:
     sim = build_default_simulation()
+    print(f"Mirror assemblies: {len(sim.mirrors)}")
     day_specs = day_curve_month_day_pairs(DAY_CURVE_MONTH, DAY_CURVE_DAY)
     when = SCENE_VIS_WHEN
 
