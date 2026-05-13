@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import time
 
 import numpy as np
 
@@ -56,6 +57,11 @@ class HotboxSimulation:
         samples_u: int = 60,
         samples_v: int = 60,
     ) -> None:
+        """
+        ``samples_u`` / ``samples_v`` are the number of **cells** along each axis on every square
+        facet (one ray per cell at the cell center); see
+        ``AltAzFlatMirrorGrid.incoming_ray_bundle_facet_grid``.
+        """
         self.sun = sun
         self.absorber = absorber
         self.mirrors = mirrors
@@ -68,23 +74,29 @@ class HotboxSimulation:
         *,
         samples_u: int | None = None,
         samples_v: int | None = None,
+        verbose: bool = False,
     ) -> SimulationResult:
         su = self.samples_u if samples_u is None else samples_u
         sv = self.samples_v if samples_v is None else samples_v
+        t_run = time.perf_counter()
         sun_dir = self.sun.ray_direction(when_utc)
         per_mirror: list[MirrorResult] = []
+        if verbose:
+            print(
+                f"[sim] run start — mirrors={len(self.mirrors)} samples_u/v={su}×{sv} "
+                f"utc={when_utc.isoformat()}",
+                flush=True,
+            )
         for i, mirror in enumerate(self.mirrors):
-            bundle_c, hu, hv = mirror.incoming_ray_bundle_extents(sun_dir)
-            incoming = self.sun.sample_parallel_bundle(
+            t0 = time.perf_counter()
+            incoming = mirror.incoming_ray_bundle_facet_grid(
                 when_utc=when_utc,
-                center=bundle_c,
-                ray_direction=sun_dir,
                 samples_u=su,
                 samples_v=sv,
-                half_extent_u_m=hu,
-                half_extent_v_m=hv,
             )
+            t1 = time.perf_counter()
             mirror_hit_mask, mirror_hit_points, reflected = mirror.intersect_and_reflect(incoming)
+            t2 = time.perf_counter()
 
             # Mutual shadowing: another mirror patch closer to the sun along the same sun ray
             # blocks this hit (incoming path intersects the other mirror first).
@@ -99,6 +111,7 @@ class HotboxSimulation:
                 shadowed |= mirror_hit_mask & np.isfinite(t_j) & (t_j + _SHADOW_TOL_M < t_i)
             mirror_hit_mask = mirror_hit_mask & ~shadowed
             reflected.powers_w[shadowed] = 0.0
+            t3 = time.perf_counter()
 
             absorber_hit_mask, absorber_hit_points = self.absorber.intersect(reflected)
             absorber_hit_mask &= reflected.powers_w > 0.0
@@ -118,6 +131,7 @@ class HotboxSimulation:
                 )
             absorber_hit_mask &= ~blocked_out
             reflected.powers_w[blocked_out] = 0.0
+            t4 = time.perf_counter()
             per_mirror.append(
                 MirrorResult(
                     mirror=mirror,
@@ -129,4 +143,15 @@ class HotboxSimulation:
                     absorber_hit_points=absorber_hit_points,
                 )
             )
+            if verbose:
+                n_rays = int(incoming.origins.shape[0])
+                print(
+                    f"[sim]   mirror {i}: rays={n_rays} "
+                    f"facet_grid={t1 - t0:.4f}s intersect={t2 - t1:.4f}s "
+                    f"shadow={t3 - t2:.4f}s absorber+occlusion={t4 - t3:.4f}s "
+                    f"subtotal={t4 - t0:.4f}s",
+                    flush=True,
+                )
+        if verbose:
+            print(f"[sim] run done — total {time.perf_counter() - t_run:.4f}s", flush=True)
         return SimulationResult(sun_direction=sun_dir, per_mirror=per_mirror)

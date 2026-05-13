@@ -187,5 +187,35 @@ class TestAltAzFlatMirrorGridBodyLayout(unittest.TestCase):
         np.testing.assert_allclose(g._c_body[g._center_facet], np.zeros(3), atol=1e-12)
 
 
+class TestFacetGridIncomingBundle(unittest.TestCase):
+    def test_total_power_matches_projected_area_times_dni(self) -> None:
+        """Facet-grid ray powers sum to DNI × cos(θ_i) × facet area (single 1×1 tile)."""
+        sun = SunModel(latitude_deg=40.7864, longitude_deg=-119.2065, altitude_m=1190.0)
+        when = datetime(2026, 6, 21, 19, 0, 0, tzinfo=timezone.utc)
+        g = AltAzFlatMirrorGrid(
+            mount_world=np.array([2.0, -1.5, 0.9], dtype=float),
+            design_when_utc=when,
+            absorber_center=np.array([0.0, 0.0, 1.0], dtype=float),
+            grid_nx=1,
+            grid_ny=1,
+            pitch_m=0.2,
+            tile_half_m=0.08,
+            sun=sun,
+        )
+        g.azimuth_deg = 0.0
+        g.elevation_deg = 0.0
+        bundle = g.incoming_ray_bundle_facet_grid(when, samples_u=21, samples_v=21)
+        d = normalize(g.sun.ray_direction(when).reshape(1, 3))[0]
+        c_w, n_w, _, _ = g._world_facets()
+        cos_inc = float(-np.dot(n_w[0], d))
+        side = 2.0 * g.tile_half_m
+        facet_area = side * side
+        dni = sun.clear_sky_dni_w_per_m2(when)
+        want = dni * facet_area * cos_inc
+        self.assertGreater(bundle.origins.shape[0], 0)
+        self.assertIsNotNone(bundle.target_facet)
+        np.testing.assert_allclose(bundle.total_power_w, want, rtol=1e-10, atol=1e-9)
+
+
 if __name__ == "__main__":
     unittest.main()

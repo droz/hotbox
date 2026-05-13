@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+import time
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -31,14 +33,15 @@ ABSORBER_HEIGHT_M = 0.40
 ABSORBER_CENTER_HEIGHT_M = 1.0
 ABSORBER_NORMAL_ANGLE_FROM_X_DEG = 90.0
 
-SIM_SAMPLES_U = 100
-SIM_SAMPLES_V = 100
+# Cell count along each axis on **each** square facet (rays per mirror ≈ grid_nx * grid_ny * U * V).
+SIM_SAMPLES_U = 8
+SIM_SAMPLES_V = 8
 
-# Higher ray count for the multi-panel absorber spot figure (main scene uses SIM_SAMPLES_*).
+# Same per-facet cell counts for the multi-panel absorber spot figure.
 SPOT_GRID_NUM_PANELS = 12
 SPOT_GRID_NCOLS = 4
-SPOT_GRID_SAMPLES_U = 400
-SPOT_GRID_SAMPLES_V = 400
+SPOT_GRID_SAMPLES_U = 32
+SPOT_GRID_SAMPLES_V = 32
 SPOT_GRID_BINS = 80
 
 # Site (must match SunModel in build_default_simulation)
@@ -59,6 +62,23 @@ MIRROR_GRID_DESIGN_WHEN = datetime(2026, 8, 31, 14, 0, 0, tzinfo=DAY_CURVE_TZ)
 # Local wall time for the 3D scene / absorber spot figures and printed snapshot
 # (mount solve, mirror angles, ray bundle). Independent of DAY_CURVE_* curve list.
 SCENE_VIS_WHEN = datetime(2026, 9, 7, 9, 0, 0, tzinfo=DAY_CURVE_TZ)
+
+# Terminal progress: high-level phases (timed); mirror-level timings from HotboxSimulation.run.
+SHOW_PROGRESS_STEPS = True
+SHOW_MIRROR_TIMING = False
+
+
+@contextmanager
+def timed_step(label: str) -> None:
+    if not SHOW_PROGRESS_STEPS:
+        yield
+        return
+    print(f"[hotbox] {label} …", flush=True)
+    t0 = time.perf_counter()
+    try:
+        yield
+    finally:
+        print(f"[hotbox] {label} — done in {time.perf_counter() - t0:.3f}s", flush=True)
 
 
 def local_times_sunrise_to_sunset(
@@ -157,12 +177,32 @@ def spot_pattern_sample_times(
 def simulate_delivered_power_over_times(
     sim: HotboxSimulation,
     times: list[datetime],
+    *,
+    progress_label: str = "day power curve",
+    sim_verbose: bool = False,
 ) -> tuple[list[datetime], list[float], list[float], list[list[tuple[float, float]]]]:
     """For each time: total delivered power, total power hitting mirrors, orientations [deg]."""
     delivered_w: list[float] = []
     intercepted_w: list[float] = []
     orientations_per_time: list[list[tuple[float, float]]] = []
-    for when in times:
+    n = len(times)
+    if SHOW_PROGRESS_STEPS and n > 1:
+        print(
+            f"[hotbox] {progress_label}: {n} timesteps (mirror timing={'on' if sim_verbose else 'off'})",
+            flush=True,
+        )
+    t_curve = time.perf_counter()
+    report_every = max(1, n // 10) if n > 10 else 1
+    for idx, when in enumerate(times):
+        if SHOW_PROGRESS_STEPS and n > 1 and (
+            idx % report_every == 0 or idx == n - 1
+        ):
+            print(
+                f"[hotbox] {progress_label}: timestep {idx + 1}/{n} "
+                f"{when.strftime('%Y-%m-%d %H:%M')} …",
+                flush=True,
+            )
+        t_step = time.perf_counter()
         az_el = mirror_orientations_for_time(
             when_utc=when,
             sun=sim.sun,
@@ -170,10 +210,29 @@ def simulate_delivered_power_over_times(
             mirrors=sim.mirrors,
             absorber=sim.absorber,
         )
-        result = sim.run(when)
+        t_after_mount = time.perf_counter()
+        result = sim.run(when, verbose=sim_verbose)
+        t_after_ray = time.perf_counter()
+        if SHOW_PROGRESS_STEPS and n > 1 and (
+            idx % report_every == 0 or idx == n - 1
+        ):
+            dt_ori = t_after_mount - t_step
+            dt_ray = t_after_ray - t_after_mount
+            print(
+                f"[hotbox] {progress_label}: timestep {idx + 1}/{n} "
+                f"mount_solve={dt_ori:.3f}s raytrace={dt_ray:.3f}s "
+                f"(step total {t_after_ray - t_step:.3f}s)",
+                flush=True,
+            )
         delivered_w.append(result.total_delivered_power_w)
         intercepted_w.append(float(sum(m.intercepted_power_w for m in result.per_mirror)))
         orientations_per_time.append(list(az_el))
+    if SHOW_PROGRESS_STEPS and n > 1:
+        print(
+            f"[hotbox] {progress_label}: finished all {n} timesteps in "
+            f"{time.perf_counter() - t_curve:.3f}s",
+            flush=True,
+        )
     return times, delivered_w, intercepted_w, orientations_per_time
 
 
@@ -233,20 +292,23 @@ def build_default_simulation() -> HotboxSimulation:
 
 
 def main() -> None:
-    sim = build_default_simulation()
+    with timed_step("Build default simulation (geometry + mirror grids)"):
+        sim = build_default_simulation()
     print(f"Mirror assemblies: {len(sim.mirrors)}")
     day_specs = day_curve_month_day_pairs(DAY_CURVE_MONTH, DAY_CURVE_DAY)
     when = SCENE_VIS_WHEN
 
-    orientations = mirror_orientations_for_time(
-        when_utc=when,
-        sun=sim.sun,
-        absorber_center=sim.absorber.center,
-        mirrors=sim.mirrors,
-        absorber=sim.absorber,
-    )
+    with timed_step("Solve mount angles for scene snapshot"):
+        orientations = mirror_orientations_for_time(
+            when_utc=when,
+            sun=sim.sun,
+            absorber_center=sim.absorber.center,
+            mirrors=sim.mirrors,
+            absorber=sim.absorber,
+        )
 
-    result = sim.run(when)
+    with timed_step("Raytrace snapshot (scene time)"):
+        result = sim.run(when, verbose=SHOW_MIRROR_TIMING)
 
     print(f"Sun ray direction (world xyz): {result.sun_direction}")
     for idx, (az, tilt) in enumerate(orientations):
@@ -262,10 +324,12 @@ def main() -> None:
     print(f"Total delivered power: {result.total_delivered_power_w:.1f} W")
 
     viz = SceneVisualizer(sim.absorber, sim.mirrors)
-    scene_fig = viz.build_scene_figure(result, scene_when_local=when)
+    with timed_step("Build 3D scene figure (Plotly)"):
+        scene_fig = viz.build_scene_figure(result, scene_when_local=when)
 
     # Spot grid: same calendar day as SCENE_VIS_WHEN, sunrise→sunset (see SPOT_GRID_*).
-    spot_times = spot_pattern_sample_times(
+    with timed_step("Compute spot-pattern sample times"):
+        spot_times = spot_pattern_sample_times(
         SITE_LATITUDE_DEG,
         SITE_LONGITUDE_DEG,
         SITE_ALTITUDE_M,
@@ -275,41 +339,60 @@ def main() -> None:
         DAY_CURVE_TZ,
         DAY_CURVE_STEP_MINUTES,
         SPOT_GRID_NUM_PANELS,
-    )
+        )
     if not spot_times:
         spot_times = [when]
     spot_labeled: list[tuple[str, SimulationResult]] = []
-    for t_spot in spot_times:
-        mirror_orientations_for_time(
-            when_utc=t_spot,
-            sun=sim.sun,
-            absorber_center=sim.absorber.center,
-            mirrors=sim.mirrors,
-            absorber=sim.absorber,
+    with timed_step(f"Spot figure: raytrace {len(spot_times)} panel(s)"):
+        for i_spot, t_spot in enumerate(spot_times):
+            if SHOW_PROGRESS_STEPS and len(spot_times) > 1:
+                print(
+                    f"[hotbox] spot panel {i_spot + 1}/{len(spot_times)} "
+                    f"{t_spot.strftime('%Y-%m-%d %H:%M')} …",
+                    flush=True,
+                )
+            t_panel = time.perf_counter()
+            mirror_orientations_for_time(
+                when_utc=t_spot,
+                sun=sim.sun,
+                absorber_center=sim.absorber.center,
+                mirrors=sim.mirrors,
+                absorber=sim.absorber,
+            )
+            r_spot = sim.run(
+                t_spot,
+                samples_u=SPOT_GRID_SAMPLES_U,
+                samples_v=SPOT_GRID_SAMPLES_V,
+                verbose=SHOW_MIRROR_TIMING,
+            )
+            if SHOW_PROGRESS_STEPS and len(spot_times) > 1:
+                print(
+                    f"[hotbox] spot panel {i_spot + 1}/{len(spot_times)} "
+                    f"— done in {time.perf_counter() - t_panel:.3f}s",
+                    flush=True,
+                )
+            label = t_spot.strftime("%H:%M")
+            spot_labeled.append((label, r_spot))
+    with timed_step("Build absorber spot figure grid (Plotly)"):
+        spot_fig = viz.build_absorber_spot_figure_grid(
+            spot_labeled,
+            bins=SPOT_GRID_BINS,
+            ncols=SPOT_GRID_NCOLS,
         )
-        r_spot = sim.run(
-            t_spot,
-            samples_u=SPOT_GRID_SAMPLES_U,
-            samples_v=SPOT_GRID_SAMPLES_V,
-        )
-        label = t_spot.strftime("%H:%M")
-        spot_labeled.append((label, r_spot))
-    spot_fig = viz.build_absorber_spot_figure_grid(
-        spot_labeled,
-        bins=SPOT_GRID_BINS,
-        ncols=SPOT_GRID_NCOLS,
-    )
     # Prevent the browser from resizing the plot div (which distorts 3D aspect).
     _plotly_config = {"responsive": False}
-    scene_fig.show(config=_plotly_config)
-    spot_fig.show(config=_plotly_config)
+    with timed_step("Open 3D scene in browser (Plotly)"):
+        scene_fig.show(config=_plotly_config)
+    with timed_step("Open spot figure in browser (Plotly)"):
+        spot_fig.show(config=_plotly_config)
 
     day_series: list[
         tuple[str, list[datetime], list[float], list[float], list[list[tuple[float, float]]]]
     ] = []
     single_curve_sr_ss: tuple[datetime | None, datetime | None] | None = None
     for month_i, day_i in day_specs:
-        day_times, sr, ss = local_times_sunrise_to_sunset(
+        with timed_step(f"Sunrise/sunset & timestep list for {month_i}/{day_i}/{DAY_CURVE_YEAR}"):
+            day_times, sr, ss = local_times_sunrise_to_sunset(
             SITE_LATITUDE_DEG,
             SITE_LONGITUDE_DEG,
             SITE_ALTITUDE_M,
@@ -318,7 +401,7 @@ def main() -> None:
             day_i,
             DAY_CURVE_TZ,
             DAY_CURVE_STEP_MINUTES,
-        )
+            )
         label = f"{month_i}/{day_i}/{DAY_CURVE_YEAR}"
         if sr is not None and ss is not None:
             print(
@@ -329,7 +412,10 @@ def main() -> None:
             print(f"Day curve {label}: no sunrise/sunset (polar night or missing rise/set).")
         if day_times:
             _, day_delivered, day_intercepted, day_orients = simulate_delivered_power_over_times(
-                sim, day_times
+                sim,
+                day_times,
+                progress_label=f"Day curve {label}",
+                sim_verbose=SHOW_MIRROR_TIMING,
             )
             day_series.append((label, day_times, day_delivered, day_intercepted, day_orients))
             if len(day_specs) == 1:
@@ -352,17 +438,19 @@ def main() -> None:
                 f"Delivered & mirror-intercepted power — {DAY_CURVE_YEAR} ({dates_s}), "
                 f"sunrise–sunset local, every {DAY_CURVE_STEP_MINUTES} min"
             )
-        day_fig = build_day_delivered_power_figure(
-            day_series,
-            title=day_title,
-            x_axis_title=(
-                "Local time of day [h] (wall clock)"
-                if len(day_series) > 1
-                else x_axis_title
-            ),
-            same_day_time_scale=len(day_series) > 1,
-        )
-        day_fig.show(config=_plotly_config)
+        with timed_step("Build day power Plotly figure"):
+            day_fig = build_day_delivered_power_figure(
+                day_series,
+                title=day_title,
+                x_axis_title=(
+                    "Local time of day [h] (wall clock)"
+                    if len(day_series) > 1
+                    else x_axis_title
+                ),
+                same_day_time_scale=len(day_series) > 1,
+            )
+        with timed_step("Open day power figure in browser (Plotly)"):
+            day_fig.show(config=_plotly_config)
     elif day_specs:
         print("Day curve: no daylight samples for any selected day.")
 

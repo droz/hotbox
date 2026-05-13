@@ -5,7 +5,7 @@ from datetime import datetime
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import convolve
 
 from src.absorber import SolarAbsorber
 from src.flat_mirror_grid import AltAzFlatMirrorGrid
@@ -13,6 +13,20 @@ from src.geometry import normalize
 from src.simulation import SimulationResult
 
 # Distinct colors per mirror assembly (Plotly merges legend entries when trace names repeat).
+# Solar disk angular diameter (nominal ≈0.53°); blur radius on absorber uses limb half-angle θ/2.
+SUN_APPARENT_ANGULAR_DIAMETER_DEG = 0.5
+
+
+def sun_disc_radius_on_absorber_m(
+    mirror_to_absorber_distance_m: float,
+    *,
+    sun_angular_diameter_deg: float = SUN_APPARENT_ANGULAR_DIAMETER_DEG,
+) -> float:
+    """Physical radius [m] of sun image from ``distance * tan(angular_radius)``."""
+    half_angle_rad = 0.5 * np.deg2rad(float(sun_angular_diameter_deg))
+    return float(mirror_to_absorber_distance_m) * float(np.tan(half_angle_rad))
+
+
 _SCENE_MIRROR_ASSEMBLY_COLORS = (
     "#4c78a8",
     "#f58518",
@@ -237,30 +251,102 @@ class SceneVisualizer:
         y_centers = 0.5 * (y_edges[:-1] + y_edges[1:])
         return x_centers, y_centers, irradiance_grid.T
 
+    def _mean_mirror_absorber_distance_m(self, result: SimulationResult) -> float:
+        """Representative path length [m] for sun-blur scaling (power-weighted mean mount–absorber)."""
+        ac = np.asarray(self.absorber.center, dtype=float).reshape(3)
+        dists: list[float] = []
+        weights: list[float] = []
+        for mres in result.per_mirror:
+            mw = np.asarray(mres.mirror.mount_world, dtype=float).reshape(3)
+            dists.append(float(np.linalg.norm(mw - ac)))
+            weights.append(max(float(mres.delivered_power_w), 0.0))
+        ws = float(sum(weights))
+        if ws > 1e-18:
+            return float(np.average(dists, weights=weights))
+        if dists:
+            return float(np.mean(dists))
+        return float(np.linalg.norm(ac))
+
     @staticmethod
-    def _smoothed_spot_power_grid(z: np.ndarray, sigma_px: float) -> np.ndarray:
-        """Apply light Gaussian smoothing while preserving total bin power."""
-        if sigma_px <= 0.0 or z.size == 0:
+    def _uniform_disc_convolution_kernel(
+        radius_m: float,
+        du_m: float,
+        dv_m: float,
+    ) -> np.ndarray:
+        """Normalized uniform kernel over bin centers within ``radius_m`` in absorber (u, v) [m]."""
+        if radius_m <= 0.0 or not np.isfinite(radius_m):
+            return np.ones((1, 1), dtype=float)
+        du_m = max(float(du_m), 1e-15)
+        dv_m = max(float(dv_m), 1e-15)
+        nx = int(np.ceil(radius_m / du_m))
+        ny = int(np.ceil(radius_m / dv_m))
+        ni = np.arange(-nx, nx + 1, dtype=float)[:, None]
+        nj = np.arange(-ny, ny + 1, dtype=float)[None, :]
+        dist_m = np.sqrt((ni * du_m) ** 2 + (nj * dv_m) ** 2)
+        mask = dist_m <= radius_m + 1e-12
+        k = mask.astype(float)
+        s = float(np.sum(k))
+        if s <= 0.0:
+            return np.ones((1, 1), dtype=float)
+        k /= s
+        return k
+
+    def _blur_spot_irradiance_sun_disc(
+        self,
+        z: np.ndarray,
+        result: SimulationResult,
+        *,
+        bins: int,
+        width_half_m: float,
+        height_half_m: float,
+        sun_angular_diameter_deg: float,
+        mirror_absorber_distance_m: float | None,
+    ) -> np.ndarray:
+        """Convolve irradiance with a uniform disk ~sun angular diameter (preserves total bin sum)."""
+        if z.size == 0:
             return z
-        total_before = float(np.sum(z))
-        z_smooth = gaussian_filter(z, sigma=float(sigma_px), mode="nearest")
-        total_after = float(np.sum(z_smooth))
-        if total_after > 1e-20:
-            z_smooth *= total_before / total_after
-        return z_smooth
+        du_m = (2.0 * width_half_m) / bins
+        dv_m = (2.0 * height_half_m) / bins
+        dist_m = (
+            float(mirror_absorber_distance_m)
+            if mirror_absorber_distance_m is not None
+            else self._mean_mirror_absorber_distance_m(result)
+        )
+        radius_m = sun_disc_radius_on_absorber_m(
+            dist_m, sun_angular_diameter_deg=sun_angular_diameter_deg
+        )
+        k = self._uniform_disc_convolution_kernel(radius_m, du_m, dv_m)
+        z_blur = convolve(z, k, mode="nearest")
+        tb = float(np.sum(z_blur))
+        ta = float(np.sum(z))
+        if tb > 1e-20 and ta > 1e-20:
+            z_blur *= ta / tb
+        return z_blur
 
     def build_absorber_spot_figure(
         self,
         result: SimulationResult,
         bins: int = 60,
-        smooth_sigma_px: float = 0.8,
+        *,
+        sun_angular_diameter_deg: float = SUN_APPARENT_ANGULAR_DIAMETER_DEG,
+        mirror_absorber_distance_m: float | None = None,
     ) -> go.Figure:
         fig = go.Figure()
         spot = self._spot_uv_and_powers(result)
         if spot is not None:
             uv, pw = spot
             x_centers, y_centers, z = self._spot_power_heatmap_z(uv, pw, bins)
-            z = self._smoothed_spot_power_grid(z, smooth_sigma_px)
+            w_h = 0.5 * self.absorber.width_m
+            h_h = 0.5 * self.absorber.height_m
+            z = self._blur_spot_irradiance_sun_disc(
+                z,
+                result,
+                bins=bins,
+                width_half_m=w_h,
+                height_half_m=h_h,
+                sun_angular_diameter_deg=sun_angular_diameter_deg,
+                mirror_absorber_distance_m=mirror_absorber_distance_m,
+            )
             fig.add_trace(
                 go.Heatmap(
                     x=x_centers,
@@ -315,12 +401,18 @@ class SceneVisualizer:
         *,
         bins: int = 72,
         ncols: int = 4,
-        smooth_sigma_px: float = 1.2,
+        sun_angular_diameter_deg: float = SUN_APPARENT_ANGULAR_DIAMETER_DEG,
+        mirror_absorber_distance_m: float | None = None,
     ) -> go.Figure:
         """
         Small multiples of absorber spot heatmaps (local time in subplot titles).
 
         All panels share one color scale so irradiation patterns are comparable across the day.
+        Irradiance is convolved with a uniform disk whose radius is
+        ``distance * tan((sun_angular_diameter_deg/2))`` in absorber coordinates (see
+        ``sun_disc_radius_on_absorber_m``). By default ``distance`` is power-weighted mean
+        mirror-mount to absorber distance per panel; pass ``mirror_absorber_distance_m`` to fix one
+        value for every panel.
         """
         n = len(labeled_results)
         if n == 0:
@@ -355,7 +447,17 @@ class SceneVisualizer:
                 continue
             uv, pw = spot
             xc, yc, z = self._spot_power_heatmap_z(uv, pw, bins)
-            z = self._smoothed_spot_power_grid(z, smooth_sigma_px)
+            w_h = 0.5 * self.absorber.width_m
+            h_h = 0.5 * self.absorber.height_m
+            z = self._blur_spot_irradiance_sun_disc(
+                z,
+                res,
+                bins=bins,
+                width_half_m=w_h,
+                height_half_m=h_h,
+                sun_angular_diameter_deg=sun_angular_diameter_deg,
+                mirror_absorber_distance_m=mirror_absorber_distance_m,
+            )
             zm = float(np.nanmax(z)) if z.size else 0.0
             zmax = max(zmax, zm)
             cell_z.append((row, col, xc, yc, z))

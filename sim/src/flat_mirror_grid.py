@@ -11,6 +11,13 @@ from src.geometry import normalize, orthonormal_basis_from_direction
 from src.rays import RayBundle
 from src.sun import SunModel
 
+# ``solve_mount_angles``: scipy ``least_squares`` termination. Residuals are absorber (u, v) [m];
+# ~mm-scale aim does not need near–machine precision (avoids hundreds of tiny refinement steps).
+_MOUNT_LS_FTOL = 1e-8
+_MOUNT_LS_XTOL = 1e-6
+_MOUNT_LS_GTOL = 1e-8
+_MOUNT_LS_MAX_NFEV = 200
+
 
 def unit_mirror_normal_at_point(
     d_incoming: np.ndarray,
@@ -263,6 +270,82 @@ class AltAzFlatMirrorGrid:
         hv = max(0.5 * (t1 - t0), 1e-6)
         return bundle_c.astype(float), float(hu), float(hv)
 
+    def incoming_ray_bundle_facet_grid(
+        self,
+        when_utc: datetime,
+        samples_u: int,
+        samples_v: int,
+        *,
+        upstream_distance_m: float = 50.0,
+    ) -> RayBundle:
+        """
+        Parallel rays through a regular grid on **each** square facet.
+
+        Ray weight uses clear-sky DNI with incidence cosine on the facet plane:
+
+            ``power = DNI * du * dv * cos(theta_i)``,  ``cos(theta_i) = -(n · d)``
+
+        where ``d`` is propagation toward the mirror, ``n`` is the outward facet normal (front face:
+        ``n · d < 0``), and ``du``, ``dv`` are sample spacing along facet axes ``u``, ``v``.
+
+        Each ray is labeled with ``RayBundle.target_facet`` so intersection only tests that facet
+        on this grid (mutual shadowing still tests other assemblies).
+
+        ``samples_u`` / ``samples_v`` are the number of **cells** along each facet axis (cell
+        centers one ray per cell); cell area ``(2h/nu)*(2h/nv)`` makes total power on a facet
+        exactly ``DNI * (2h)² * cos(theta_i)``.
+        """
+        nu = max(int(samples_u), 1)
+        nv = max(int(samples_v), 1)
+        d = normalize(np.asarray(self.sun.ray_direction(when_utc), dtype=float).reshape(1, 3))[0]
+        dni = self.sun.clear_sky_dni_w_per_m2(when_utc)
+        c_w, n_w, u_w, v_w = self._world_facets()
+        h = float(self.tile_half_m)
+
+        u_edges = np.linspace(-h, h, nu + 1)
+        v_edges = np.linspace(-h, h, nv + 1)
+        uc = 0.5 * (u_edges[:-1] + u_edges[1:])
+        vc = 0.5 * (v_edges[:-1] + v_edges[1:])
+        uu, vv = np.meshgrid(uc, vc, indexing="xy")
+        du = (2.0 * h) / nu
+        dv = (2.0 * h) / nv
+
+        origins_parts: list[np.ndarray] = []
+        powers_parts: list[np.ndarray] = []
+        facet_parts: list[np.ndarray] = []
+
+        n_facets = int(c_w.shape[0])
+        for f in range(n_facets):
+            cos_inc = float(-np.dot(n_w[f], d))
+            if cos_inc <= 1e-15:
+                continue
+            pw = dni * du * dv * cos_inc
+            pts = c_w[f] + uu[..., None] * u_w[f] + vv[..., None] * v_w[f]
+            pts_r = pts.reshape(-1, 3)
+            n_pts = int(pts_r.shape[0])
+            origins_parts.append(pts_r - upstream_distance_m * d)
+            powers_parts.append(np.full(n_pts, pw, dtype=float))
+            facet_parts.append(np.full(n_pts, f, dtype=np.int32))
+
+        if not origins_parts:
+            return RayBundle(
+                origins=np.zeros((0, 3), dtype=float),
+                directions=np.zeros((0, 3), dtype=float),
+                powers_w=np.zeros((0,), dtype=float),
+                target_facet=np.zeros((0,), dtype=np.int32),
+            )
+
+        origins = np.vstack(origins_parts)
+        powers_w = np.concatenate(powers_parts)
+        target_facet = np.concatenate(facet_parts)
+        directions = np.repeat(d.reshape(1, 3), origins.shape[0], axis=0)
+        return RayBundle(
+            origins=origins,
+            directions=directions,
+            powers_w=powers_w,
+            target_facet=target_facet,
+        )
+
     def _world_facets_from_angles(
         self, azimuth_deg: float, elevation_deg: float
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -352,6 +435,7 @@ class AltAzFlatMirrorGrid:
 
         Uses ``scipy.optimize.least_squares`` with a seed from ``coarse_mount_angles_align_lattice_normal``.
         ``absorber_center`` is kept for API compatibility; the target frame is ``absorber``.
+        Termination tolerances are set for ~mm-scale absorber accuracy, not numerical limits.
         """
         d_sun = self.sun.ray_direction(when_utc)
         m = np.asarray(self.mount_world, dtype=float).reshape(3)
@@ -368,10 +452,10 @@ class AltAzFlatMirrorGrid:
             fun,
             x0,
             bounds=(np.array([0.0, -90.0]), np.array([360.0, 90.0])),
-            ftol=1e-12,
-            xtol=1e-10,
-            gtol=1e-10,
-            max_nfev=400,
+            ftol=_MOUNT_LS_FTOL,
+            xtol=_MOUNT_LS_XTOL,
+            gtol=_MOUNT_LS_GTOL,
+            max_nfev=_MOUNT_LS_MAX_NFEV,
         )
         best_x = res.x
         best_cost = float(np.dot(res.fun, res.fun))
@@ -381,10 +465,10 @@ class AltAzFlatMirrorGrid:
                 fun,
                 alt,
                 bounds=(np.array([0.0, -90.0]), np.array([360.0, 90.0])),
-                ftol=1e-12,
-                xtol=1e-10,
-                gtol=1e-10,
-                max_nfev=400,
+                ftol=_MOUNT_LS_FTOL,
+                xtol=_MOUNT_LS_XTOL,
+                gtol=_MOUNT_LS_GTOL,
+                max_nfev=_MOUNT_LS_MAX_NFEV,
             )
             c = float(np.dot(alt_res.fun, alt_res.fun))
             if c < best_cost:
@@ -462,11 +546,24 @@ class AltAzFlatMirrorGrid:
 
         t_best = np.full(n_rays, np.inf, dtype=float)
         facet_idx = np.full(n_rays, -1, dtype=np.int32)
-        for f in range(c_w.shape[0]):
-            t_hit, hit = self._ray_plane_hits(p, d, c_w[f], n_w[f], u_w[f], v_w[f])
-            better = hit & np.isfinite(t_hit) & (t_hit < t_best)
-            t_best[better] = t_hit[better]
-            facet_idx[better] = f
+        tf = rays.target_facet
+        use_hint = tf is not None and int(tf.shape[0]) == n_rays and n_rays > 0
+        if use_hint:
+            for f in range(c_w.shape[0]):
+                m = tf == f
+                if not np.any(m):
+                    continue
+                t_hit, hit = self._ray_plane_hits(p[m], d[m], c_w[f], n_w[f], u_w[f], v_w[f])
+                idx = np.flatnonzero(m)
+                ok = hit & np.isfinite(t_hit)
+                t_best[idx[ok]] = t_hit[ok]
+                facet_idx[idx[ok]] = f
+        else:
+            for f in range(c_w.shape[0]):
+                t_hit, hit = self._ray_plane_hits(p, d, c_w[f], n_w[f], u_w[f], v_w[f])
+                better = hit & np.isfinite(t_hit) & (t_hit < t_best)
+                t_best[better] = t_hit[better]
+                facet_idx[better] = f
 
         hit_mask = facet_idx >= 0
         t_use = t_best.copy()
@@ -488,6 +585,7 @@ class AltAzFlatMirrorGrid:
             origins=points,
             directions=reflected_dirs,
             powers_w=rays.powers_w.copy(),
+            target_facet=None,
         )
         reflected.powers_w[~hit_mask] = 0.0
         return hit_mask, points, reflected

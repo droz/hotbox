@@ -93,4 +93,9 @@ class SunModel:
         dni = self.clear_sky_dni_w_per_m2(when_utc)
         ray_power = dni * du * dv
         powers_w = np.full(num, ray_power, dtype=float)
-        return RayBundle(origins=origins, directions=directions, powers_w=powers_w)
+        return RayBundle(
+            origins=origins,
+            directions=directions,
+            powers_w=powers_w,
+            target_facet=None,
+        )
