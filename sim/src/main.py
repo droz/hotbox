@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import time
@@ -11,7 +12,7 @@ from pvlib.location import Location
 
 from src.absorber import SolarAbsorber
 from src.controller import mirror_orientations_for_time
-from src.flat_mirror_grid import AltAzFlatMirrorGrid
+from src.flat_mirror_grid import AltAzFlatMirrorGrid, FacetDesignStrategy
 from src.simulation import HotboxSimulation, SimulationResult
 from src.sun import SunModel
 from src.visualizer import SceneVisualizer, build_day_delivered_power_figure
@@ -23,6 +24,12 @@ MIRROR_TILE_SIDE_M = 0.254
 MIRROR_GRID_PITCH_M = 0.254 + 0.01  # center-to-center spacing [m]
 MIRROR_ASSEMBLY_COUNT = 3
 MIRROR_LOCATION_RING_RADIUS_M = 3.0  # mount pivot offset from absorber along absorber normal
+# Default **signed** distance along horizontal absorber normal ``fw_xy`` (same unit vector as
+# from absorber to mirror ring) to the spherical **center of curvature** ``O``: ``O = a + dist * fw_xy``.
+# Negative = ``O`` on the **opposite** side of the absorber from the mirrors (typical converging
+# cap); positive = ``O`` past the absorber toward the mirror field (often divergent for sun from
+# the opposite hemisphere).
+MIRROR_SPHERICAL_FOCUS_DISTANCE_FROM_ABSORBER_M = -2.0 * MIRROR_LOCATION_RING_RADIUS_M
 MIRROR_ASSEMBLY_SPACING_M = 1.0  # fixed center-to-center spacing between assemblies [m]
 MIRROR_GRID_MOUNT_HEIGHT_M = 0.85  # mount pivot z [m]; facet centers lie on the design tilted plane through the pivot
 
@@ -236,7 +243,11 @@ def simulate_delivered_power_over_times(
     return times, delivered_w, intercepted_w, orientations_per_time
 
 
-def build_default_simulation() -> HotboxSimulation:
+def build_default_simulation(
+    mirror_design: FacetDesignStrategy = "optimized",
+    *,
+    spherical_focus_distance_from_absorber_m: float | None = None,
+) -> HotboxSimulation:
     sun = SunModel(
         latitude_deg=SITE_LATITUDE_DEG,
         longitude_deg=SITE_LONGITUDE_DEG,
@@ -258,6 +269,15 @@ def build_default_simulation() -> HotboxSimulation:
     base_mount = a + MIRROR_LOCATION_RING_RADIUS_M * fw_xy
     tile_half_m = 0.5 * MIRROR_TILE_SIDE_M
     pitch_m = MIRROR_GRID_PITCH_M
+    if mirror_design == "spherical":
+        dist_m = (
+            spherical_focus_distance_from_absorber_m
+            if spherical_focus_distance_from_absorber_m is not None
+            else MIRROR_SPHERICAL_FOCUS_DISTANCE_FROM_ABSORBER_M
+        )
+        spherical_target_world = (a + dist_m * fw_xy).astype(float)
+    else:
+        spherical_target_world = None
     grids: list[AltAzFlatMirrorGrid] = []
     for i in range(MIRROR_ASSEMBLY_COUNT):
         offset = (i - 0.5 * (MIRROR_ASSEMBLY_COUNT - 1)) * MIRROR_ASSEMBLY_SPACING_M
@@ -279,6 +299,8 @@ def build_default_simulation() -> HotboxSimulation:
                 pitch_m=pitch_m,
                 tile_half_m=tile_half_m,
                 sun=sun,
+                facet_design=mirror_design,
+                spherical_target_world=spherical_target_world,
             )
         )
 
@@ -292,9 +314,41 @@ def build_default_simulation() -> HotboxSimulation:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Hotbox heliostat-style ray simulation.")
+    parser.add_argument(
+        "--mirror-design",
+        choices=("optimized", "spherical"),
+        default="optimized",
+        help=(
+            'Facet canting: "optimized" — each facet specular toward the absorber at the design '
+            'instant; "spherical" — facet normals are outward radials from a shared sphere center '
+            "(see --spherical-focus-distance-m)."
+        ),
+    )
+    parser.add_argument(
+        "--spherical-focus-distance-m",
+        type=float,
+        default=None,
+        metavar="M",
+        help=(
+            "Signed distance [m] from absorber center to sphere center of curvature along the "
+            "horizontal absorber normal (same axis as mirror ring offset): **positive** = toward "
+            "the mirror field, **negative** = opposite side of the absorber. "
+            "Default for spherical design: −2× mirror ring radius. Ignored for optimized design."
+        ),
+    )
+    args = parser.parse_args()
+    mirror_design: FacetDesignStrategy = args.mirror_design
     with timed_step("Build default simulation (geometry + mirror grids)"):
-        sim = build_default_simulation()
-    print(f"Mirror assemblies: {len(sim.mirrors)}")
+        sim = build_default_simulation(
+            mirror_design,
+            spherical_focus_distance_from_absorber_m=args.spherical_focus_distance_m,
+        )
+    print(f"Mirror assemblies: {len(sim.mirrors)} (design={mirror_design})")
+    if mirror_design == "spherical" and sim.mirrors:
+        o = sim.mirrors[0].spherical_target_world
+        if o is not None:
+            print(f"Spherical center of curvature (world xyz): {o[0]:.4f}, {o[1]:.4f}, {o[2]:.4f} m")
     day_specs = day_curve_month_day_pairs(DAY_CURVE_MONTH, DAY_CURVE_DAY)
     when = SCENE_VIS_WHEN
 

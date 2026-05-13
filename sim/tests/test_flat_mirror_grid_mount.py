@@ -11,6 +11,7 @@ from src.flat_mirror_grid import (
     AltAzFlatMirrorGrid,
     coarse_mount_angles_align_lattice_normal,
     grid_mount_rotation_matrix,
+    unit_facet_normal_toward_point,
     unit_mirror_normal_at_point,
 )
 from src.geometry import normalize
@@ -215,6 +216,46 @@ class TestFacetGridIncomingBundle(unittest.TestCase):
         self.assertGreater(bundle.origins.shape[0], 0)
         self.assertIsNotNone(bundle.target_facet)
         np.testing.assert_allclose(bundle.total_power_w, want, rtol=1e-10, atol=1e-9)
+
+
+class TestUnitFacetNormalTowardPoint(unittest.TestCase):
+    def test_normal_is_radial_from_sphere_center_up_to_incidence_sign(self) -> None:
+        d_in = normalize(np.array([[0.2, -0.1, -0.95]], dtype=float))[0]
+        p = np.array([3.0, 1.0, 0.5], dtype=float)
+        o = np.array([0.0, 0.0, 1.0], dtype=float)
+        n = unit_facet_normal_toward_point(p, o, d_in)
+        self.assertLess(float(np.dot(d_in, n)), 0.0)
+        radial = p - o
+        radial /= max(float(np.linalg.norm(radial)), 1e-15)
+        self.assertAlmostEqual(abs(float(np.dot(n, radial))), 1.0, places=6)
+
+
+class TestAltAzFlatMirrorGridSpherical(unittest.TestCase):
+    def test_facet_normals_aim_at_common_focus(self) -> None:
+        sun = SunModel(latitude_deg=40.7864, longitude_deg=-119.2065, altitude_m=1190.0)
+        when = datetime(2026, 6, 21, 19, 0, 0, tzinfo=timezone.utc)
+        focus = np.array([0.0, 6.0, 1.0], dtype=float)
+        g = AltAzFlatMirrorGrid(
+            mount_world=np.array([2.0, -1.5, 0.9], dtype=float),
+            design_when_utc=when,
+            absorber_center=np.array([0.0, 0.0, 1.0], dtype=float),
+            grid_nx=3,
+            grid_ny=3,
+            pitch_m=0.2,
+            tile_half_m=0.08,
+            sun=sun,
+            facet_design="spherical",
+            spherical_target_world=focus,
+        )
+        g.azimuth_deg = 0.0
+        g.elevation_deg = 0.0
+        c_w, n_w, _, _ = g._world_facets()
+        for f in range(c_w.shape[0]):
+            c = c_w[f]
+            n = n_w[f]
+            radial = c - focus
+            radial /= max(float(np.linalg.norm(radial)), 1e-15)
+            self.assertGreater(abs(float(np.dot(n, radial))), 0.999)
 
 
 if __name__ == "__main__":
