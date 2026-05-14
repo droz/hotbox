@@ -21,12 +21,11 @@ from src.visualizer import SceneVisualizer, build_day_delivered_power_figure
 MIRROR_GRID_NX = 3
 MIRROR_GRID_NY = 5
 MIRROR_TILE_SIDE_M = 0.254
-MIRROR_GRID_PITCH_M = 0.254 + 0.01  # center-to-center spacing [m]
+MIRROR_GRID_PITCH_M = 0.254 + 0.0254 / 4  # center-to-center spacing [m]
 MIRROR_ASSEMBLY_COUNT = 3
-MIRROR_LOCATION_RING_RADIUS_M = 3.0  # mount pivot offset from absorber along absorber normal
+MIRROR_LOCATION_RING_RADIUS_M = 2.5  # mount pivot offset from absorber along absorber normal
 # Mirror spherical-cant radius / assembly-frame sphere-center z offset [m].
-#MIRROR_RADIUS_OF_CURVATURE_M = 2.0 * MIRROR_LOCATION_RING_RADIUS_M
-MIRROR_RADIUS_OF_CURVATURE_M = 6.5
+MIRROR_RADIUS_OF_CURVATURE_M = 2.2 * MIRROR_LOCATION_RING_RADIUS_M
 MIRROR_ASSEMBLY_SPACING_M = 1.0  # fixed center-to-center spacing between assemblies [m]
 MIRROR_GRID_MOUNT_HEIGHT_M = 0.85  # mount pivot z [m]; facet centers lie on the design tilted plane through the pivot
 
@@ -62,7 +61,13 @@ DAY_CURVE_STEP_MINUTES = 20
 
 # Local wall time for the 3D scene / absorber spot figures and printed snapshot
 # (mount solve, mirror angles, ray bundle). Independent of DAY_CURVE_* curve list.
-SCENE_VIS_WHEN = datetime(2026, 9, 7, 9, 0, 0, tzinfo=DAY_CURVE_TZ)
+SCENE_VIS_WHEN = datetime(2026, 9, 7, 7, 0, 0, tzinfo=DAY_CURVE_TZ)
+
+# 3D scene figure only: coarser facet grid and shorter incoming segments (sun-ward) than the
+# snapshot raytrace used for printed power (still uses SIM_SAMPLES_* via ``sim.run`` defaults).
+SCENE_VIS_SAMPLES_U = 3
+SCENE_VIS_SAMPLES_V = 3
+SCENE_VIS_UPSTREAM_DISTANCE_M = 6.0
 
 # Terminal progress: high-level phases (timed); mirror-level timings from HotboxSimulation.run.
 SHOW_PROGRESS_STEPS = True
@@ -181,6 +186,7 @@ def simulate_delivered_power_over_times(
     *,
     progress_label: str = "day power curve",
     sim_verbose: bool = False,
+    bypass_mirror_occlusion: bool = False,
 ) -> tuple[list[datetime], list[float], list[float], list[list[tuple[float, float]]]]:
     """For each time: total delivered power, total power hitting mirrors, orientations [deg]."""
     delivered_w: list[float] = []
@@ -212,7 +218,7 @@ def simulate_delivered_power_over_times(
             absorber=sim.absorber,
         )
         t_after_mount = time.perf_counter()
-        result = sim.run(when, verbose=sim_verbose)
+        result = sim.run(when, verbose=sim_verbose, bypass_mirror_occlusion=bypass_mirror_occlusion)
         t_after_ray = time.perf_counter()
         if SHOW_PROGRESS_STEPS and n > 1 and (
             idx % report_every == 0 or idx == n - 1
@@ -311,7 +317,22 @@ def main() -> None:
             f"Default: {MIRROR_RADIUS_OF_CURVATURE_M:.4g} m (+2× mirror ring radius)."
         ),
     )
+    parser.add_argument(
+        "--bypass-mirror-occlusion",
+        action="store_true",
+        help=(
+            "Skip mutual mirror shadowing and outgoing mirror-on-absorber occlusion in every "
+            "raytrace (testing only; power and spot figures are not physically self-consistent)."
+        ),
+    )
     args = parser.parse_args()
+    bypass_occ = bool(args.bypass_mirror_occlusion)
+    if bypass_occ:
+        print(
+            "[hotbox] --bypass-mirror-occlusion: incoming shadowing and outgoing occlusion disabled "
+            "(geometric facet/absorber hits only).",
+            flush=True,
+        )
     with timed_step("Build default simulation (geometry + mirror grids)"):
         sim = build_default_simulation(sphere_center_offset_m=args.sphere_center_offset_m)
     print(f"Mirror assemblies: {len(sim.mirrors)} (facet normals toward assembly-frame sphere)")
@@ -336,7 +357,17 @@ def main() -> None:
         )
 
     with timed_step("Raytrace snapshot (scene time)"):
-        result = sim.run(when, verbose=SHOW_MIRROR_TIMING)
+        result = sim.run(when, verbose=SHOW_MIRROR_TIMING, bypass_mirror_occlusion=bypass_occ)
+
+    with timed_step("Raytrace snapshot (3D scene display)"):
+        result_scene = sim.run(
+            when,
+            samples_u=SCENE_VIS_SAMPLES_U,
+            samples_v=SCENE_VIS_SAMPLES_V,
+            upstream_distance_m=SCENE_VIS_UPSTREAM_DISTANCE_M,
+            verbose=False,
+            bypass_mirror_occlusion=bypass_occ,
+        )
 
     print(f"Sun ray direction (world xyz): {result.sun_direction}")
     for idx, (az, tilt) in enumerate(orientations):
@@ -353,7 +384,7 @@ def main() -> None:
 
     viz = SceneVisualizer(sim.absorber, sim.mirrors)
     with timed_step("Build 3D scene figure (Plotly)"):
-        scene_fig = viz.build_scene_figure(result, scene_when_local=when)
+        scene_fig = viz.build_scene_figure(result_scene, scene_when_local=when)
 
     # Spot grid: same calendar day as SCENE_VIS_WHEN, sunrise→sunset (see SPOT_GRID_*).
     with timed_step("Compute spot-pattern sample times"):
@@ -392,6 +423,7 @@ def main() -> None:
                 samples_u=SPOT_GRID_SAMPLES_U,
                 samples_v=SPOT_GRID_SAMPLES_V,
                 verbose=SHOW_MIRROR_TIMING,
+                bypass_mirror_occlusion=bypass_occ,
             )
             if SHOW_PROGRESS_STEPS and len(spot_times) > 1:
                 print(
@@ -444,6 +476,7 @@ def main() -> None:
                 day_times,
                 progress_label=f"Day curve {label}",
                 sim_verbose=SHOW_MIRROR_TIMING,
+                bypass_mirror_occlusion=bypass_occ,
             )
             day_series.append((label, day_times, day_delivered, day_intercepted, day_orients))
             if len(day_specs) == 1:

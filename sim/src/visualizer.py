@@ -9,8 +9,7 @@ from scipy.ndimage import convolve
 
 from src.absorber import SolarAbsorber
 from src.flat_mirror_grid import AltAzFlatMirrorGrid
-from src.geometry import normalize
-from src.simulation import SimulationResult
+from src.simulation import MirrorResult, SimulationResult
 
 # Distinct colors per mirror assembly (Plotly merges legend entries when trace names repeat).
 # Solar disk angular diameter (nominal ≈0.53°); blur radius on absorber uses limb half-angle θ/2.
@@ -42,9 +41,17 @@ class SceneVisualizer:
         self.absorber = absorber
         self.mirrors = mirrors
 
-    def _scene_xy_limits(self, incoming_ray_length_m: float) -> tuple[list[float], list[float]]:
+    def _scene_xy_limits(
+        self,
+        incoming_ray_length_m: float,
+        *,
+        ray_result: SimulationResult | None = None,
+    ) -> tuple[list[float], list[float]]:
         """
         Tight x/y span for the ground patch only (not used to force scene axis ranges).
+
+        When ``ray_result`` is set, includes simulation ray origins and hit points so upstream
+        bundle extent (e.g. 50 m sun-ward) is in frame.
 
         Returns ``(x_range, y_range)`` in meters.
         """
@@ -53,92 +60,118 @@ class SceneVisualizer:
             for surf in mirror.tile_surface_grids(nu=2, nv=2):
                 pts_xy.append(surf.reshape(-1, 3)[:, :2])
 
+        if ray_result is not None:
+            for mres in ray_result.per_mirror:
+                inn = mres.incoming.origins
+                if inn.size:
+                    pts_xy.append(inn[:, :2])
+                mh = mres.mirror_hit_mask
+                if np.any(mh):
+                    pts_xy.append(mres.mirror_hit_points[mh, :2])
+                ah = mres.absorber_hit_mask
+                if np.any(ah):
+                    pts_xy.append(mres.absorber_hit_points[ah, :2])
+
         pts = np.vstack(pts_xy)
         x_min = float(np.min(pts[:, 0]))
         x_max = float(np.max(pts[:, 0]))
         y_min = float(np.min(pts[:, 1]))
         y_max = float(np.max(pts[:, 1]))
-        return [x_min, x_max], [y_min, y_max]
+        pad = float(max(incoming_ray_length_m, 0.0))
+        return [x_min - pad, x_max + pad], [y_min - pad, y_max + pad]
 
-    def _add_flat_grid_facet_center_rays(
+    @staticmethod
+    def _nan_break_segment_polylines(a: np.ndarray, b: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Join segment pairs ``(a[k], b[k])`` into one line with NaN breaks for Plotly."""
+        k = int(a.shape[0])
+        if k == 0:
+            return (
+                np.zeros(0, dtype=float),
+                np.zeros(0, dtype=float),
+                np.zeros(0, dtype=float),
+            )
+        x = np.empty(k * 3, dtype=float)
+        y = np.empty(k * 3, dtype=float)
+        z = np.empty(k * 3, dtype=float)
+        x[0::3] = a[:, 0]
+        x[1::3] = b[:, 0]
+        x[2::3] = np.nan
+        y[0::3] = a[:, 1]
+        y[1::3] = b[:, 1]
+        y[2::3] = np.nan
+        z[0::3] = a[:, 2]
+        z[1::3] = b[:, 2]
+        z[2::3] = np.nan
+        return x, y, z
+
+    @staticmethod
+    def _subsample_flat_indices(indices: np.ndarray, max_count: int) -> np.ndarray:
+        """Keep at most ``max_count`` entries from sorted 1D ``indices`` (deterministic stride)."""
+        n = int(indices.size)
+        if max_count <= 0 or n <= max_count:
+            return indices
+        step = int(np.ceil(n / max_count))
+        return indices[::step]
+
+    def _add_simulation_ray_segments(
         self,
         fig: go.Figure,
-        grid: AltAzFlatMirrorGrid,
-        sun_direction: np.ndarray,
+        mirror_result: MirrorResult,
         *,
-        incoming_ray_length_m: float,
-        reflected_stub_m: float = 4.0,
+        assembly_index: int,
+        max_rays_per_assembly: int,
         incoming_legend: bool,
         reflected_legend: bool,
     ) -> tuple[bool, bool]:
         """
-        One incoming + one reflected segment per facet, through the facet center (parallel sun).
+        Draw incoming and reflected segments from the same ray bundle used in ``HotboxSimulation.run``.
 
-        Returns ``(drew_any_incoming, drew_any_reflected)`` for legend bookkeeping upstream.
+        Only rays counted as intercepted / delivered after shadowing and outgoing occlusion are
+        drawn (``mirror_hit_mask`` / ``absorber_hit_mask``).
         """
-        d = normalize(np.asarray(sun_direction, dtype=float).reshape(1, 3))[0]
-        c_w, n_w, _, _ = grid._world_facets()
-        na = self.absorber.normal.reshape(3)
-        ca = self.absorber.center.reshape(3)
+        mr = mirror_result
+        inc_idx = self._subsample_flat_indices(np.flatnonzero(mr.mirror_hit_mask), max_rays_per_assembly)
+        abs_idx = self._subsample_flat_indices(np.flatnonzero(mr.absorber_hit_mask), max_rays_per_assembly)
 
-        inc_leg = incoming_legend
-        ref_leg = reflected_legend
+        color = _SCENE_MIRROR_ASSEMBLY_COLORS[assembly_index % len(_SCENE_MIRROR_ASSEMBLY_COLORS)]
+
         any_incoming = False
         any_reflected = False
 
-        for f in range(c_w.shape[0]):
-            c = c_w[f]
-            n = n_w[f]
-            dn = float(np.dot(d, n))
-            if abs(dn) < 1e-10:
-                continue
-            if dn > 0.0:
-                continue
-
-            p_hit = c
-            p_in0 = c - incoming_ray_length_m * d
+        if inc_idx.size > 0:
+            o0 = mr.incoming.origins[inc_idx]
+            h0 = mr.mirror_hit_points[inc_idx]
+            xi, yi, zi = self._nan_break_segment_polylines(o0, h0)
             fig.add_trace(
                 go.Scatter3d(
-                    x=[p_in0[0], p_hit[0]],
-                    y=[p_in0[1], p_hit[1]],
-                    z=[p_in0[2], p_hit[2]],
+                    x=xi,
+                    y=yi,
+                    z=zi,
                     mode="lines",
-                    line={"color": "lightskyblue", "width": 1.5},
-                    opacity=0.45,
-                    name="Incoming (facet centers)",
-                    showlegend=inc_leg,
+                    line={"color": color, "width": 1.25},
+                    opacity=0.4,
+                    name="Incoming (simulation)",
+                    showlegend=incoming_legend,
                 )
             )
-            inc_leg = False
             any_incoming = True
 
-            r = d - 2.0 * dn * n
-            rn = float(np.linalg.norm(r))
-            if rn < 1e-12:
-                continue
-            r /= rn
-            denom = float(np.dot(r, na))
-            if abs(denom) < 1e-12:
-                p_out = c + reflected_stub_m * r
-            else:
-                t = float(np.dot(ca - c, na) / denom)
-                if t > 1e-6:
-                    p_out = c + t * r
-                else:
-                    p_out = c + reflected_stub_m * r
+        if abs_idx.size > 0:
+            r0 = mr.reflected.origins[abs_idx]
+            a0 = mr.absorber_hit_points[abs_idx]
+            xr, yr, zr = self._nan_break_segment_polylines(r0, a0)
             fig.add_trace(
                 go.Scatter3d(
-                    x=[c[0], p_out[0]],
-                    y=[c[1], p_out[1]],
-                    z=[c[2], p_out[2]],
+                    x=xr,
+                    y=yr,
+                    z=zr,
                     mode="lines",
-                    line={"color": "tomato", "width": 1.5},
-                    opacity=0.5,
-                    name="Reflected (facet centers)",
-                    showlegend=ref_leg,
+                    line={"color": color, "width": 1.25},
+                    opacity=0.45,
+                    name="Reflected (simulation)",
+                    showlegend=reflected_legend,
                 )
             )
-            ref_leg = False
             any_reflected = True
 
         return any_incoming, any_reflected
@@ -148,8 +181,10 @@ class SceneVisualizer:
         result: SimulationResult,
         incoming_ray_length_m: float = 2.0,
         scene_when_local: datetime | None = None,
+        *,
+        max_simulation_rays_per_assembly: int = 4000,
     ) -> go.Figure:
-        x_range, y_range = self._scene_xy_limits(incoming_ray_length_m)
+        x_range, y_range = self._scene_xy_limits(incoming_ray_length_m, ray_result=result)
         scene_title = "Hot-box optical scene"
         if scene_when_local is not None:
             ts = scene_when_local.strftime("%Y-%m-%d %H:%M")
@@ -163,13 +198,12 @@ class SceneVisualizer:
 
         incoming_added = False
         reflected_added = False
-        for mirror_result in result.per_mirror:
-            mir = mirror_result.mirror
-            inc_here, ref_here = self._add_flat_grid_facet_center_rays(
+        for assembly_index, mirror_result in enumerate(result.per_mirror):
+            inc_here, ref_here = self._add_simulation_ray_segments(
                 fig,
-                mir,
-                result.sun_direction,
-                incoming_ray_length_m=incoming_ray_length_m,
+                mirror_result,
+                assembly_index=assembly_index,
+                max_rays_per_assembly=max_simulation_rays_per_assembly,
                 incoming_legend=not incoming_added,
                 reflected_legend=not reflected_added,
             )
@@ -177,9 +211,9 @@ class SceneVisualizer:
             reflected_added = reflected_added or ref_here
 
         # Square figure + autosize=False avoids non-uniform div stretching in the page.
-        # aspectmode="auto" (Plotly default): like "data" (proportional axis box) unless one
-        # axis span is >4× the other two, then "cube" — avoids an ultra-thin vertical slab when
-        # x/y footprint ≫ height (which reads as "flattened" with aspectmode="data" alone).
+        # aspectmode="data": one data unit is the same length on screen along x, y, and z (physical
+        # proportions). "auto" can inflate the short axis to fill a cube when x/y span is large,
+        # which reads as z being stretched vertically relative to x and y.
         fig.update_layout(
             title=scene_title,
             autosize=False,
@@ -189,7 +223,7 @@ class SceneVisualizer:
             scene={
                 "xaxis_title": "x (east) [m]",
                 "yaxis_title": "y (north) [m]",
-                "aspectmode": "auto",
+                "aspectmode": "data",
                 "camera": {
                     "projection": {"type": "orthographic"},
                     "eye": {"x": 1.35, "y": -1.35, "z": 0.9},

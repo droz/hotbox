@@ -74,63 +74,86 @@ class HotboxSimulation:
         *,
         samples_u: int | None = None,
         samples_v: int | None = None,
+        upstream_distance_m: float | None = None,
+        bypass_mirror_occlusion: bool = False,
         verbose: bool = False,
     ) -> SimulationResult:
+        """Raytrace all mirrors for ``when_utc``.
+
+        When ``bypass_mirror_occlusion`` is true, incoming mutual shadowing and outgoing
+        mirror-on-absorber occlusion are skipped (facet and absorber intersections unchanged).
+        """
         su = self.samples_u if samples_u is None else samples_u
         sv = self.samples_v if samples_v is None else samples_v
         t_run = time.perf_counter()
         sun_dir = self.sun.ray_direction(when_utc)
         per_mirror: list[MirrorResult] = []
         if verbose:
+            up_s = (
+                f" upstream_m={upstream_distance_m:g}"
+                if upstream_distance_m is not None
+                else ""
+            )
             print(
-                f"[sim] run start — mirrors={len(self.mirrors)} samples_u/v={su}×{sv} "
+                f"[sim] run start — mirrors={len(self.mirrors)} samples_u/v={su}×{sv}{up_s} "
+                f"{' bypass_mirror_occlusion' if bypass_mirror_occlusion else ''} "
                 f"utc={when_utc.isoformat()}",
                 flush=True,
             )
         for i, mirror in enumerate(self.mirrors):
             t0 = time.perf_counter()
-            incoming = mirror.incoming_ray_bundle_facet_grid(
-                when_utc=when_utc,
-                samples_u=su,
-                samples_v=sv,
-            )
+            if upstream_distance_m is not None:
+                incoming = mirror.incoming_ray_bundle_facet_grid(
+                    when_utc=when_utc,
+                    samples_u=su,
+                    samples_v=sv,
+                    upstream_distance_m=float(upstream_distance_m),
+                )
+            else:
+                incoming = mirror.incoming_ray_bundle_facet_grid(
+                    when_utc=when_utc,
+                    samples_u=su,
+                    samples_v=sv,
+                )
             t1 = time.perf_counter()
             mirror_hit_mask, mirror_hit_points, reflected = mirror.intersect_and_reflect(incoming)
             t2 = time.perf_counter()
 
-            # Mutual shadowing: another mirror patch closer to the sun along the same sun ray
-            # blocks this hit (incoming path intersects the other mirror first).
-            o = incoming.origins
-            d = incoming.directions
-            t_i = np.sum((mirror_hit_points - o) * d, axis=1)
-            shadowed = np.zeros_like(mirror_hit_mask, dtype=bool)
-            for j, other in enumerate(self.mirrors):
-                if j == i:
-                    continue
-                t_j = other.incoming_first_patch_hit_t(o, d)
-                shadowed |= mirror_hit_mask & np.isfinite(t_j) & (t_j + _SHADOW_TOL_M < t_i)
-            mirror_hit_mask = mirror_hit_mask & ~shadowed
-            reflected.powers_w[shadowed] = 0.0
+            if not bypass_mirror_occlusion:
+                # Mutual shadowing: another mirror patch closer to the sun along the same sun ray
+                # blocks this hit (incoming path intersects the other mirror first).
+                o = incoming.origins
+                d = incoming.directions
+                t_i = np.sum((mirror_hit_points - o) * d, axis=1)
+                shadowed = np.zeros_like(mirror_hit_mask, dtype=bool)
+                for j, other in enumerate(self.mirrors):
+                    if j == i:
+                        continue
+                    t_j = other.incoming_first_patch_hit_t(o, d)
+                    shadowed |= mirror_hit_mask & np.isfinite(t_j) & (t_j + _SHADOW_TOL_M < t_i)
+                mirror_hit_mask = mirror_hit_mask & ~shadowed
+                reflected.powers_w[shadowed] = 0.0
             t3 = time.perf_counter()
 
             absorber_hit_mask, absorber_hit_points = self.absorber.intersect(reflected)
             absorber_hit_mask &= reflected.powers_w > 0.0
-            # Outgoing-path occlusion: reflected rays that would hit the absorber can still be
-            # blocked by another mirror patch first.
-            t_abs = np.sum((absorber_hit_points - reflected.origins) * reflected.directions, axis=1)
-            blocked_out = np.zeros_like(absorber_hit_mask, dtype=bool)
-            for j, other in enumerate(self.mirrors):
-                if j == i:
-                    continue
-                t_j_out = other.incoming_first_patch_hit_t(reflected.origins, reflected.directions)
-                blocked_out |= (
-                    absorber_hit_mask
-                    & np.isfinite(t_j_out)
-                    & (t_j_out > 1e-8)
-                    & (t_j_out + _SHADOW_TOL_M < t_abs)
-                )
-            absorber_hit_mask &= ~blocked_out
-            reflected.powers_w[blocked_out] = 0.0
+            if not bypass_mirror_occlusion:
+                # Outgoing-path occlusion: reflected rays that would hit the absorber can still be
+                # blocked by another mirror patch first.
+                t_abs = np.sum((absorber_hit_points - reflected.origins) * reflected.directions, axis=1)
+                blocked_out = np.zeros_like(absorber_hit_mask, dtype=bool)
+                for j, other in enumerate(self.mirrors):
+                    if j == i:
+                        continue
+                    t_j_out = other.incoming_first_patch_hit_t(reflected.origins, reflected.directions)
+                    blocked_out |= (
+                        absorber_hit_mask
+                        & np.isfinite(t_j_out)
+                        & (t_j_out > 1e-8)
+                        & (t_j_out + _SHADOW_TOL_M < t_abs)
+                    )
+                absorber_hit_mask &= ~blocked_out
+                reflected.powers_w[blocked_out] = 0.0
             t4 = time.perf_counter()
             per_mirror.append(
                 MirrorResult(
