@@ -1,4 +1,4 @@
-"""Geometry tests: mount R_z @ R_x and lattice plane / facet normals built from vectors."""
+"""Geometry tests: mount R_z @ R_x, assembly-frame spherical facet layout, bisector mount tracking."""
 
 from __future__ import annotations
 
@@ -7,12 +7,11 @@ from datetime import datetime, timezone
 
 import numpy as np
 
+from src.controller import bisector_normal_world
 from src.flat_mirror_grid import (
     AltAzFlatMirrorGrid,
-    coarse_mount_angles_align_lattice_normal,
     grid_mount_rotation_matrix,
-    unit_facet_normal_toward_point,
-    unit_mirror_normal_at_point,
+    mount_az_el_align_body_normal_to_world,
 )
 from src.geometry import normalize
 from src.sun import SunModel
@@ -30,24 +29,24 @@ def _R_z(az_deg: float) -> np.ndarray:
     return np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]], dtype=float)
 
 
-class TestUnitMirrorNormalAtPoint(unittest.TestCase):
-    def test_pivot_normal_reflects_sun_toward_absorber(self) -> None:
+class TestBisectorNormalWorld(unittest.TestCase):
+    def test_pivot_normal_reflects_sun_toward_target(self) -> None:
         d_sun = normalize(np.array([[0.3, -0.2, -0.9]], dtype=float))[0]
         m = np.array([1.0, 0.5, 0.3], dtype=float)
         a = np.array([0.0, 0.0, 1.2], dtype=float)
-        n = unit_mirror_normal_at_point(d_sun, m, a)
+        n = bisector_normal_world(d_sun, m, a)
         dn = float(np.dot(d_sun, n))
         refl = d_sun - 2.0 * dn * n
         want = normalize((a - m).reshape(1, 3))[0]
         np.testing.assert_allclose(refl, want, atol=1e-9, rtol=0.0)
 
 
-class TestCoarseMountAnglesAlignLatticeNormal(unittest.TestCase):
+class TestMountAzElAlignBodyNormalToWorld(unittest.TestCase):
     def test_recovers_known_rotation(self) -> None:
         n0 = normalize(np.array([[0.15, -0.72, 0.67]], dtype=float))[0]
         az_t, el_t = 118.0, 41.0
         n_target = grid_mount_rotation_matrix(az_t, el_t) @ n0
-        az, el = coarse_mount_angles_align_lattice_normal(n0, n_target)
+        az, el = mount_az_el_align_body_normal_to_world(n0, n_target)
         n_got = grid_mount_rotation_matrix(az, el) @ n0
         np.testing.assert_allclose(n_got, n_target, atol=0.02, rtol=0.0)
 
@@ -93,46 +92,47 @@ class TestGridMountRotationMatrix(unittest.TestCase):
         self.assertGreater(np.linalg.norm(wrong - right), 0.05)
 
 
-class TestAltAzFlatMirrorGridBodyLayout(unittest.TestCase):
-    def _make_grid(self) -> AltAzFlatMirrorGrid:
-        sun = SunModel(latitude_deg=40.7864, longitude_deg=-119.2065, altitude_m=1190.0)
-        when = datetime(2026, 6, 21, 19, 0, 0, tzinfo=timezone.utc)
+class TestAltAzFlatMirrorGridSphericalLayout(unittest.TestCase):
+    def _sun(self) -> SunModel:
+        return SunModel(latitude_deg=40.7864, longitude_deg=-119.2065, altitude_m=1190.0)
+
+    def _make_grid(self, *, z_off: float = -3.0, nx: int = 5, ny: int = 5) -> AltAzFlatMirrorGrid:
         return AltAzFlatMirrorGrid(
             mount_world=np.array([2.0, -1.5, 0.9], dtype=float),
-            design_when_utc=when,
-            absorber_center=np.array([0.0, 0.0, 1.0], dtype=float),
-            grid_nx=5,
-            grid_ny=5,
+            sphere_center_offset_m=z_off,
+            grid_nx=nx,
+            grid_ny=ny,
             pitch_m=0.2,
             tile_half_m=0.08,
-            sun=sun,
+            sun=self._sun(),
         )
 
-    def test_facet_centers_orthogonal_to_lattice_normal(self) -> None:
+    def test_centers_lie_in_local_xy_plane(self) -> None:
+        g = self._make_grid()
+        np.testing.assert_allclose(g._centers_local[:, 2], 0.0, atol=1e-14)
+
+    def test_local_to_mount_body_is_identity(self) -> None:
+        g = self._make_grid()
+        np.testing.assert_allclose(g._R_local_to_mount_body, np.eye(3), atol=1e-14)
+
+    def test_facet_centers_orthogonal_to_lattice_normal_in_mount_body(self) -> None:
         g = self._make_grid()
         n_pi = g._lattice_plane_normal_body
-        for c in g._c_body:
+        for c in g._centers_local:
             self.assertAlmostEqual(float(np.dot(c, n_pi)), 0.0, places=10)
 
-    def test_lattice_plane_normal_matches_bisector_at_pivot(self) -> None:
+    def test_world_positions_at_zero_mount(self) -> None:
         g = self._make_grid()
-        d_sun = g.sun.ray_direction(g.design_when_utc)
+        g.azimuth_deg = 0.0
+        g.elevation_deg = 0.0
+        c_w, _, _, _ = g._world_facets()
         m = g.mount_world.reshape(3)
-        a = g.absorber_center.reshape(3)
-        want = unit_mirror_normal_at_point(d_sun, m, a)
-        np.testing.assert_allclose(g._lattice_plane_normal_body, want, atol=1e-12)
+        np.testing.assert_allclose(c_w, m.reshape(1, 3) + g._centers_local, atol=1e-12)
 
-    def test_lattice_plane_as_single_mirror_reflects_at_pivot(self) -> None:
-        """If the whole grid were one flat mirror with normal n_π at M, design sun aims at A."""
-        g = self._make_grid()
-        d_sun = g.sun.ray_direction(g.design_when_utc)
-        m = g.mount_world.reshape(3)
-        a = g.absorber_center.reshape(3)
-        n_pi = g._lattice_plane_normal_body
-        dn = float(np.dot(d_sun, n_pi))
-        refl = d_sun - 2.0 * dn * n_pi
-        want = normalize((a - m).reshape(1, 3))[0]
-        np.testing.assert_allclose(refl, want, atol=1e-9, rtol=0.0)
+    def test_rectangular_grid_counts_and_center_facet(self) -> None:
+        g = self._make_grid(nx=5, ny=3)
+        self.assertEqual(g._centers_local.shape[0], 15)
+        np.testing.assert_allclose(g._centers_local[g._center_facet], np.zeros(3), atol=1e-12)
 
     def test_incoming_ray_bundle_extents_are_finite(self) -> None:
         g = self._make_grid()
@@ -145,63 +145,19 @@ class TestAltAzFlatMirrorGridBodyLayout(unittest.TestCase):
         self.assertGreater(hu, 0.0)
         self.assertGreater(hv, 0.0)
 
-    def test_world_positions_at_zero_mount_match_mount_plus_body(self) -> None:
-        g = self._make_grid()
-        g.azimuth_deg = 0.0
-        g.elevation_deg = 0.0
-        r = grid_mount_rotation_matrix(0.0, 0.0)
-        np.testing.assert_allclose(r, np.eye(3), atol=1e-15)
-        c_w, _, _, _ = g._world_facets()
-        m = g.mount_world.reshape(3)
-        np.testing.assert_allclose(c_w, m.reshape(1, 3) + g._c_body, atol=1e-12)
-
-    def test_each_facet_normal_reflects_design_sun_toward_absorber(self) -> None:
-        g = self._make_grid()
-        d_sun = g.sun.ray_direction(g.design_when_utc)
-        a = g.absorber_center.reshape(3)
-        g.azimuth_deg = 0.0
-        g.elevation_deg = 0.0
-        c_w, n_w, _, _ = g._world_facets()
-        for f in range(c_w.shape[0]):
-            c = c_w[f]
-            n = n_w[f]
-            dn = float(np.dot(d_sun, n))
-            refl = d_sun - 2.0 * dn * n
-            want = normalize((a - c).reshape(1, 3))[0]
-            np.testing.assert_allclose(refl, want, atol=1e-6, rtol=0.0)
-
-    def test_rectangular_grid_counts_and_center_facet(self) -> None:
-        """Non-square nx×ny (e.g. 5×3): facet count and pivot-centered tile."""
-        sun = SunModel(latitude_deg=40.7864, longitude_deg=-119.2065, altitude_m=1190.0)
-        when = datetime(2026, 6, 21, 19, 0, 0, tzinfo=timezone.utc)
-        g = AltAzFlatMirrorGrid(
-            mount_world=np.array([2.0, -1.5, 0.9], dtype=float),
-            design_when_utc=when,
-            absorber_center=np.array([0.0, 0.0, 1.0], dtype=float),
-            grid_nx=5,
-            grid_ny=3,
-            pitch_m=0.2,
-            tile_half_m=0.08,
-            sun=sun,
-        )
-        self.assertEqual(g._c_body.shape[0], 15)
-        np.testing.assert_allclose(g._c_body[g._center_facet], np.zeros(3), atol=1e-12)
-
 
 class TestFacetGridIncomingBundle(unittest.TestCase):
     def test_total_power_matches_projected_area_times_dni(self) -> None:
-        """Facet-grid ray powers sum to DNI × cos(θ_i) × facet area (single 1×1 tile)."""
         sun = SunModel(latitude_deg=40.7864, longitude_deg=-119.2065, altitude_m=1190.0)
         when = datetime(2026, 6, 21, 19, 0, 0, tzinfo=timezone.utc)
         g = AltAzFlatMirrorGrid(
             mount_world=np.array([2.0, -1.5, 0.9], dtype=float),
-            design_when_utc=when,
-            absorber_center=np.array([0.0, 0.0, 1.0], dtype=float),
             grid_nx=1,
             grid_ny=1,
             pitch_m=0.2,
             tile_half_m=0.08,
             sun=sun,
+            sphere_center_offset_m=4.0,
         )
         g.azimuth_deg = 0.0
         g.elevation_deg = 0.0
@@ -218,44 +174,46 @@ class TestFacetGridIncomingBundle(unittest.TestCase):
         np.testing.assert_allclose(bundle.total_power_w, want, rtol=1e-10, atol=1e-9)
 
 
-class TestUnitFacetNormalTowardPoint(unittest.TestCase):
-    def test_normal_is_radial_from_sphere_center_up_to_incidence_sign(self) -> None:
-        d_in = normalize(np.array([[0.2, -0.1, -0.95]], dtype=float))[0]
-        p = np.array([3.0, 1.0, 0.5], dtype=float)
-        o = np.array([0.0, 0.0, 1.0], dtype=float)
-        n = unit_facet_normal_toward_point(p, o, d_in)
-        self.assertLess(float(np.dot(d_in, n)), 0.0)
-        radial = p - o
-        radial /= max(float(np.linalg.norm(radial)), 1e-15)
-        self.assertAlmostEqual(abs(float(np.dot(n, radial))), 1.0, places=6)
-
-
-class TestAltAzFlatMirrorGridSpherical(unittest.TestCase):
-    def test_facet_normals_aim_at_common_focus(self) -> None:
-        sun = SunModel(latitude_deg=40.7864, longitude_deg=-119.2065, altitude_m=1190.0)
-        when = datetime(2026, 6, 21, 19, 0, 0, tzinfo=timezone.utc)
-        focus = np.array([0.0, 6.0, 1.0], dtype=float)
+class TestAssemblyFacetNormalsTowardSphere(unittest.TestCase):
+    def test_local_normals_align_normalize_o_minus_p(self) -> None:
+        z_off = -2.5
         g = AltAzFlatMirrorGrid(
-            mount_world=np.array([2.0, -1.5, 0.9], dtype=float),
-            design_when_utc=when,
-            absorber_center=np.array([0.0, 0.0, 1.0], dtype=float),
+            mount_world=np.array([0.0, 0.0, 1.0], dtype=float),
+            sphere_center_offset_m=z_off,
+            grid_nx=3,
+            grid_ny=3,
+            pitch_m=0.1,
+            tile_half_m=0.04,
+            sun=SunModel(latitude_deg=40.0, longitude_deg=-119.0, altitude_m=1000.0),
+        )
+        o = np.array([0.0, 0.0, z_off], dtype=float)
+        for i in range(g._centers_local.shape[0]):
+            p = g._centers_local[i]
+            want = normalize((o - p).reshape(1, 3))[0]
+            np.testing.assert_allclose(g._normals_local[i], want, atol=1e-9, rtol=0.0)
+
+
+class TestWorldFacetNormalsTowardSphere(unittest.TestCase):
+    def test_world_normals_match_assembly_at_zero_mount(self) -> None:
+        sun = SunModel(latitude_deg=40.7864, longitude_deg=-119.2065, altitude_m=1190.0)
+        z_off = -3.0
+        m = np.array([2.0, -1.5, 0.9], dtype=float)
+        g = AltAzFlatMirrorGrid(
+            mount_world=m,
+            sphere_center_offset_m=z_off,
             grid_nx=3,
             grid_ny=3,
             pitch_m=0.2,
             tile_half_m=0.08,
             sun=sun,
-            facet_design="spherical",
-            spherical_target_world=focus,
         )
         g.azimuth_deg = 0.0
         g.elevation_deg = 0.0
+        o_w = m + np.array([0.0, 0.0, z_off], dtype=float)
         c_w, n_w, _, _ = g._world_facets()
         for f in range(c_w.shape[0]):
-            c = c_w[f]
-            n = n_w[f]
-            radial = c - focus
-            radial /= max(float(np.linalg.norm(radial)), 1e-15)
-            self.assertGreater(abs(float(np.dot(n, radial))), 0.999)
+            want = normalize((o_w - c_w[f]).reshape(1, 3))[0]
+            np.testing.assert_allclose(n_w[f], want, atol=1e-8, rtol=0.0)
 
 
 if __name__ == "__main__":

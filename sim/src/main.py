@@ -12,7 +12,7 @@ from pvlib.location import Location
 
 from src.absorber import SolarAbsorber
 from src.controller import mirror_orientations_for_time
-from src.flat_mirror_grid import AltAzFlatMirrorGrid, FacetDesignStrategy
+from src.flat_mirror_grid import AltAzFlatMirrorGrid, grid_mount_rotation_matrix
 from src.simulation import HotboxSimulation, SimulationResult
 from src.sun import SunModel
 from src.visualizer import SceneVisualizer, build_day_delivered_power_figure
@@ -24,12 +24,9 @@ MIRROR_TILE_SIDE_M = 0.254
 MIRROR_GRID_PITCH_M = 0.254 + 0.01  # center-to-center spacing [m]
 MIRROR_ASSEMBLY_COUNT = 3
 MIRROR_LOCATION_RING_RADIUS_M = 3.0  # mount pivot offset from absorber along absorber normal
-# Default **signed** distance along horizontal absorber normal ``fw_xy`` (same unit vector as
-# from absorber to mirror ring) to the spherical **center of curvature** ``O``: ``O = a + dist * fw_xy``.
-# Negative = ``O`` on the **opposite** side of the absorber from the mirrors (typical converging
-# cap); positive = ``O`` past the absorber toward the mirror field (often divergent for sun from
-# the opposite hemisphere).
-MIRROR_SPHERICAL_FOCUS_DISTANCE_FROM_ABSORBER_M = -2.0 * MIRROR_LOCATION_RING_RADIUS_M
+# Mirror spherical-cant radius / assembly-frame sphere-center z offset [m].
+#MIRROR_RADIUS_OF_CURVATURE_M = 2.0 * MIRROR_LOCATION_RING_RADIUS_M
+MIRROR_RADIUS_OF_CURVATURE_M = 6.5
 MIRROR_ASSEMBLY_SPACING_M = 1.0  # fixed center-to-center spacing between assemblies [m]
 MIRROR_GRID_MOUNT_HEIGHT_M = 0.85  # mount pivot z [m]; facet centers lie on the design tilted plane through the pivot
 
@@ -62,9 +59,6 @@ DAY_CURVE_MONTH = [8, 9]
 DAY_CURVE_DAY = [30, 7]
 DAY_CURVE_TZ = ZoneInfo("America/Los_Angeles")
 DAY_CURVE_STEP_MINUTES = 20
-
-# Facet tilts are chosen so each center ray reflects to the absorber at this instant (mount at 0,0).
-MIRROR_GRID_DESIGN_WHEN = datetime(2026, 8, 31, 14, 0, 0, tzinfo=DAY_CURVE_TZ)
 
 # Local wall time for the 3D scene / absorber spot figures and printed snapshot
 # (mount solve, mirror angles, ray bundle). Independent of DAY_CURVE_* curve list.
@@ -244,9 +238,8 @@ def simulate_delivered_power_over_times(
 
 
 def build_default_simulation(
-    mirror_design: FacetDesignStrategy = "optimized",
     *,
-    spherical_focus_distance_from_absorber_m: float | None = None,
+    sphere_center_offset_m: float | None = None,
 ) -> HotboxSimulation:
     sun = SunModel(
         latitude_deg=SITE_LATITUDE_DEG,
@@ -269,15 +262,11 @@ def build_default_simulation(
     base_mount = a + MIRROR_LOCATION_RING_RADIUS_M * fw_xy
     tile_half_m = 0.5 * MIRROR_TILE_SIDE_M
     pitch_m = MIRROR_GRID_PITCH_M
-    if mirror_design == "spherical":
-        dist_m = (
-            spherical_focus_distance_from_absorber_m
-            if spherical_focus_distance_from_absorber_m is not None
-            else MIRROR_SPHERICAL_FOCUS_DISTANCE_FROM_ABSORBER_M
-        )
-        spherical_target_world = (a + dist_m * fw_xy).astype(float)
-    else:
-        spherical_target_world = None
+    dist_m = (
+        sphere_center_offset_m
+        if sphere_center_offset_m is not None
+        else MIRROR_RADIUS_OF_CURVATURE_M
+    )
     grids: list[AltAzFlatMirrorGrid] = []
     for i in range(MIRROR_ASSEMBLY_COUNT):
         offset = (i - 0.5 * (MIRROR_ASSEMBLY_COUNT - 1)) * MIRROR_ASSEMBLY_SPACING_M
@@ -292,15 +281,12 @@ def build_default_simulation(
         grids.append(
             AltAzFlatMirrorGrid(
                 mount_world=mount_world,
-                design_when_utc=MIRROR_GRID_DESIGN_WHEN,
-                absorber_center=a.copy(),
                 grid_nx=MIRROR_GRID_NX,
                 grid_ny=MIRROR_GRID_NY,
                 pitch_m=pitch_m,
                 tile_half_m=tile_half_m,
                 sun=sun,
-                facet_design=mirror_design,
-                spherical_target_world=spherical_target_world,
+                sphere_center_offset_m=float(dist_m),
             )
         )
 
@@ -316,39 +302,27 @@ def build_default_simulation(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Hotbox heliostat-style ray simulation.")
     parser.add_argument(
-        "--mirror-design",
-        choices=("optimized", "spherical"),
-        default="optimized",
-        help=(
-            'Facet canting: "optimized" — each facet specular toward the absorber at the design '
-            'instant; "spherical" — facet normals are outward radials from a shared sphere center '
-            "(see --spherical-focus-distance-m)."
-        ),
-    )
-    parser.add_argument(
-        "--spherical-focus-distance-m",
+        "--sphere-center-offset-m",
         type=float,
         default=None,
         metavar="M",
         help=(
-            "Signed distance [m] from absorber center to sphere center of curvature along the "
-            "horizontal absorber normal (same axis as mirror ring offset): **positive** = toward "
-            "the mirror field, **negative** = opposite side of the absorber. "
-            "Default for spherical design: −2× mirror ring radius. Ignored for optimized design."
+            "Sphere center z in mirror assembly frame [m]: sphere at (0, 0, z) with facet grid in z = 0. "
+            f"Default: {MIRROR_RADIUS_OF_CURVATURE_M:.4g} m (+2× mirror ring radius)."
         ),
     )
     args = parser.parse_args()
-    mirror_design: FacetDesignStrategy = args.mirror_design
     with timed_step("Build default simulation (geometry + mirror grids)"):
-        sim = build_default_simulation(
-            mirror_design,
-            spherical_focus_distance_from_absorber_m=args.spherical_focus_distance_m,
+        sim = build_default_simulation(sphere_center_offset_m=args.sphere_center_offset_m)
+    print(f"Mirror assemblies: {len(sim.mirrors)} (facet normals toward assembly-frame sphere)")
+    if sim.mirrors:
+        g0 = sim.mirrors[0]
+        r0 = grid_mount_rotation_matrix(g0.azimuth_deg, g0.elevation_deg)
+        o_w = g0.mount_world + r0 @ np.array([0.0, 0.0, float(g0.sphere_center_offset_m)], dtype=float)
+        print(
+            f"Sphere center: assembly (0, 0, {g0.sphere_center_offset_m:.4f}) m; "
+            f"world xyz at current mount {o_w[0]:.4f}, {o_w[1]:.4f}, {o_w[2]:.4f} m"
         )
-    print(f"Mirror assemblies: {len(sim.mirrors)} (design={mirror_design})")
-    if mirror_design == "spherical" and sim.mirrors:
-        o = sim.mirrors[0].spherical_target_world
-        if o is not None:
-            print(f"Spherical center of curvature (world xyz): {o[0]:.4f}, {o[1]:.4f}, {o[2]:.4f} m")
     day_specs = day_curve_month_day_pairs(DAY_CURVE_MONTH, DAY_CURVE_DAY)
     when = SCENE_VIS_WHEN
 
@@ -368,7 +342,7 @@ def main() -> None:
     for idx, (az, tilt) in enumerate(orientations):
         print(
             f"Mirror {idx} mount: azimuth={az:.2f} deg, "
-            f"lattice tilt={tilt:.2f} deg (0=vertical plane, 90=horizontal toward zenith)"
+            f"pivot facet tilt={tilt:.2f} deg (0=vertical plane, 90=horizontal toward zenith)"
         )
     for idx, mr in enumerate(result.per_mirror):
         print(

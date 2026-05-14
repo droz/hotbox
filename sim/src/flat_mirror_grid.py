@@ -1,33 +1,42 @@
+"""
+Frames (all right-handed, lengths in meters):
+
+- **World** ``W``: ENU fixed to the site — +x east, +y north, +z up.
+- **Assembly / mount body** ``B``: rigid with the mirror. At ``(azimuth_deg, elevation_deg) = (0, 0)``,
+  ``B`` is aligned with ``W`` (same basis vectors). The mount pivot is ``mount_world`` in ``W``.
+- **Facet data** is stored in ``B`` at identity mount: ``_centers_local``, ``_normals_local``, … are
+  assembly coordinates (flat grid in ``xy``, ``z = 0``; normals from design).
+
+**World placement** of a body point ``p_B``:
+
+    ``p_W = mount_world + R_mount(az, el) @ p_B``
+
+where ``R_mount`` is **body → world** (``grid_mount_rotation_matrix``). Facet world data uses
+``R_chain = R_mount @ R_{B←L}`` with ``R_{B←L} = local_to_mount_body_rotation`` (identity for the
+current spherical layout).
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Literal
 
 import numpy as np
 
 from src.geometry import normalize, orthonormal_basis_from_direction
 from src.mirror_grid_design import (
-    design_optimized_facet_grid,
+    FacetGridInLocalFrame,
     design_spherical_facet_grid,
-    unit_facet_normal_toward_point,
-    unit_mirror_normal_at_point,
 )
 from src.rays import RayBundle
 from src.sun import SunModel
 
-# Re-export for tests and callers that imported optics from this module.
 __all__ = (
     "AltAzFlatMirrorGrid",
-    "FacetDesignStrategy",
-    "coarse_mount_angles_align_lattice_normal",
+    "FacetGridInLocalFrame",
+    "mount_az_el_align_body_normal_to_world",
     "grid_mount_rotation_matrix",
-    "unit_facet_normal_toward_point",
-    "unit_mirror_normal_at_point",
 )
-
-
-FacetDesignStrategy = Literal["optimized", "spherical"]
 
 
 def _normalize_mount_az_el(az_deg: float, el_deg: float) -> tuple[float, float]:
@@ -60,105 +69,155 @@ def grid_mount_rotation_matrix(azimuth_deg: float, elevation_deg: float) -> np.n
     return r_z @ r_x
 
 
-def coarse_mount_angles_align_lattice_normal(
+def mount_az_el_align_body_normal_to_world(
     lattice_normal_body: np.ndarray,
     lattice_normal_target_world: np.ndarray,
 ) -> tuple[float, float]:
     """
-    Approximate ``(azimuth_deg, elevation_deg)`` so ``R(az,el) @ n_body ≈ n_target`` (both unit).
+    ``(azimuth_deg, elevation_deg)`` so ``R_mount(az,el) @ n_B ≈ n_W`` (both unit).
+
+    Mount is ``R_z(az) @ R_x(el)`` (**body → world**). For a unit ``n_B``, ``R_x(el)`` fixes how
+    ``z`` mixes from ``(n_y, n_z)``; ``R_z(az)`` only rotates ``x,y``, so ``el`` is solved from the
+    scalar constraint ``(R_x n_B)_z = n_{W,z}``, then ``az`` from the ``xy`` heading. No grid search.
     """
     nb = np.asarray(lattice_normal_body, dtype=float).reshape(3)
     nw = np.asarray(lattice_normal_target_world, dtype=float).reshape(3)
     nb = nb / max(float(np.linalg.norm(nb)), 1e-15)
     nw = nw / max(float(np.linalg.norm(nw)), 1e-15)
+    nx, ny, nz = float(nb[0]), float(nb[1]), float(nb[2])
+    tx, ty, tz = float(nw[0]), float(nw[1]), float(nw[2])
 
-    def sqerr(az: float, el: float) -> float:
-        r = grid_mount_rotation_matrix(az, el)
+    def sqerr(az_deg: float, el_deg: float) -> float:
+        r = grid_mount_rotation_matrix(az_deg, el_deg)
         d = r @ nb - nw
         return float(np.dot(d, d))
 
-    best_az, best_el = 0.0, 45.0
+    def finish(az_deg: float, el_deg: float) -> tuple[float, float]:
+        return _normalize_mount_az_el(float(az_deg), float(el_deg))
+
+    r_yz = float(np.hypot(ny, nz))
+
+    candidates: list[tuple[float, float]] = []
+
+    if r_yz < 1e-12:
+        # n_B is (±1, 0, 0): R_x leaves it unchanged; only R_z spins x,y.
+        vx, vy = nx, 0.0
+        r_xy = float(np.hypot(tx, ty))
+        if r_xy < 1e-12:
+            return finish(0.0, 0.0)
+        az_deg = float(np.rad2deg(np.arctan2(ty, tx) - np.arctan2(vy, vx)))
+        return finish(az_deg, 0.0)
+
+    # (R_x(el) n_B)_z = n_y sin(el) + n_z cos(el) = r_yz * sin(el + phi),  phi = atan2(n_z, n_y)
+    phi = float(np.arctan2(nz, ny))
+    arg = float(np.clip(tz / r_yz, -1.0, 1.0))
+    for delta in (float(np.arcsin(arg)), float(np.pi - np.arcsin(arg))):
+        el_rad = delta - phi
+        el_deg = float(np.rad2deg(el_rad))
+        if not (-90.0 - 1e-9 <= el_deg <= 90.0 + 1e-9):
+            continue
+        el_deg = float(np.clip(el_deg, -90.0, 90.0))
+        elr = np.deg2rad(el_deg)
+        cr, sr = np.cos(elr), np.sin(elr)
+        vx = nx
+        vy = cr * ny - sr * nz
+        vz = sr * ny + cr * nz
+        r_xy_v = float(np.hypot(vx, vy))
+        r_xy_t = float(np.hypot(tx, ty))
+        if r_xy_v < 1e-12 or r_xy_t < 1e-12:
+            if abs(vz - tz) < 1e-6 and r_xy_t < 1e-12:
+                candidates.append((0.0, el_deg))
+            continue
+        az_deg = float(np.rad2deg(np.arctan2(ty, tx) - np.arctan2(vy, vx)))
+        candidates.append((az_deg, el_deg))
+
+    if not candidates:
+        # |t_z| > r_yz: no exact z match; minimize z error over elevation (endpoints + stationary).
+        el_cands = [-90.0, 90.0]
+        el_crit = float(np.rad2deg(np.arctan2(ny, nz)))
+        for shift in (-360.0, 0.0, 360.0):
+            e = el_crit + shift
+            if -90.0 <= e <= 90.0:
+                el_cands.append(e)
+        best_az_f, best_el_f, best_e_f = 0.0, 0.0, 1e30
+        for el_deg in el_cands:
+            elr = np.deg2rad(float(el_deg))
+            cr, sr = np.cos(elr), np.sin(elr)
+            vy = cr * ny - sr * nz
+            vx = nx
+            r_xy_v = float(np.hypot(vx, vy))
+            r_xy_t = float(np.hypot(tx, ty))
+            if r_xy_v < 1e-12:
+                az_deg = 0.0
+            else:
+                az_deg = float(np.rad2deg(np.arctan2(ty, tx) - np.arctan2(vy, vx)))
+            e = sqerr(az_deg, el_deg)
+            if e < best_e_f:
+                best_e_f, best_az_f, best_el_f = e, az_deg, el_deg
+        return finish(best_az_f, best_el_f)
+
+    best_az, best_el = candidates[0]
     best_e = sqerr(best_az, best_el)
+    for az_deg, el_deg in candidates[1:]:
+        e = sqerr(az_deg, el_deg)
+        if e < best_e:
+            best_e, best_az, best_el = e, az_deg, el_deg
 
-    for az in np.linspace(0.0, 359.0, 72, endpoint=True):
-        for el in np.linspace(-90.0, 90.0, 37, endpoint=True):
-            e = sqerr(float(az), float(el))
-            if e < best_e:
-                best_e, best_az, best_el = e, float(az), float(el)
-
-    for span_az, span_el, step in ((14.0, 14.0, 2.0), (5.0, 5.0, 0.5)):
-        for daz in np.arange(-span_az, span_az + 0.001, step):
-            for del_ in np.arange(-span_el, span_el + 0.001, step):
-                az = (best_az + float(daz)) % 360.0
-                el = float(np.clip(best_el + float(del_), -90.0, 90.0))
-                e = sqerr(az, el)
-                if e < best_e:
-                    best_e, best_az, best_el = e, az, el
-
-    return _normalize_mount_az_el(best_az, best_el)
+    return finish(best_az, best_el)
 
 
 @dataclass(slots=True)
 class AltAzFlatMirrorGrid:
     """
-    Rigid ``grid_nx``×``grid_ny`` grid of square flat mirrors on one alt-az mount.
+    Rigid ``grid_nx``×``grid_ny`` mirror on one alt-az mount.
 
-    Facet centers and normals in body frame are produced by ``mirror_grid_design`` at
-    ``design_when_utc``. Mount orientation ``(azimuth_deg, elevation_deg)`` is solved by the
-    controller from that rigid body model.
+    Facet centers on a flat **xy** grid at **z = 0** in assembly frame ``B``; sphere at
+    ``(0, 0, sphere_center_offset_m)_B``; each facet unit normal is ``normalize(O_B - P_B)``.
+
+    See module docstring for ``W`` / ``B`` and ``p_W = M + R_mount @ p_B``.
     """
 
     mount_world: np.ndarray
-    design_when_utc: datetime
-    absorber_center: np.ndarray
     grid_nx: int
     grid_ny: int
     pitch_m: float
     tile_half_m: float
     sun: SunModel
-    facet_design: FacetDesignStrategy = "optimized"
-    spherical_target_world: np.ndarray | None = None
+    sphere_center_offset_m: float
     azimuth_deg: float = 0.0
     elevation_deg: float = 0.0
 
-    _c_body: np.ndarray = field(init=False)
-    _n_body: np.ndarray = field(init=False)
-    _u_body: np.ndarray = field(init=False)
-    _v_body: np.ndarray = field(init=False)
+    _centers_local: np.ndarray = field(init=False)
+    _normals_local: np.ndarray = field(init=False)
+    _facet_u_local: np.ndarray = field(init=False)
+    _facet_v_local: np.ndarray = field(init=False)
+    _R_local_to_mount_body: np.ndarray = field(init=False)
     _center_facet: int = field(init=False)
+    # +z_B: normal to the z=0 plane of facet centers (not the facet reflective normal).
     _lattice_plane_normal_body: np.ndarray = field(init=False)
+    # Pivot facet n_B at (az,el)=(0,0); bisector tracking aligns this with the world target, not +z_B.
+    _pivot_facet_normal_body: np.ndarray = field(init=False)
 
     def __post_init__(self) -> None:
-        m = np.asarray(self.mount_world, dtype=float).reshape(3)
-        a = self.absorber_center.astype(float).reshape(3)
-        if self.facet_design == "spherical":
-            if self.spherical_target_world is None:
-                raise ValueError("spherical_target_world is required when facet_design='spherical'.")
-            body = design_spherical_facet_grid(
-                m,
-                self.design_when_utc,
-                self.grid_nx,
-                self.grid_ny,
-                self.pitch_m,
-                self.sun,
-                np.asarray(self.spherical_target_world, dtype=float).reshape(3),
-            )
-        else:
-            body = design_optimized_facet_grid(
-                m,
-                self.design_when_utc,
-                a,
-                self.grid_nx,
-                self.grid_ny,
-                self.pitch_m,
-                self.sun,
-            )
-        self._c_body = body.centers_body
-        self._n_body = body.normals_body
-        self._u_body = body.u_body
-        self._v_body = body.v_body
-        self._center_facet = body.center_facet_index
-        self._lattice_plane_normal_body = body.lattice_plane_normal_body
+        design = design_spherical_facet_grid(
+            self.grid_nx,
+            self.grid_ny,
+            self.pitch_m,
+            sphere_center_offset_m=float(self.sphere_center_offset_m),
+        )
+        self._ingest_local_design(design)
+
+    def _ingest_local_design(self, design: FacetGridInLocalFrame) -> None:
+        self._centers_local = np.asarray(design.centers_local, dtype=float).copy()
+        self._normals_local = np.asarray(design.normals_local, dtype=float).copy()
+        self._facet_u_local = np.asarray(design.facet_u_local, dtype=float).copy()
+        self._facet_v_local = np.asarray(design.facet_v_local, dtype=float).copy()
+        self._R_local_to_mount_body = np.asarray(design.local_to_mount_body_rotation, dtype=float).copy()
+        self._center_facet = int(design.center_facet_index)
+        n_pi = self._R_local_to_mount_body[:, 2].astype(float).reshape(3)
+        self._lattice_plane_normal_body = n_pi / max(float(np.linalg.norm(n_pi)), 1e-15)
+        n0 = self._normals_local[self._center_facet].astype(float).reshape(3)
+        self._pivot_facet_normal_body = n0 / max(float(np.linalg.norm(n0)), 1e-15)
 
     @property
     def rotation_point(self) -> np.ndarray:
@@ -265,12 +324,17 @@ class AltAzFlatMirrorGrid:
     def _world_facets_from_angles(
         self, azimuth_deg: float, elevation_deg: float
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Map facet centers/normals from ``B`` to ``W`` via ``R_mount @ R_{B←L}`` (see module docstring)."""
         az, el = _normalize_mount_az_el(float(azimuth_deg), float(elevation_deg))
         r = grid_mount_rotation_matrix(az, el)
-        c_w = self.mount_world + (r @ self._c_body.T).T
-        n_w = (r @ self._n_body.T).T
-        u_w = (r @ self._u_body.T).T
-        v_w = (r @ self._v_body.T).T
+        r_chain = r @ self._R_local_to_mount_body
+        c_w = self.mount_world + (r_chain @ self._centers_local.T).T
+        n_raw = (r_chain @ self._normals_local.T).T
+        n_w = n_raw / np.maximum(np.linalg.norm(n_raw, axis=1, keepdims=True), 1e-15)
+        u_raw = (r_chain @ self._facet_u_local.T).T
+        u_w = u_raw / np.maximum(np.linalg.norm(u_raw, axis=1, keepdims=True), 1e-15)
+        v_raw = (r_chain @ self._facet_v_local.T).T
+        v_w = v_raw / np.maximum(np.linalg.norm(v_raw, axis=1, keepdims=True), 1e-15)
         return c_w, n_w, u_w, v_w
 
     def _world_facets(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -278,13 +342,13 @@ class AltAzFlatMirrorGrid:
 
     def physical_mount_tilt_deg(self) -> float:
         r = grid_mount_rotation_matrix(self.azimuth_deg, self.elevation_deg)
-        n_w = r @ self._lattice_plane_normal_body.reshape(3)
+        n_w = r @ self._pivot_facet_normal_body.reshape(3)
         nz = float(np.clip(n_w[2], -1.0, 1.0))
         return float(np.rad2deg(abs(np.arcsin(nz))))
 
     def physical_mount_azimuth_deg(self) -> float:
         r = grid_mount_rotation_matrix(self.azimuth_deg, self.elevation_deg)
-        n_w = r @ self._lattice_plane_normal_body.reshape(3)
+        n_w = r @ self._pivot_facet_normal_body.reshape(3)
         return float(np.rad2deg(np.arctan2(float(n_w[0]), float(n_w[1]))) % 360.0)
 
     def tile_surface_grids(self, nu: int = 7, nv: int = 7) -> list[np.ndarray]:

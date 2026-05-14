@@ -635,7 +635,7 @@ def build_day_delivered_power_figure(
     ``intercepted_w`` is total power striking all mirrors (sum of per-mirror intercepted).
     ``orientations``
     has the same length as ``times``; each element is ``[(az_deg, second_deg), ...]`` per mirror.
-    For each mirror, ``second_deg`` is lattice-plane tilt (0° vertical, 90° horizontal toward zenith),
+    For each mirror, ``second_deg`` is pivot-facet tilt in world (0° vertical, 90° horizontal toward zenith),
     not the raw ``(azimuth_deg, elevation_deg)`` joint tuple on the grid.
 
     If ``same_day_time_scale`` is True, x is hours since local midnight for overlaying different
