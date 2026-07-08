@@ -34,7 +34,7 @@ MIRROR_GRID_MOUNT_HEIGHT_M = 0.85  # mount pivot z [m]; facet centers lie on the
 ABSORBER_WIDTH_M = 0.40
 ABSORBER_HEIGHT_M = 0.40
 ABSORBER_CENTER_HEIGHT_M = 1.0
-ABSORBER_NORMAL_ANGLE_FROM_X_DEG = 90.0
+ABSORBER_NORMAL_ANGLE_FROM_X_DEG = 90
 
 # Cell count along each axis on **each** square facet (rays per mirror ≈ grid_nx * grid_ny * U * V).
 SIM_SAMPLES_U = 8
@@ -61,7 +61,7 @@ DAY_CURVE_STEP_MINUTES = 20
 
 # Local wall time for the 3D scene / absorber spot figures and printed snapshot
 # (mount solve, mirror angles, ray bundle). Independent of DAY_CURVE_* curve list.
-SCENE_VIS_WHEN = datetime(2026, 9, 7, 7, 0, 0, tzinfo=DAY_CURVE_TZ)
+SCENE_VIS_WHEN = datetime(2026, 9, 7, 14, 0, 0, tzinfo=DAY_CURVE_TZ)
 
 # 3D scene figure only: coarser facet grid and shorter incoming segments (sun-ward) than the
 # snapshot raytrace used for printed power (still uses SIM_SAMPLES_* via ``sim.run`` defaults).
