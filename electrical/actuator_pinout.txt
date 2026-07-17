@@ -1,16 +1,16 @@
 MOTOR CONNECTOR
 ---------------
 
-NAME         | COLOR  | CIRCULAR_PIN  | JST_PIN
--------------+--------+---------------+----------
-MOTOR+       | RED    | 1             | 2-1
+NAME         | COLOR  | CIRCULAR_PIN  | JST_PIN 
+-------------+--------+---------------+---------
+MOTOR+       | RED    | 1             | 2-1  
 MOTOR-       | BLACK  | 2             | 2-2
 ENC/HALL_GND | GREY   | 7             | 6-1
-ENC_VCC      | BLUE   | 6             |           
-ENC_A        | YELLOW | 3             |  
-ENC_B        | WHITE  | 4             |  
-HALL_VCC     | BROWN  | 8             |  
-HALL_OUT     | GREEN  | 5             |  
+ENC_VCC      | BLUE   | 6             | 6-2
+ENC_A        | YELLOW | 3             | 6-4
+ENC_B        | WHITE  | 4             | 6-5
+HALL_VCC     | BROWN  | 8             | 6-3
+HALL_OUT     | GREEN  | 5             | 6-6
 
 
 INTERFACE CONNECTOR
@@ -22,3 +22,21 @@ GND          | BLACK  | 1
 VCC_12V      | RED    | 2
 CAN_H        | YELLOW | 3
 CAN_L        | GREEN  | 4
+
+ARDUINO PINOUT
+---------------
+
+NAME          | PIN
+--------------+------
+CAN_TX        | D10
+CAN_RX        | D9
+VERT_MOTOR_P  | A0
+VERT_MOTOR_M  | A1
+VERT_ENC_A    | D2
+VERT_ENC_B    | D3
+VERT_HALL     | D4
+HORIZ_MOTOR_P | A2
+HORIZ_MOTOR_M | A3
+HORIZ_ENC_A   | D5
+HORIZ_ENC_B   | D6
+HORIZ_HALL    | D7
