@@ -6,12 +6,14 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "hotbox-controller",
+    "hotbox-shared",
     "numpy>=2.0.0",
     "pvlib>=0.11.0",
 ]
 
 [tool.uv.sources]
 hotbox-controller = { path = "../controller", editable = true }
+hotbox-shared = { path = "../shared", editable = true }
 
 [project.scripts]
 hotbox-sim-in-the-loop = "hotbox_sitl.main:main"

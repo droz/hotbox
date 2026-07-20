@@ -31,9 +31,9 @@ def mount_world_from_calibration(calibration: MirrorCalibration) -> np.ndarray:
     )
 
 
-def default_mount_world(node_id: int, absorber_height_m: float) -> np.ndarray:
-    # Temporary layout until calibration fills in true OA geometry.
-    return np.array([2.0, float(node_id - 1), absorber_height_m], dtype=float)
+def default_mount_world(node_id: int, absorber_height_m: float, oa_distance_m: float = 2.5) -> np.ndarray:
+    # Temporary layout until calibration / system fleet design fills in true OA geometry.
+    return np.array([oa_distance_m, float(node_id - 1), absorber_height_m], dtype=float)
 
 
 def facet_center_world(
@@ -94,6 +94,9 @@ def build_estimated_scene(
     statuses: dict[int, MirrorStatus],
     calibrations: dict[int, MirrorCalibration],
     absorber_height_m: float,
+    default_oa_distance_m: float = 2.5,
+    default_mirror_offset_d_m: float = 0.2,
+    system: Any | None = None,
 ) -> dict[str, Any]:
     mirrors = []
     for node_id, status in sorted(statuses.items()):
@@ -104,8 +107,14 @@ def build_estimated_scene(
             az = status.azimuth_deg + calibration.home_azimuth_offset_deg
             el = status.elevation_deg + calibration.home_elevation_offset_deg
         else:
-            mount = default_mount_world(node_id, absorber_height_m)
-            offset = 0.2
+            if system is not None:
+                try:
+                    mount = system.fleet.mount_by_id(node_id).mount_world()
+                except KeyError:
+                    mount = default_mount_world(node_id, absorber_height_m, default_oa_distance_m)
+            else:
+                mount = default_mount_world(node_id, absorber_height_m, default_oa_distance_m)
+            offset = default_mirror_offset_d_m
             az = status.azimuth_deg
             el = status.elevation_deg
         mirrors.append(

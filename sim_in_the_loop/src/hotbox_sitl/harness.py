@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-import math
 import threading
 import time
 from typing import Any
@@ -11,11 +10,12 @@ import numpy as np
 import uvicorn
 
 from hotbox_controller.app import ControllerApplication, build_true_geometry_from_layouts
-from hotbox_controller.config import AppConfig, TransportConfig
+from hotbox_controller.config import TransportConfig, app_config_from_system
 from hotbox_controller.geometry import MirrorCalibration
 from hotbox_controller.protocol import CommandName, MirrorCommand
 from hotbox_controller.sun import SunService
 from hotbox_controller.transport import SimTransport
+from hotbox_shared import SystemConstants, load_system_constants
 
 from .mirror_node import SimulatedMirrorNode
 
@@ -25,21 +25,33 @@ class TrueMirrorLayout:
     node_id: int
     mount_world: np.ndarray
     facet_offset_world: np.ndarray
-    mirror_offset_d_m: float = 0.2
-    focal_length_m: float = 4.4
+    mirror_offset_d_m: float
+    focal_length_m: float
 
 
-def _calibration_from_layout(layout: TrueMirrorLayout) -> MirrorCalibration:
+def _layouts_from_system(system: SystemConstants) -> dict[int, TrueMirrorLayout]:
+    offset = np.array([0.0, 0.0, system.mirror.mount_offset_d_m], dtype=float)
+    layouts: dict[int, TrueMirrorLayout] = {}
+    for mount in system.fleet.mounts:
+        layouts[mount.node_id] = TrueMirrorLayout(
+            node_id=mount.node_id,
+            mount_world=mount.mount_world(),
+            facet_offset_world=offset.copy(),
+            mirror_offset_d_m=system.mirror.mount_offset_d_m,
+            focal_length_m=system.mirror.focal_length_m,
+        )
+    return layouts
+
+
+def _calibration_from_layout(layout: TrueMirrorLayout, bearing_deg: float) -> MirrorCalibration:
     mount = np.asarray(layout.mount_world, dtype=float).reshape(3)
-    bearing_deg = float(np.rad2deg(math.atan2(mount[0], mount[1]))) % 360.0
-    oa_distance_m = float(math.hypot(mount[0], mount[1]))
     return MirrorCalibration(
         node_id=layout.node_id,
         oa_bearing_deg=bearing_deg,
         oa_height_delta_m=float(mount[2]),
         home_azimuth_offset_deg=0.0,
         home_elevation_offset_deg=0.0,
-        oa_distance_m=oa_distance_m,
+        oa_distance_m=float(np.hypot(mount[0], mount[1])),
         mirror_offset_d_m=layout.mirror_offset_d_m,
         focal_length_m=layout.focal_length_m,
     )
@@ -48,12 +60,16 @@ def _calibration_from_layout(layout: TrueMirrorLayout) -> MirrorCalibration:
 class SitlHarness:
     def __init__(
         self,
-        node_ids: tuple[int, ...] = (0, 1, 2),
+        node_ids: tuple[int, ...] | None = None,
         *,
         host: str = "127.0.0.1",
         port: int = 8000,
         dt_s: float = 0.05,
+        system: SystemConstants | None = None,
     ) -> None:
+        self.system = system or load_system_constants()
+        if node_ids is None:
+            node_ids = tuple(mount.node_id for mount in self.system.fleet.mounts)
         self.host = host
         self.port = port
         self.dt_s = dt_s
@@ -62,24 +78,26 @@ class SitlHarness:
         self._lock = threading.RLock()
         self._latest: dict[str, Any] = {}
         self.nodes = {node_id: SimulatedMirrorNode(node_id=node_id) for node_id in node_ids}
-        all_layouts = {
-            0: TrueMirrorLayout(0, np.array([2.0, 0.0, 1.0]), np.array([0.0, 0.0, 0.2])),
-            1: TrueMirrorLayout(1, np.array([2.0, 1.0, 1.0]), np.array([0.0, 0.0, 0.2])),
-            2: TrueMirrorLayout(2, np.array([2.0, -1.0, 1.0]), np.array([0.0, 0.0, 0.2])),
+        self.true_layouts = {
+            node_id: layout
+            for node_id, layout in _layouts_from_system(self.system).items()
+            if node_id in self.nodes
         }
-        self.true_layouts = {node_id: all_layouts[node_id] for node_id in node_ids}
-        config = AppConfig(
-            transport=TransportConfig(mode="sim", sim_node_ids=node_ids),
-            web_host=host,
-            web_port=port,
-        )
+        config = app_config_from_system(self.system)
+        config.transport = TransportConfig(mode="sim", sim_node_ids=node_ids)
+        config.web_host = host
+        config.web_port = port
         transport = SimTransport(self.nodes, lock=self._lock)
         self.controller = ControllerApplication(config, transport=transport)
         self.controller.calibrations = {
-            node_id: _calibration_from_layout(layout) for node_id, layout in self.true_layouts.items()
+            node_id: _calibration_from_layout(
+                layout,
+                bearing_deg=self.system.fleet.mount_by_id(node_id).bearing_deg,
+            )
+            for node_id, layout in self.true_layouts.items()
         }
         self.sun = SunService(config.site)
-        self.absorber_world = np.array([0.0, 0.0, config.oven.absorber_height_m], dtype=float)
+        self.absorber_world = self.system.absorber.center_world.copy()
 
     def startup(self) -> None:
         self.controller.startup()
@@ -101,11 +119,10 @@ class SitlHarness:
                 absorber_world=self.absorber_world,
                 layouts=self.true_layouts,
                 statuses=statuses,
-                mirror_offset_d_m=0.2,
+                mirror_offset_d_m=self.system.mirror.mount_offset_d_m,
             )
             self.controller.set_true_geometry(true_geometry)
 
-            # Auto tracking / parking is owned by the controller so manual UI commands work.
             self.controller.control_tick()
             snapshot = self.controller.current_snapshot()
             self._latest = {
@@ -136,6 +153,7 @@ class SitlHarness:
         self._thread.start()
         print("Hot-Box sim-in-the-loop running")
         print(f"Open the UI at http://{self.host}:{self.port}/")
+        print(f"Plant constants from config/system.yaml ({self.system.fleet.assembly_count} mirrors)")
         print("Estimated geometry (blue) and true simulator geometry (yellow) are overlaid.")
         print("Use Home / Park / Auto / Jog in the UI to interact with the simulated mirrors.")
         try:

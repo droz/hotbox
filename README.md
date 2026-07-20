@@ -176,12 +176,45 @@ Custom code should stay focused on:
 
 ## Repository Layout
 
+- `config/` — shared plant constants (`system.yaml`) and calibration files
+- `shared/` — Python package that loads those shared constants
 - `controller/` — Raspberry Pi controller package
 - `electrical/` — pinouts and electronics notes
 - `firmware/` — mirror-node firmware
 - `mechanical/` — CAD and printable parts
 - `sim_full_raytrace/` — high-fidelity optical simulator
 - `sim_in_the_loop/` — fast integration simulator
+
+## Shared plant constants
+
+Geometry and plant constants live in one place:
+
+```text
+config/system.yaml
+```
+
+Loaded by:
+
+```python
+from hotbox_shared import load_system_constants
+system = load_system_constants()
+```
+
+This includes:
+
+- site lat/lon/altitude
+- absorber size and height
+- mirror facet grid (`nx`/`ny`), tile size, pitch
+- mount offset `d`, sphere radius / focal length
+- fleet mount bearings and `|OA|` design values
+
+Generate the firmware C header from the same file:
+
+```bash
+cd shared && uv run hotbox-gen-firmware-geometry
+```
+
+That writes `firmware/include/hotbox_geometry.h`.
 
 ## Development
 

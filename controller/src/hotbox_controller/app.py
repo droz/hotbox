@@ -12,7 +12,7 @@ import numpy as np
 from pydantic import BaseModel
 
 from .calibration import load_calibrations
-from .config import AppConfig, SiteConfig
+from .config import AppConfig, SiteConfig, app_config_from_system
 from .gps import GpsService
 from .mirror_fleet import MirrorFleet
 from .protocol import CommandName, MirrorCommand
@@ -41,16 +41,34 @@ class ControllerApplication:
         config: AppConfig | None = None,
         transport: MirrorTransport | None = None,
     ) -> None:
-        self.config = config or AppConfig()
+        self.config = config or app_config_from_system()
         self.gps = GpsService(self.config.site, self.config.gps)
         self.sun = SunService(self.config.site)
         self.transport = transport or build_transport(self.config.transport)
         self.fleet = MirrorFleet(self.transport)
         self.calibrations = load_calibrations(self.config.calibration_path)
-        self.absorber_world = np.array([0.0, 0.0, self.config.oven.absorber_height_m], dtype=float)
+        if self.config.system is not None:
+            self.absorber_world = self.config.system.absorber.center_world.copy()
+        else:
+            self.absorber_world = np.array([0.0, 0.0, self.config.oven.absorber_height_m], dtype=float)
         self._true_geometry: dict[str, Any] | None = None
         self.mode = "auto"
         self.fastapi = self._build_fastapi()
+
+    def _mirror_world_for_node(self, node_id: int) -> np.ndarray:
+        calibration = self.calibrations.get(node_id)
+        if calibration is not None:
+            return mount_world_from_calibration(calibration)
+        if self.config.system is not None:
+            try:
+                return self.config.system.fleet.mount_by_id(node_id).mount_world()
+            except KeyError:
+                pass
+        return default_mount_world(
+            node_id,
+            self.config.oven.absorber_height_m,
+            self.config.mirror.default_oa_distance_m,
+        )
 
     def startup(self) -> None:
         self.fleet.discover()
@@ -75,11 +93,7 @@ class ControllerApplication:
         for node_id in self.fleet.nodes():
             if not statuses[node_id].homed:
                 continue
-            calibration = self.calibrations.get(node_id)
-            if calibration is not None:
-                mirror_world = mount_world_from_calibration(calibration)
-            else:
-                mirror_world = default_mount_world(node_id, self.config.oven.absorber_height_m)
+            mirror_world = self._mirror_world_for_node(node_id)
             target = track_absorber(sun, mirror_world, self.absorber_world)
             self.fleet.apply_targets({node_id: target})
 
@@ -98,11 +112,7 @@ class ControllerApplication:
 
         targets: dict[int, dict[str, float | str]] = {}
         for node_id in self.fleet.nodes():
-            calibration = self.calibrations.get(node_id)
-            if calibration is not None:
-                mirror_world = mount_world_from_calibration(calibration)
-            else:
-                mirror_world = default_mount_world(node_id, self.config.oven.absorber_height_m)
+            mirror_world = self._mirror_world_for_node(node_id)
             target = (
                 track_absorber(sun, mirror_world, self.absorber_world)
                 if statuses[node_id].homed
@@ -116,6 +126,9 @@ class ControllerApplication:
             statuses=statuses,
             calibrations=self.calibrations,
             absorber_height_m=self.config.oven.absorber_height_m,
+            default_oa_distance_m=self.config.mirror.default_oa_distance_m,
+            default_mirror_offset_d_m=self.config.mirror.mount_offset_d_m,
+            system=self.config.system,
         )
 
         return {

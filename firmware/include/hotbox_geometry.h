@@ -1,0 +1,22 @@
+#pragma once
+
+// Auto-generated from config/system.yaml — do not edit by hand.
+// Regenerate with: uv run hotbox-gen-firmware-geometry
+
+#include <stdint.h>
+
+#define HOTBOX_ABSORBER_CENTER_HEIGHT_M (1.000000f)
+#define HOTBOX_ABSORBER_WIDTH_M (0.400000f)
+#define HOTBOX_ABSORBER_HEIGHT_M (0.400000f)
+#define HOTBOX_MIRROR_GRID_NX (3)
+#define HOTBOX_MIRROR_GRID_NY (5)
+#define HOTBOX_MIRROR_TILE_SIDE_M (0.254000f)
+#define HOTBOX_MIRROR_PITCH_M (0.260350f)
+#define HOTBOX_MIRROR_OFFSET_D_M (0.200000f)
+#define HOTBOX_MIRROR_RADIUS_OF_CURVATURE_M (5.500000f)
+#define HOTBOX_MIRROR_FOCAL_LENGTH_M (2.750000f)
+#define HOTBOX_DEFAULT_OA_DISTANCE_M (2.500000f)
+#define HOTBOX_DEFAULT_MOUNT_HEIGHT_M (1.000000f)
+#define HOTBOX_FLEET_ASSEMBLY_COUNT (3)
+#define HOTBOX_SAFE_PARK_AZIMUTH_DEG (180.000000f)
+#define HOTBOX_SAFE_PARK_ELEVATION_DEG (75.000000f)

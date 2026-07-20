@@ -1,0 +1,23 @@
+[project]
+name = "hotbox-shared"
+version = "0.1.0"
+description = "Shared Hot-Box geometry and plant constants."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=2.0.0",
+    "pyyaml>=6.0.2",
+]
+
+[project.scripts]
+hotbox-gen-firmware-geometry = "hotbox_shared.firmware_header:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hotbox_shared"]

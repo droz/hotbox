@@ -231,6 +231,7 @@ version = "0.1.0"
 source = { editable = "../controller" }
 dependencies = [
     { name = "fastapi" },
+    { name = "hotbox-shared" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "pvlib" },
@@ -247,6 +248,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.116.0" },
+    { name = "hotbox-shared", editable = "../shared" },
     { name = "numpy", specifier = ">=2.0.0" },
     { name = "pvlib", specifier = ">=0.11.0" },
     { name = "pydantic", specifier = ">=2.10.0" },
@@ -259,11 +261,30 @@ requires-dist = [
 ]
 
 [[package]]
+name = "hotbox-shared"
+version = "0.1.0"
+source = { editable = "../shared" }
+dependencies = [
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "pyyaml" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "numpy", specifier = ">=2.0.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3.0" },
+    { name = "pyyaml", specifier = ">=6.0.2" },
+]
+provides-extras = ["dev"]
+
+[[package]]
 name = "hotbox-sim-in-the-loop"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "hotbox-controller" },
+    { name = "hotbox-shared" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "pvlib" },
@@ -277,6 +298,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "hotbox-controller", editable = "../controller" },
+    { name = "hotbox-shared", editable = "../shared" },
     { name = "numpy", specifier = ">=2.0.0" },
     { name = "pvlib", specifier = ">=0.11.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3.0" },

@@ -20,6 +20,8 @@ def test_build_estimated_scene_includes_rays() -> None:
         statuses=statuses,
         calibrations={},
         absorber_height_m=1.0,
+        default_oa_distance_m=2.5,
+        default_mirror_offset_d_m=0.2,
     )
     assert scene["mirrors"][0]["node_id"] == 0
     assert len(scene["mirrors"][0]["incoming"]["start"]) == 3

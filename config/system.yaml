@@ -1,0 +1,52 @@
+# Hot-Box plant / geometry constants
+# Shared by controller, sim_in_the_loop, and (via generated header) firmware.
+# Edit this file rather than hardcoding values in Python or C++.
+
+site:
+  latitude_deg: 40.7864
+  longitude_deg: -119.2065
+  altitude_m: 1190.0
+
+# Absorber center O is the world origin XY, at center_height_m on Z.
+absorber:
+  width_m: 0.40
+  height_m: 0.40
+  center_height_m: 1.0
+  # 0° = +X east, 90° = +Y north
+  normal_angle_from_x_deg: 90.0
+
+mirror:
+  # Faceted spherical assembly on one alt-az mount
+  grid_nx: 3
+  grid_ny: 5
+  tile_side_m: 0.254
+  pitch_m: 0.26035          # tile_side + 0.0254/4
+  mount_offset_d_m: 0.2     # |An Mn| along mirror-frame Z
+  radius_of_curvature_m: 5.5  # design sphere radius
+  focal_length_m: 2.75        # typically R/2 for a spherical mirror
+  default_oa_distance_m: 2.5  # |O An| horizontal design distance
+  default_mount_height_m: 1.0 # An height above ground (world Z)
+
+fleet:
+  assembly_count: 3
+  # Center-to-center spacing between assemblies along an arc / line [m]
+  assembly_spacing_m: 1.0
+  # Design layout: mounts placed on a horizontal ring around O in the XY plane.
+  # bearing_deg is measured from north (+Y) toward east (+X), same as OA bearing.
+  mounts:
+    - node_id: 0
+      bearing_deg: 90.0
+      oa_distance_m: 2.5
+      mount_height_m: 1.0
+    - node_id: 1
+      bearing_deg: 60.0
+      oa_distance_m: 2.5
+      mount_height_m: 1.0
+    - node_id: 2
+      bearing_deg: 120.0
+      oa_distance_m: 2.5
+      mount_height_m: 1.0
+
+control:
+  safe_park_azimuth_deg: 180.0
+  safe_park_elevation_deg: 75.0
