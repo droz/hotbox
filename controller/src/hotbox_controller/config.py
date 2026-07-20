@@ -71,9 +71,9 @@ def app_config_from_system(system: SystemConstants | None = None) -> AppConfig:
     node_ids = tuple(mount.node_id for mount in system.fleet.mounts)
     return AppConfig(
         site=SiteConfig(
-            latitude_deg=system.site.latitude_deg,
-            longitude_deg=system.site.longitude_deg,
-            altitude_m=system.site.altitude_m,
+            latitude_deg=system.default_site.latitude_deg,
+            longitude_deg=system.default_site.longitude_deg,
+            altitude_m=system.default_site.altitude_m,
         ),
         oven=OvenConfig(
             absorber_height_m=system.absorber.center_height_m,

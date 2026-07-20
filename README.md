@@ -202,7 +202,7 @@ system = load_system_constants()
 
 This includes:
 
-- site lat/lon/altitude
+- default site lat/lon/altitude
 - absorber size and height
 - mirror facet grid (`nx`/`ny`), tile size, pitch
 - mount offset `d`, sphere radius / focal length

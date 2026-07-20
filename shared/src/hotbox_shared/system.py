@@ -83,7 +83,7 @@ class ControlConstants:
 
 @dataclass(slots=True, frozen=True)
 class SystemConstants:
-    site: SiteConstants
+    default_site: SiteConstants
     absorber: AbsorberConstants
     mirror: MirrorConstants
     fleet: FleetConstants

@@ -33,7 +33,13 @@ class MirrorFleet:
 
     def home_all(self) -> None:
         for node_id in self._nodes:
-            self._transport.send(MirrorCommand(node_id=node_id, command=CommandName.HOME))
+            self.home(node_id)
+
+    def home(self, node_id: int) -> None:
+        self._transport.send(MirrorCommand(node_id=node_id, command=CommandName.HOME))
+
+    def stop(self, node_id: int) -> None:
+        self._transport.send(MirrorCommand(node_id=node_id, command=CommandName.STOP))
 
     def poll(self) -> dict[int, MirrorStatus]:
         out: dict[int, MirrorStatus] = {}

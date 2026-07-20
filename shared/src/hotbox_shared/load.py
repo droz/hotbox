@@ -35,7 +35,7 @@ def load_system_constants(path: Path | None = None) -> SystemConstants:
 
 
 def system_constants_from_dict(raw: dict) -> SystemConstants:
-    site = SiteConstants(**raw["site"])
+    site = SiteConstants(**raw["default_site"])
     absorber = AbsorberConstants(**raw["absorber"])
     mirror = MirrorConstants(**raw["mirror"])
     mounts = tuple(MountDesign(**item) for item in raw["fleet"]["mounts"])
@@ -49,4 +49,4 @@ def system_constants_from_dict(raw: dict) -> SystemConstants:
         raise ValueError(
             f"fleet.assembly_count ({fleet.assembly_count}) != number of mounts ({len(fleet.mounts)})"
         )
-    return SystemConstants(site=site, absorber=absorber, mirror=mirror, fleet=fleet, control=control)
+    return SystemConstants(default_site=site, absorber=absorber, mirror=mirror, fleet=fleet, control=control)

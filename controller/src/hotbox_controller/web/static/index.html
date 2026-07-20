@@ -13,72 +13,206 @@
         --accent: #f08a4b;
         --est: #7ec8ff;
         --true: #ffd166;
+        --gap: 0.75rem;
       }
       * { box-sizing: border-box; }
+      html, body { height: 100%; }
       body {
         margin: 0;
         font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
         background: radial-gradient(circle at top, #1a2430, var(--bg));
         color: var(--text);
+        display: flex;
+        flex-direction: column;
+        min-height: 100dvh;
       }
-      header, main { padding: 1rem; }
-      h1 { margin: 0 0 0.25rem; font-size: 1.5rem; }
-      p { margin: 0; color: var(--muted); }
-      .layout {
+      header {
+        flex: 0 0 auto;
+        padding: 0.65rem 1rem 0.35rem;
+      }
+      header h1 { margin: 0; font-size: 1.15rem; }
+      header p { margin: 0.15rem 0 0; color: var(--muted); font-size: 0.8rem; }
+      main.app {
+        flex: 1 1 auto;
+        min-height: 0;
+        padding: 0 1rem 1rem;
         display: grid;
-        gap: 1rem;
-        grid-template-columns: 1.4fr 1fr;
+        gap: var(--gap);
+        /* Laptop: 3D left, controls+mirrors right — both fill the viewport */
+        grid-template-columns: minmax(0, 1.35fr) minmax(280px, 22rem);
+        grid-template-rows: minmax(0, 1fr);
       }
-      @media (max-width: 900px) {
-        .layout { grid-template-columns: 1fr; }
+      .viewport {
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 0.45rem;
+      }
+      .scene-wrap {
+        flex: 1 1 auto;
+        min-height: 0;
+        position: relative;
+        border-radius: 12px;
+        overflow: hidden;
+        background: #0b0f13;
+        border: 1px solid #2a3540;
       }
       #scene {
         width: 100%;
-        height: min(60vh, 520px);
+        height: 100%;
         display: block;
-        border-radius: 12px;
-        background: #0b0f13;
+      }
+      .viewport-meta {
+        flex: 0 0 auto;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem 1rem;
+        align-items: center;
+        font-size: 0.78rem;
+        color: var(--muted);
+      }
+      .sidebar {
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        gap: var(--gap);
+      }
+      .sidebar-top {
+        flex: 0 0 auto;
+      }
+      .mirror-scroll {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 0.55rem;
+        padding-right: 0.15rem;
       }
       .panel {
         background: color-mix(in srgb, var(--panel) 92%, black);
         border: 1px solid #2a3540;
         border-radius: 12px;
-        padding: 0.9rem;
+        padding: 0.7rem;
       }
       .controls {
         display: flex;
         flex-wrap: wrap;
-        gap: 0.5rem;
-        margin-bottom: 0.75rem;
+        gap: 0.4rem;
       }
       button, select {
         background: #24303a;
         color: var(--text);
         border: 1px solid #3a4a58;
         border-radius: 8px;
-        padding: 0.45rem 0.7rem;
+        padding: 0.4rem 0.65rem;
+        cursor: pointer;
+        font-size: 0.85rem;
       }
       button:hover { border-color: var(--accent); }
-      .legend { display: flex; gap: 1rem; margin: 0.5rem 0 0; font-size: 0.9rem; color: var(--muted); }
-      .swatch { display: inline-block; width: 0.8rem; height: 0.8rem; border-radius: 2px; margin-right: 0.3rem; vertical-align: middle; }
+      button.tiny { padding: 0.28rem 0.45rem; font-size: 0.75rem; }
+      .swatch { display: inline-block; width: 0.7rem; height: 0.7rem; border-radius: 2px; margin-right: 0.25rem; vertical-align: middle; }
       .swatch.est { background: var(--est); }
       .swatch.true { background: var(--true); }
       pre {
-        margin: 0;
-        max-height: 40vh;
+        margin: 0.4rem 0 0;
+        max-height: 12vh;
         overflow: auto;
-        font-size: 0.75rem;
+        font-size: 0.65rem;
         white-space: pre-wrap;
       }
-      .status-row { display: grid; gap: 0.4rem; margin-bottom: 0.75rem; }
-      .pill {
-        display: inline-block;
-        padding: 0.2rem 0.5rem;
-        border-radius: 999px;
-        background: #2a3642;
+      .status-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem 0.65rem;
+        margin-bottom: 0.55rem;
         font-size: 0.8rem;
       }
-      #scene-status { color: var(--muted); font-size: 0.85rem; margin-top: 0.4rem; }
+      .pill {
+        display: inline-block;
+        padding: 0.15rem 0.45rem;
+        border-radius: 999px;
+        background: #2a3642;
+        font-size: 0.75rem;
+      }
+      .pill.ok { background: #1f4d3a; }
+      .pill.warn { background: #5a3d16; }
+      .pill.bad { background: #5a1f1f; }
+      #scene-status { margin: 0; }
+      .mirror-card {
+        flex: 0 0 auto;
+        padding: 0.6rem;
+      }
+      .mirror-card-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        margin-bottom: 0.4rem;
+      }
+      .mirror-card h3 {
+        margin: 0;
+        font-size: 0.95rem;
+      }
+      .mirror-meta {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.2rem 0.5rem;
+        font-size: 0.75rem;
+        margin-bottom: 0.45rem;
+        color: var(--muted);
+      }
+      .mirror-meta .span2 { grid-column: 1 / -1; }
+      .mirror-meta strong { color: var(--text); font-weight: 600; }
+      .mirror-actions {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 0.4rem;
+        align-items: start;
+      }
+      .jog-pad {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.25rem;
+        min-width: 7.5rem;
+      }
+      .jog-pad .spacer { visibility: hidden; }
+      details.raw {
+        margin-top: 0.5rem;
+        color: var(--muted);
+        font-size: 0.8rem;
+      }
+      .section-label {
+        margin: 0;
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--muted);
+      }
+
+      /* Phone / narrow: controls first, shorter 3D below; page can scroll */
+      @media (max-width: 900px) {
+        body { height: auto; min-height: 100dvh; }
+        main.app {
+          grid-template-columns: 1fr;
+          grid-template-rows: auto minmax(28vh, 36vh);
+        }
+        .sidebar { order: 1; min-height: 0; }
+        .viewport { order: 2; min-height: 0; }
+        .scene-wrap { min-height: 26vh; }
+        .mirror-scroll {
+          max-height: none;
+          overflow: visible;
+        }
+      }
+
+      @media (max-width: 520px) {
+        header { padding: 0.5rem 0.75rem 0.25rem; }
+        main.app { padding: 0 0.75rem 0.75rem; }
+        .mirror-meta { grid-template-columns: 1fr; }
+        .mirror-actions { grid-template-columns: 1fr; }
+        .jog-pad { min-width: 0; max-width: 10rem; }
+      }
     </style>
     <script type="importmap">
       {
@@ -91,45 +225,41 @@
   <body>
     <header>
       <h1>Hot-Box Controller</h1>
-      <p>Estimated vs true geometry, GPS status, and mirror controls.</p>
+      <p>World frame: +X east, +Y north, +Z up · estimated vs true geometry</p>
     </header>
-    <main>
-      <div class="layout">
-        <section class="panel">
+    <main class="app">
+      <section class="viewport">
+        <div class="scene-wrap">
           <canvas id="scene"></canvas>
-          <div id="scene-status">Loading 3D viewer…</div>
-          <div class="legend">
-            <span><span class="swatch est"></span>estimated</span>
-            <span><span class="swatch true"></span>true (sim)</span>
-          </div>
-          <div class="controls" style="margin-top: 0.75rem;">
-            <button id="btn-home">Home</button>
-            <button id="btn-park">Park</button>
-            <button id="btn-auto">Auto track</button>
-            <select id="mirror-select">
-              <option value="0">Mirror 0</option>
-              <option value="1">Mirror 1</option>
-              <option value="2">Mirror 2</option>
-            </select>
-            <button id="btn-jog-left">Jog −az</button>
-            <button id="btn-jog-right">Jog +az</button>
-            <button id="btn-jog-up">Jog +el</button>
-            <button id="btn-jog-down">Jog −el</button>
-            <button id="btn-jog-stop">Stop jog</button>
-          </div>
-        </section>
-        <section class="panel">
+        </div>
+        <div class="viewport-meta">
+          <span id="scene-status">Loading 3D viewer…</span>
+          <span><span class="swatch est"></span>estimated</span>
+          <span><span class="swatch true"></span>true (sim)</span>
+        </div>
+      </section>
+      <aside class="sidebar">
+        <section class="panel sidebar-top">
           <div class="status-row">
-            <div>Mode: <span class="pill" id="mode-pill">…</span></div>
-            <div>GPS: <span class="pill" id="gps-pill">…</span></div>
-            <div>Sun el: <span class="pill" id="sun-pill">…</span></div>
+            <div>Mode <span class="pill" id="mode-pill">…</span></div>
+            <div>GPS <span class="pill" id="gps-pill">…</span></div>
+            <div>Sun <span class="pill" id="sun-pill">…</span></div>
           </div>
-          <pre id="state">loading...</pre>
+          <div class="controls">
+            <button id="btn-home-all">Home all</button>
+            <button id="btn-park-all">Park all</button>
+            <button id="btn-auto">Auto track</button>
+          </div>
+          <details class="raw">
+            <summary>Raw controller state</summary>
+            <pre id="state">loading...</pre>
+          </details>
         </section>
-      </div>
+        <p class="section-label">Mirrors</p>
+        <div id="mirror-grid" class="mirror-scroll"></div>
+      </aside>
     </main>
 
-    <!-- Status + controls work even if Three.js fails to load. -->
     <script>
       window.hotboxLatestState = null;
       window.hotboxOnState = null;
@@ -140,35 +270,108 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
         });
-        if (!response.ok) {
-          throw new Error(`${path} failed: ${response.status}`);
-        }
+        if (!response.ok) throw new Error(`${path} failed: ${response.status}`);
       }
 
-      function selectedMirror() {
-        return Number(document.getElementById("mirror-select").value);
-      }
-
-      document.getElementById("btn-home").onclick = () => post("/api/home").catch(console.error);
-      document.getElementById("btn-park").onclick = () => post("/api/park").catch(console.error);
+      document.getElementById("btn-home-all").onclick = () => post("/api/home").catch(console.error);
+      document.getElementById("btn-park-all").onclick = () => post("/api/park").catch(console.error);
       document.getElementById("btn-auto").onclick = () => post("/api/auto").catch(console.error);
-      document.getElementById("btn-jog-left").onclick = () =>
-        post("/api/jog", { node_id: selectedMirror(), azimuth_rate_deg_s: -5, elevation_rate_deg_s: 0 }).catch(console.error);
-      document.getElementById("btn-jog-right").onclick = () =>
-        post("/api/jog", { node_id: selectedMirror(), azimuth_rate_deg_s: 5, elevation_rate_deg_s: 0 }).catch(console.error);
-      document.getElementById("btn-jog-up").onclick = () =>
-        post("/api/jog", { node_id: selectedMirror(), azimuth_rate_deg_s: 0, elevation_rate_deg_s: 5 }).catch(console.error);
-      document.getElementById("btn-jog-down").onclick = () =>
-        post("/api/jog", { node_id: selectedMirror(), azimuth_rate_deg_s: 0, elevation_rate_deg_s: -5 }).catch(console.error);
-      document.getElementById("btn-jog-stop").onclick = () =>
-        post("/api/jog", { node_id: selectedMirror(), azimuth_rate_deg_s: 0, elevation_rate_deg_s: 0 }).catch(console.error);
+
+      function pillClass(homed, fault, mode) {
+        if (fault) return "bad";
+        if (!homed) return "warn";
+        if (mode === "tracking" || mode === "idle" || mode === "parked") return "ok";
+        return "";
+      }
+
+      function ensureMirrorCard(nodeId) {
+        const grid = document.getElementById("mirror-grid");
+        let card = document.getElementById(`mirror-card-${nodeId}`);
+        if (card) return card;
+        card = document.createElement("div");
+        card.className = "panel mirror-card";
+        card.id = `mirror-card-${nodeId}`;
+        card.innerHTML = `
+          <div class="mirror-card-head">
+            <h3>Mirror ${nodeId}</h3>
+            <span class="pill" data-field="status-pill">…</span>
+          </div>
+          <div class="mirror-meta">
+            <div>Homed <strong data-field="homed">…</strong></div>
+            <div>Mode <strong data-field="mode">…</strong></div>
+            <div>Az <strong data-field="az">…</strong></div>
+            <div>El <strong data-field="el">…</strong></div>
+            <div class="span2">Target <strong data-field="target">…</strong></div>
+            <div>Miss <strong data-field="miss">…</strong></div>
+            <div>Fault <strong data-field="fault">none</strong></div>
+          </div>
+          <div class="mirror-actions">
+            <div class="controls">
+              <button class="tiny" data-action="home">Home</button>
+              <button class="tiny" data-action="park">Park</button>
+              <button class="tiny" data-action="stop">Stop</button>
+            </div>
+            <div class="jog-pad">
+              <button class="tiny spacer">.</button>
+              <button class="tiny" data-action="jog-up">+el</button>
+              <button class="tiny spacer">.</button>
+              <button class="tiny" data-action="jog-left">−az</button>
+              <button class="tiny" data-action="jog-stop">■</button>
+              <button class="tiny" data-action="jog-right">+az</button>
+              <button class="tiny spacer">.</button>
+              <button class="tiny" data-action="jog-down">−el</button>
+              <button class="tiny spacer">.</button>
+            </div>
+          </div>
+        `;
+        card.querySelectorAll("button[data-action]").forEach((button) => {
+          button.addEventListener("click", () => {
+            const action = button.getAttribute("data-action");
+            const id = Number(nodeId);
+            if (action === "home") post("/api/home_one", { node_id: id }).catch(console.error);
+            if (action === "park") post("/api/park_one", { node_id: id }).catch(console.error);
+            if (action === "stop") post("/api/stop_one", { node_id: id }).catch(console.error);
+            if (action === "jog-left") post("/api/jog", { node_id: id, azimuth_rate_deg_s: -5, elevation_rate_deg_s: 0 }).catch(console.error);
+            if (action === "jog-right") post("/api/jog", { node_id: id, azimuth_rate_deg_s: 5, elevation_rate_deg_s: 0 }).catch(console.error);
+            if (action === "jog-up") post("/api/jog", { node_id: id, azimuth_rate_deg_s: 0, elevation_rate_deg_s: 5 }).catch(console.error);
+            if (action === "jog-down") post("/api/jog", { node_id: id, azimuth_rate_deg_s: 0, elevation_rate_deg_s: -5 }).catch(console.error);
+            if (action === "jog-stop") post("/api/jog", { node_id: id, azimuth_rate_deg_s: 0, elevation_rate_deg_s: 0 }).catch(console.error);
+          });
+        });
+        grid.appendChild(card);
+        return card;
+      }
+
+      function updateMirrorCards(state) {
+        const mirrors = state.mirrors || {};
+        const targets = state.targets || {};
+        const estimated = state.geometry?.estimated?.mirrors || [];
+        const missById = Object.fromEntries(estimated.map((m) => [String(m.node_id), m.miss_m]));
+        Object.keys(mirrors).sort((a, b) => Number(a) - Number(b)).forEach((id) => {
+          const status = mirrors[id];
+          const target = targets[id];
+          const card = ensureMirrorCard(id);
+          const statusPill = card.querySelector('[data-field="status-pill"]');
+          statusPill.textContent = status.fault ? "fault" : (status.homed ? status.mode : "not homed");
+          statusPill.className = `pill ${pillClass(status.homed, status.fault, status.mode)}`;
+          card.querySelector('[data-field="homed"]').textContent = status.homed ? "yes" : "no";
+          card.querySelector('[data-field="mode"]').textContent = status.mode ?? "—";
+          card.querySelector('[data-field="fault"]').textContent = status.fault ?? "none";
+          card.querySelector('[data-field="az"]').textContent = `${Number(status.azimuth_deg).toFixed(2)}°`;
+          card.querySelector('[data-field="el"]').textContent = `${Number(status.elevation_deg).toFixed(2)}°`;
+          card.querySelector('[data-field="target"]').textContent = target
+            ? `${Number(target.azimuth_deg).toFixed(2)}° / ${Number(target.elevation_deg).toFixed(2)}° (${target.mode})`
+            : "—";
+          const miss = missById[id];
+          card.querySelector('[data-field="miss"]').textContent =
+            miss === undefined || miss === null ? "—" : Number(miss).toFixed(3);
+        });
+      }
 
       async function refreshState() {
         try {
           const response = await fetch("/api/state");
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
-          }
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
           const state = await response.json();
           window.hotboxLatestState = state;
           document.getElementById("state").textContent = JSON.stringify(state, null, 2);
@@ -177,10 +380,10 @@
           document.getElementById("gps-pill").textContent = gps.valid
             ? `${gps.source} · ${Number(gps.latitude_deg).toFixed(4)}, ${Number(gps.longitude_deg).toFixed(4)}`
             : `fallback · ${gps.source || "unknown"}`;
-          document.getElementById("sun-pill").textContent = `${Number(state.sun?.elevation_deg ?? 0).toFixed(1)}°`;
-          if (typeof window.hotboxOnState === "function") {
-            window.hotboxOnState(state);
-          }
+          document.getElementById("sun-pill").textContent =
+            `el ${Number(state.sun?.elevation_deg ?? 0).toFixed(1)}° / az ${Number(state.sun?.azimuth_deg ?? 0).toFixed(1)}°`;
+          updateMirrorCards(state);
+          if (typeof window.hotboxOnState === "function") window.hotboxOnState(state);
         } catch (err) {
           document.getElementById("state").textContent = `Failed to load /api/state: ${err}`;
         }
@@ -194,36 +397,86 @@
       import * as THREE from "three";
       import { OrbitControls } from "/static/vendor/controls/OrbitControls.js";
 
+      // World frame: +X east, +Y north, +Z up (explicitly configure Three.js as Z-up).
       const canvas = document.getElementById("scene");
       const sceneStatus = document.getElementById("scene-status");
       const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
       const scene = new THREE.Scene();
       scene.background = new THREE.Color(0x0b0f13);
+      scene.up.set(0, 0, 1);
+
       const camera = new THREE.PerspectiveCamera(50, 2, 0.1, 200);
-      camera.position.set(8, -10, 5);
+      camera.up.set(0, 0, 1);
+      camera.position.set(7, -9, 5);
+
       const controls = new OrbitControls(camera, canvas);
-      controls.target.set(0, 0, 1);
+      controls.target.set(1.2, 0, 1.0);
       controls.update();
 
-      scene.add(new THREE.AmbientLight(0xffffff, 0.55));
-      const light = new THREE.DirectionalLight(0xffffff, 1.4);
-      light.position.set(4, -3, 8);
-      scene.add(light);
-      scene.add(new THREE.GridHelper(16, 16, 0x334455, 0x223344));
+      scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+      const sunLight = new THREE.DirectionalLight(0xfff2cc, 1.6);
+      sunLight.position.set(4, -2, 8);
+      scene.add(sunLight);
 
-      const absorber = new THREE.Mesh(
-        new THREE.BoxGeometry(0.45, 0.12, 0.45),
-        new THREE.MeshStandardMaterial({ color: 0xf08a4b })
+      // Ground at Z = 0 (XY plane).
+      const ground = new THREE.Mesh(
+        new THREE.PlaneGeometry(24, 24),
+        new THREE.MeshStandardMaterial({ color: 0x1c2830, roughness: 1.0, metalness: 0.0 })
       );
-      absorber.position.set(0, 0, 1);
-      scene.add(absorber);
+      ground.rotation.z = 0;
+      // PlaneGeometry is XY by default with normal +Z — perfect for Z-up ground.
+      scene.add(ground);
+      const grid = new THREE.GridHelper(24, 24, 0x4a657a, 0x2a3a48);
+      grid.rotation.x = Math.PI / 2; // GridHelper defaults to XZ; rotate into XY.
+      grid.position.z = 0.01;
+      scene.add(grid);
 
+      // World axes: X=east (red), Y=north (green), Z=up (blue)
+      const axes = new THREE.AxesHelper(2.5);
+      axes.position.set(0, 0, 0.02);
+      scene.add(axes);
+
+      function makeLabel(text, color, position) {
+        const c = document.createElement("canvas");
+        c.width = 128;
+        c.height = 64;
+        const ctx = c.getContext("2d");
+        ctx.fillStyle = "rgba(0,0,0,0)";
+        ctx.fillRect(0, 0, c.width, c.height);
+        ctx.font = "bold 40px sans-serif";
+        ctx.fillStyle = color;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(text, 64, 32);
+        const texture = new THREE.CanvasTexture(c);
+        const material = new THREE.SpriteMaterial({ map: texture, transparent: true });
+        const sprite = new THREE.Sprite(material);
+        sprite.scale.set(1.2, 0.6, 1);
+        sprite.position.set(position[0], position[1], position[2]);
+        return sprite;
+      }
+
+      const cardinalRadius = 5.5;
+      scene.add(makeLabel("E +X", "#ff6666", [cardinalRadius, 0, 0.3]));
+      scene.add(makeLabel("W −X", "#ff6666", [-cardinalRadius, 0, 0.3]));
+      scene.add(makeLabel("N +Y", "#66ff88", [0, cardinalRadius, 0.3]));
+      scene.add(makeLabel("S −Y", "#66ff88", [0, -cardinalRadius, 0.3]));
+      scene.add(makeLabel("UP +Z", "#6699ff", [0, 0, 2.8]));
+
+      const ovenGroup = new THREE.Group();
+      scene.add(ovenGroup);
       const sunMarker = new THREE.Mesh(
-        new THREE.SphereGeometry(0.25, 16, 16),
+        new THREE.SphereGeometry(0.35, 20, 20),
         new THREE.MeshBasicMaterial({ color: 0xffe08a })
       );
       scene.add(sunMarker);
+      const sunStem = new THREE.Line(
+        new THREE.BufferGeometry(),
+        new THREE.LineBasicMaterial({ color: 0xffe08a, transparent: true, opacity: 0.45 })
+      );
+      scene.add(sunStem);
 
       const estimatedGroup = new THREE.Group();
       const trueGroup = new THREE.Group();
@@ -233,9 +486,32 @@
       function clearGroup(group) {
         while (group.children.length) {
           const child = group.children.pop();
+          child.traverse?.((obj) => {
+            if (obj.geometry) obj.geometry.dispose();
+            if (obj.material) {
+              if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose());
+              else obj.material.dispose();
+            }
+          });
           if (child.geometry) child.geometry.dispose();
           if (child.material) child.material.dispose();
         }
+      }
+
+      function basisFromNormal(normalArr) {
+        const n = new THREE.Vector3(...normalArr).normalize();
+        let ref = new THREE.Vector3(0, 0, 1);
+        if (Math.abs(n.dot(ref)) > 0.9) ref = new THREE.Vector3(1, 0, 0);
+        const u = new THREE.Vector3().crossVectors(n, ref).normalize();
+        const v = new THREE.Vector3().crossVectors(n, u).normalize();
+        return { n, u, v };
+      }
+
+      function orientBody(mesh, normalArr) {
+        const { n, u, v } = basisFromNormal(normalArr);
+        // Local box: X along u (width), Y along -n (depth into oven), Z along v (height)
+        const m = new THREE.Matrix4().makeBasis(u, n.clone().multiplyScalar(-1), v);
+        mesh.setRotationFromMatrix(m);
       }
 
       function addRay(group, start, end, color, opacity = 1) {
@@ -248,43 +524,107 @@
         group.add(new THREE.Line(geometry, material));
       }
 
-      function addMirror(group, mirror, color) {
-        const mesh = new THREE.Mesh(
-          new THREE.BoxGeometry(0.55, 0.05, 0.4),
-          new THREE.MeshStandardMaterial({ color, transparent: true, opacity: 0.85 })
-        );
-        mesh.position.set(mirror.mount[0], mirror.mount[1], mirror.mount[2]);
-        mesh.rotation.z = THREE.MathUtils.degToRad(mirror.azimuth_deg);
-        mesh.rotation.x = THREE.MathUtils.degToRad(mirror.elevation_deg);
+      function addFacet(group, facet, color) {
+        const half = facet.half_m;
+        const geom = new THREE.PlaneGeometry(half * 2, half * 2);
+        const mat = new THREE.MeshStandardMaterial({
+          color,
+          metalness: 0.85,
+          roughness: 0.2,
+          side: THREE.DoubleSide,
+          transparent: true,
+          opacity: 0.92,
+        });
+        const mesh = new THREE.Mesh(geom, mat);
+        const n = new THREE.Vector3(...facet.normal).normalize();
+        const u = new THREE.Vector3(...facet.u).normalize();
+        const v = new THREE.Vector3(...facet.v).normalize();
+        mesh.position.set(facet.center[0], facet.center[1], facet.center[2]);
+        // PlaneGeometry spans local XY with normal +Z; map Z->normal, X->u, Y->v
+        mesh.setRotationFromMatrix(new THREE.Matrix4().makeBasis(u, v, n));
         group.add(mesh);
 
-        const facet = new THREE.Mesh(
-          new THREE.SphereGeometry(0.05, 10, 10),
+        const edge = new THREE.LineSegments(
+          new THREE.EdgesGeometry(geom),
+          new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.35 })
+        );
+        edge.position.copy(mesh.position);
+        edge.setRotationFromMatrix(mesh.matrix);
+        group.add(edge);
+      }
+
+      function addMirrorAssembly(group, mirror, color) {
+        // Mount pivot marker
+        const pivot = new THREE.Mesh(
+          new THREE.SphereGeometry(0.04, 10, 10),
           new THREE.MeshBasicMaterial({ color })
         );
-        facet.position.set(mirror.facet_center[0], mirror.facet_center[1], mirror.facet_center[2]);
-        group.add(facet);
+        pivot.position.set(mirror.mount[0], mirror.mount[1], mirror.mount[2]);
+        group.add(pivot);
 
-        addRay(group, mirror.incoming.start, mirror.incoming.end, color, 0.7);
+        if (Array.isArray(mirror.facets) && mirror.facets.length) {
+          mirror.facets.forEach((facet) => addFacet(group, facet, color));
+        }
+
+        addRay(group, mirror.incoming.start, mirror.incoming.end, color, 0.55);
         addRay(group, mirror.reflected.start, mirror.reflected.end, color, 1.0);
+      }
+
+      function renderOven(oven) {
+        clearGroup(ovenGroup);
+        if (!oven) return;
+
+        const body = new THREE.Mesh(
+          new THREE.BoxGeometry(oven.body_size[0], oven.body_size[1], oven.body_size[2]),
+          new THREE.MeshStandardMaterial({ color: 0x6b727a, roughness: 0.7, metalness: 0.2 })
+        );
+        body.position.set(...oven.body_center);
+        orientBody(body, oven.absorber_normal);
+        ovenGroup.add(body);
+
+        const absorber = new THREE.Mesh(
+          new THREE.BoxGeometry(oven.absorber_size[0], oven.absorber_size[1], oven.absorber_size[2]),
+          new THREE.MeshStandardMaterial({ color: 0xf08a4b, roughness: 0.45, metalness: 0.1 })
+        );
+        absorber.position.set(...oven.absorber_center);
+        orientBody(absorber, oven.absorber_normal);
+        ovenGroup.add(absorber);
+
+        const handle = new THREE.Mesh(
+          new THREE.BoxGeometry(oven.handle_size[0], oven.handle_size[1], oven.handle_size[2]),
+          new THREE.MeshStandardMaterial({ color: 0xd0d6dc, metalness: 0.6, roughness: 0.35 })
+        );
+        handle.position.set(...oven.handle_center);
+        orientBody(handle, oven.absorber_normal);
+        ovenGroup.add(handle);
       }
 
       function renderGeometry(estimated, truth) {
         clearGroup(estimatedGroup);
         clearGroup(trueGroup);
+
+        const source = estimated || truth;
+        if (source?.oven) renderOven(source.oven);
+
+        if (source?.sun?.display_position) {
+          const p = source.sun.display_position;
+          sunMarker.position.set(p[0], p[1], p[2]);
+          sunLight.position.set(p[0], p[1], p[2]);
+          sunStem.geometry.dispose();
+          sunStem.geometry = new THREE.BufferGeometry().setFromPoints([
+            new THREE.Vector3(0, 0, 0),
+            new THREE.Vector3(p[0], p[1], p[2]),
+          ]);
+          sceneStatus.textContent =
+            `3D ready · sun az ${Number(source.sun.azimuth_deg).toFixed(1)}° el ${Number(source.sun.elevation_deg).toFixed(1)}° · ` +
+            `pos (${p[0].toFixed(2)}, ${p[1].toFixed(2)}, ${p[2].toFixed(2)})`;
+        }
+
         if (estimated?.mirrors) {
-          estimated.mirrors.forEach((mirror) => addMirror(estimatedGroup, mirror, 0x7ec8ff));
-          if (estimated.sun?.display_position) {
-            const p = estimated.sun.display_position;
-            sunMarker.position.set(p[0], p[1], p[2]);
-          }
-          if (estimated.absorber?.center) {
-            const c = estimated.absorber.center;
-            absorber.position.set(c[0], c[1], c[2]);
-          }
+          estimated.mirrors.forEach((mirror) => addMirrorAssembly(estimatedGroup, mirror, 0x7ec8ff));
         }
         if (truth?.mirrors) {
-          truth.mirrors.forEach((mirror) => addMirror(trueGroup, mirror, 0xffd166));
+          truth.mirrors.forEach((mirror) => addMirrorAssembly(trueGroup, mirror, 0xffd166));
         }
       }
 
@@ -299,9 +639,7 @@
       window.hotboxOnState = (state) => {
         renderGeometry(state.geometry?.estimated, state.geometry?.true);
       };
-      if (window.hotboxLatestState) {
-        window.hotboxOnState(window.hotboxLatestState);
-      }
+      if (window.hotboxLatestState) window.hotboxOnState(window.hotboxLatestState);
 
       function render() {
         resize();
@@ -310,7 +648,7 @@
         requestAnimationFrame(render);
       }
 
-      sceneStatus.textContent = "3D viewer ready";
+      sceneStatus.textContent = "3D viewer ready (Z-up world)";
       render();
     </script>
   </body>

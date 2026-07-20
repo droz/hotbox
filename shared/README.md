@@ -20,6 +20,7 @@ Then load it in Python:
 from hotbox_shared import load_system_constants
 
 system = load_system_constants()
+print(system.default_site.latitude_deg)
 print(system.absorber.center_height_m)
 print(system.mirror.grid_nx, system.mirror.grid_ny)
 ```

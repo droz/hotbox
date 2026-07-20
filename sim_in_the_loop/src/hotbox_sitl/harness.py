@@ -120,6 +120,7 @@ class SitlHarness:
                 layouts=self.true_layouts,
                 statuses=statuses,
                 mirror_offset_d_m=self.system.mirror.mount_offset_d_m,
+                system=self.system,
             )
             self.controller.set_true_geometry(true_geometry)
 

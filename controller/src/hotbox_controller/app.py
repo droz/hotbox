@@ -35,6 +35,10 @@ class TargetRequest(BaseModel):
     mode: str = "tracking"
 
 
+class NodeRequest(BaseModel):
+    node_id: int
+
+
 class ControllerApplication:
     def __init__(
         self,
@@ -153,10 +157,22 @@ class ControllerApplication:
     def home_all(self) -> None:
         self.fleet.home_all()
 
+    def home_one(self, node_id: int) -> None:
+        self.mode = "manual"
+        self.fleet.home(node_id)
+
+    def stop_one(self, node_id: int) -> None:
+        self.mode = "manual"
+        self.fleet.stop(node_id)
+
     def park_all(self) -> None:
         self.mode = "auto"
         target = safe_park(self.config.oven)
         self.fleet.apply_targets({node_id: target for node_id in self.fleet.nodes()})
+
+    def park_one(self, node_id: int) -> None:
+        self.mode = "manual"
+        self.fleet.apply_targets({node_id: safe_park(self.config.oven)})
 
     def set_manual_target(self, request: TargetRequest) -> None:
         self.mode = "manual"
@@ -198,9 +214,24 @@ class ControllerApplication:
             self.home_all()
             return {"status": "ok"}
 
+        @app.post("/api/home_one")
+        def api_home_one(request: NodeRequest) -> dict[str, str]:
+            self.home_one(request.node_id)
+            return {"status": "ok"}
+
+        @app.post("/api/stop_one")
+        def api_stop_one(request: NodeRequest) -> dict[str, str]:
+            self.stop_one(request.node_id)
+            return {"status": "ok"}
+
         @app.post("/api/park")
         def park() -> dict[str, str]:
             self.park_all()
+            return {"status": "ok"}
+
+        @app.post("/api/park_one")
+        def api_park_one(request: NodeRequest) -> dict[str, str]:
+            self.park_one(request.node_id)
             return {"status": "ok"}
 
         @app.post("/api/auto")
@@ -209,12 +240,12 @@ class ControllerApplication:
             return {"status": "ok"}
 
         @app.post("/api/jog")
-        def jog(request: JogRequest) -> dict[str, str]:
+        def api_jog(request: JogRequest) -> dict[str, str]:
             self.jog(request)
             return {"status": "ok"}
 
         @app.post("/api/target")
-        def target(request: TargetRequest) -> dict[str, str]:
+        def api_target(request: TargetRequest) -> dict[str, str]:
             self.set_manual_target(request)
             return {"status": "ok"}
 
@@ -232,10 +263,20 @@ def build_true_geometry_from_layouts(
     layouts: dict[int, Any],
     statuses: dict[int, Any],
     mirror_offset_d_m: float = 0.2,
+    system: Any | None = None,
 ) -> dict[str, Any]:
+    params = {
+        "grid_nx": int(getattr(getattr(system, "mirror", None), "grid_nx", 3)),
+        "grid_ny": int(getattr(getattr(system, "mirror", None), "grid_ny", 5)),
+        "pitch_m": float(getattr(getattr(system, "mirror", None), "pitch_m", 0.26035)),
+        "tile_side_m": float(getattr(getattr(system, "mirror", None), "tile_side_m", 0.254)),
+        "radius_of_curvature_m": float(getattr(getattr(system, "mirror", None), "radius_of_curvature_m", 5.5)),
+    }
     mirrors = []
+    mounts = []
     for node_id, layout in sorted(layouts.items()):
         status = statuses[node_id]
+        mounts.append(layout.mount_world)
         mirrors.append(
             build_mirror_scene_entry(
                 node_id=node_id,
@@ -245,16 +286,40 @@ def build_true_geometry_from_layouts(
                 mirror_offset_d_m=mirror_offset_d_m,
                 sun=sun,
                 absorber_world=absorber_world,
+                grid_nx=params["grid_nx"],
+                grid_ny=params["grid_ny"],
+                pitch_m=params["pitch_m"],
+                tile_side_m=params["tile_side_m"],
+                radius_of_curvature_m=params["radius_of_curvature_m"],
             )
         )
+    from .scene import build_oven_scene
+
+    absorber_width = float(getattr(getattr(system, "absorber", None), "width_m", 0.4))
+    absorber_height = float(getattr(getattr(system, "absorber", None), "height_m", 0.4))
+    normal_deg = float(getattr(getattr(system, "absorber", None), "normal_angle_from_x_deg", 90.0))
+    oven = build_oven_scene(
+        absorber_center=absorber_world,
+        absorber_width_m=absorber_width,
+        absorber_height_m=absorber_height,
+        normal_angle_from_x_deg=normal_deg,
+        fleet_mounts=mounts,
+    )
+    sun_distance_m = 10.0
+    sun_pos = np.asarray(sun.world_vector, dtype=float).reshape(3)
+    sun_pos = sun_pos / max(float(np.linalg.norm(sun_pos)), 1e-12) * sun_distance_m
     return {
         "label": "true",
+        "frame": {"x": "east", "y": "north", "z": "up"},
+        "ground_z": 0.0,
         "absorber": {"center": np.asarray(absorber_world, dtype=float).reshape(3).tolist()},
+        "oven": oven,
         "sun": {
             "azimuth_deg": sun.azimuth_deg,
             "elevation_deg": sun.elevation_deg,
             "world_vector": sun.world_vector.tolist(),
-            "display_position": (np.asarray(sun.world_vector, dtype=float).reshape(3) * 8.0).tolist(),
+            "display_position": sun_pos.tolist(),
+            "distance_m": sun_distance_m,
         },
         "mirrors": mirrors,
     }

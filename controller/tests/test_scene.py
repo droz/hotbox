@@ -26,3 +26,6 @@ def test_build_estimated_scene_includes_rays() -> None:
     assert scene["mirrors"][0]["node_id"] == 0
     assert len(scene["mirrors"][0]["incoming"]["start"]) == 3
     assert len(scene["mirrors"][0]["reflected"]["end"]) == 3
+    assert len(scene["mirrors"][0]["facets"]) == 15
+    assert scene["sun"]["display_position"][2] > 0.5
+    assert scene["oven"]["body_center"] is not None

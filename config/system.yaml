@@ -2,10 +2,11 @@
 # Shared by controller, sim_in_the_loop, and (via generated header) firmware.
 # Edit this file rather than hardcoding values in Python or C++.
 
-site:
-  latitude_deg: 40.7864
-  longitude_deg: -119.2065
-  altitude_m: 1190.0
+default_site:
+  # Diemoz, France
+  latitude_deg: 45.5885
+  longitude_deg: 5.0904
+  altitude_m: 380.0
 
 # Absorber center O is the world origin XY, at center_height_m on Z.
 absorber:
