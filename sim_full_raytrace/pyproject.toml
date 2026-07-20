@@ -1,5 +1,5 @@
 [project]
-name = "hotbox-sim"
+name = "hotbox-sim-full-raytrace"
 version = "0.1.0"
 description = "Simple raytrace optical simulation for the baked and happy hot-box."
 readme = "README.md"
@@ -12,7 +12,7 @@ dependencies = [
 ]
 
 [project.scripts]
-hotbox-sim = "src.main:main"
+hotbox-sim-full-raytrace = "src.main:main"
 
 [build-system]
 requires = ["hatchling"]

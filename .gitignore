@@ -28,7 +28,7 @@ coverage.xml
 .DS_Store
 
 # Local plotting/browser caches created during simulation runs
-sim/.mplcache/
-sim/.cache/
+sim_full_raytrace/.mplcache/
+sim_full_raytrace/.cache/
 /.venv
 /__pycache__

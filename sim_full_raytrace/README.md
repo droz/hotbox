@@ -1,11 +1,11 @@
-# hotbox sim
+# hotbox full raytrace sim
 
 Simple, vectorized optical raytrace for a flat-mirror solar oven concept (rigid **5×5** grid of square facets on one **alt–az** mount; facet tilts are set for a configurable **design** sun time).
 
 ## Run with uv
 
 ```bash
-uv run hotbox-sim
+uv run hotbox-sim-full-raytrace
 ```
 
 The script prints power statistics and opens Plotly figures:
