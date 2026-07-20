@@ -62,7 +62,7 @@ class SitlHarness:
         self,
         node_ids: tuple[int, ...] | None = None,
         *,
-        host: str = "127.0.0.1",
+        host: str = "0.0.0.0",
         port: int = 8000,
         dt_s: float = 0.05,
         system: SystemConstants | None = None,

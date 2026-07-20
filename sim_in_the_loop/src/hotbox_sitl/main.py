@@ -7,7 +7,7 @@ from hotbox_sitl.harness import SitlHarness
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Hot-Box in-the-loop simulator with live web UI")
-    parser.add_argument("--host", default="127.0.0.1", help="Web UI bind address")
+    parser.add_argument("--host", default="0.0.0.0", help="Web UI bind address (0.0.0.0 for LAN access)")
     parser.add_argument("--port", type=int, default=8000, help="Web UI port")
     parser.add_argument("--dt", type=float, default=0.05, help="Simulation timestep seconds")
     parser.add_argument(

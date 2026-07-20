@@ -19,6 +19,12 @@ Then open:
 http://127.0.0.1:8000/
 ```
 
+Or from another device on the same network (server binds to all interfaces by default):
+
+```text
+http://<your-lan-ip>:8000/
+```
+
 The page shows:
 
 - estimated controller geometry (blue)
@@ -29,8 +35,10 @@ The page shows:
 Optional flags:
 
 ```bash
-uv run hotbox-sim-in-the-loop --host 0.0.0.0 --port 8000
+uv run hotbox-sim-in-the-loop --host 127.0.0.1 --port 8000
 ```
+
+Use `--host 127.0.0.1` if you want localhost-only access.
 
 ## Headless batch mode
 
