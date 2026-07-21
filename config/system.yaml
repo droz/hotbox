@@ -23,7 +23,7 @@ absorber:
   center_height_m: 1.0
   # Oven / absorber face normal in the horizontal plane.
   # 0° = +X east, 90° = +Y north. Changing this rotates the whole plant.
-  normal_angle_from_x_deg: 0.0
+  normal_angle_from_x_deg: 90.0
 
 mirror:
   # Faceted spherical assembly on one alt-az mount
