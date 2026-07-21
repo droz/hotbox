@@ -247,7 +247,7 @@ def build_estimated_scene(
         else:
             if system is not None:
                 try:
-                    mount = system.fleet.mount_by_id(node_id).mount_world()
+                    mount = system.mount_world(node_id)
                 except KeyError:
                     mount = default_mount_world(node_id, absorber_height_m, default_oa_distance_m)
             else:

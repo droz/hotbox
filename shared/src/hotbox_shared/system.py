@@ -45,21 +45,35 @@ class MirrorConstants:
 
 @dataclass(slots=True, frozen=True)
 class MountDesign:
+    """One mirror assembly placement relative to the absorber / oven back.
+
+    ``bearing_deg`` is a horizontal angle relative to the absorber normal
+    (``AbsorberConstants.normal_angle_from_x_deg``): ``0`` is straight out along
+    the oven back normal; positive is CCW about world +Z (up). Typical fleet:
+    ``-30``, ``0``, ``+30``.
+    """
+
     node_id: int
     bearing_deg: float
     oa_distance_m: float
     mount_height_m: float
 
-    def mount_world(self) -> np.ndarray:
-        bearing = math.radians(self.bearing_deg)
+    def mount_world(self, *, normal_angle_from_x_deg: float) -> np.ndarray:
+        """World ENU position of mount pivot An from oven orientation + relative bearing."""
+        ang = math.radians(float(normal_angle_from_x_deg) + float(self.bearing_deg))
         return np.array(
             [
-                self.oa_distance_m * math.sin(bearing),
-                self.oa_distance_m * math.cos(bearing),
+                self.oa_distance_m * math.cos(ang),
+                self.oa_distance_m * math.sin(ang),
                 self.mount_height_m,
             ],
             dtype=float,
         )
+
+    def oa_bearing_from_north_deg(self, *, normal_angle_from_x_deg: float) -> float:
+        """Absolute OA bearing from north toward east (calibration / legacy storage)."""
+        mount = self.mount_world(normal_angle_from_x_deg=normal_angle_from_x_deg)
+        return float(math.degrees(math.atan2(mount[0], mount[1])) % 360.0)
 
 
 @dataclass(slots=True, frozen=True)
@@ -88,3 +102,8 @@ class SystemConstants:
     mirror: MirrorConstants
     fleet: FleetConstants
     control: ControlConstants
+
+    def mount_world(self, node_id: int) -> np.ndarray:
+        return self.fleet.mount_by_id(node_id).mount_world(
+            normal_angle_from_x_deg=self.absorber.normal_angle_from_x_deg
+        )

@@ -4,6 +4,7 @@ Shared plant / geometry constants for:
 
 - `controller/`
 - `sim_in_the_loop/`
+- `sim_full_raytrace/`
 - firmware (via generated C header)
 
 ## Source of truth

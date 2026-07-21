@@ -171,8 +171,10 @@ class AltAzFlatMirrorGrid:
     """
     Rigid ``grid_nx``×``grid_ny`` mirror on one alt-az mount.
 
-    Facet centers on a flat **xy** grid at **z = 0** in assembly frame ``B``; sphere at
-    ``(0, 0, sphere_center_offset_m)_B``; each facet unit normal is ``normalize(O_B - P_B)``.
+    Facet centers on a flat **xy** grid at **z = mount_offset_d_m** in assembly frame ``B``
+    (default ``d = 0`` keeps the lattice in ``z = 0``); sphere at
+    ``(0, 0, sphere_center_offset_m)_B``; each facet unit normal is ``normalize(O_B - P_B)``
+    before the ``d`` shift (same as the controller scene).
 
     See module docstring for ``W`` / ``B`` and ``p_W = M + R_mount @ p_B``.
     """
@@ -184,6 +186,7 @@ class AltAzFlatMirrorGrid:
     tile_half_m: float
     sun: SunModel
     sphere_center_offset_m: float
+    mount_offset_d_m: float = 0.0
     azimuth_deg: float = 0.0
     elevation_deg: float = 0.0
 
@@ -209,6 +212,10 @@ class AltAzFlatMirrorGrid:
 
     def _ingest_local_design(self, design: FacetGridInLocalFrame) -> None:
         self._centers_local = np.asarray(design.centers_local, dtype=float).copy()
+        # Shift facet lattice along +Z body by mount_offset_d so the center facet sits at Mn.
+        d = float(self.mount_offset_d_m)
+        if abs(d) > 0.0:
+            self._centers_local = self._centers_local + np.array([0.0, 0.0, d], dtype=float)
         self._normals_local = np.asarray(design.normals_local, dtype=float).copy()
         self._facet_u_local = np.asarray(design.facet_u_local, dtype=float).copy()
         self._facet_v_local = np.asarray(design.facet_v_local, dtype=float).copy()

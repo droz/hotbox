@@ -124,6 +124,8 @@ Renamed version of the original exploratory optical simulator. This remains the 
 - delivered power estimation
 - geometry experiments that need more fidelity than the in-the-loop simulator
 
+Plant geometry (site, absorber, facet grid, fleet mounts) is loaded from `config/system.yaml`
+via `hotbox_shared`, same as the controller and SITL.
 ## Tracking And Control Flow
 
 1. The Pi boots and starts the controller service.
@@ -206,7 +208,7 @@ This includes:
 - absorber size and height
 - mirror facet grid (`nx`/`ny`), tile size, pitch
 - mount offset `d`, sphere radius / focal length
-- fleet mount bearings and `|OA|` design values
+- fleet mount bearings (relative to oven/absorber normal) and `|OA|` design values
 
 Generate the firmware C header from the same file:
 

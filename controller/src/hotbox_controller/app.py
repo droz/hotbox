@@ -65,7 +65,7 @@ class ControllerApplication:
             return mount_world_from_calibration(calibration)
         if self.config.system is not None:
             try:
-                return self.config.system.fleet.mount_by_id(node_id).mount_world()
+                return self.config.system.mount_world(node_id)
             except KeyError:
                 pass
         return default_mount_world(

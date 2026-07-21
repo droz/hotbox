@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 import time
 from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
+from hotbox_shared import SystemConstants, load_system_constants
 from pvlib.location import Location
 
 from src.absorber import SolarAbsorber
@@ -17,24 +18,7 @@ from src.simulation import HotboxSimulation, SimulationResult
 from src.sun import SunModel
 from src.visualizer import SceneVisualizer, build_day_delivered_power_figure
 
-# --- Rigid flat mirror grid (one alt-az mount) ---
-MIRROR_GRID_NX = 3
-MIRROR_GRID_NY = 5
-MIRROR_TILE_SIDE_M = 0.254
-MIRROR_GRID_PITCH_M = 0.254 + 0.0254 / 4  # center-to-center spacing [m]
-MIRROR_ASSEMBLY_COUNT = 3
-MIRROR_LOCATION_RING_RADIUS_M = 2.5  # mount pivot offset from absorber along absorber normal
-# Mirror spherical-cant radius / assembly-frame sphere-center z offset [m].
-MIRROR_RADIUS_OF_CURVATURE_M = 2.2 * MIRROR_LOCATION_RING_RADIUS_M
-MIRROR_ASSEMBLY_SPACING_M = 1.0  # fixed center-to-center spacing between assemblies [m]
-MIRROR_GRID_MOUNT_HEIGHT_M = 0.85  # mount pivot z [m]; facet centers lie on the design tilted plane through the pivot
-
-# Solar absorber: vertical rectangle, center at (0, 0, center_height); normal in horizontal plane.
-# normal_angle_from_x_deg: 0° = +x (east), 90° = +y (north), 180° = −x (west), 270° = −y (south).
-ABSORBER_WIDTH_M = 0.40
-ABSORBER_HEIGHT_M = 0.40
-ABSORBER_CENTER_HEIGHT_M = 1.0
-ABSORBER_NORMAL_ANGLE_FROM_X_DEG = 90
+# --- Sim-only knobs (plant geometry comes from config/system.yaml via hotbox_shared) ---
 
 # Cell count along each axis on **each** square facet (rays per mirror ≈ grid_nx * grid_ny * U * V).
 SIM_SAMPLES_U = 8
@@ -47,16 +31,12 @@ SPOT_GRID_SAMPLES_U = 32
 SPOT_GRID_SAMPLES_V = 32
 SPOT_GRID_BINS = 80
 
-# Site (must match SunModel in build_default_simulation)
-SITE_LATITUDE_DEG = 40.7864
-SITE_LONGITUDE_DEG = -119.2065
-SITE_ALTITUDE_M = 1190.0
-
-# Day curve: local sunrise → sunset (Pacific TZ), every N minutes. Int or same-length lists.
+# Day curve: local sunrise → sunset, every N minutes. Int or same-length lists.
+# TZ matches the default Diémoz site in config/system.yaml.
 DAY_CURVE_YEAR = 2026
 DAY_CURVE_MONTH = [8, 9]
 DAY_CURVE_DAY = [30, 7]
-DAY_CURVE_TZ = ZoneInfo("America/Los_Angeles")
+DAY_CURVE_TZ = ZoneInfo("Europe/Paris")
 DAY_CURVE_STEP_MINUTES = 20
 
 # Local wall time for the 3D scene / absorber spot figures and printed snapshot
@@ -98,14 +78,16 @@ def local_times_sunrise_to_sunset(
     step_minutes: int,
 ) -> tuple[list[datetime], datetime | None, datetime | None]:
     """
-    10-minute samples from first step on/after sunrise through last on/before sunset.
-    Sunrise/sunset from pvlib SPA for the given site and local date.
+    Samples from first step on/after sunrise through last on/before sunset.
+    Sunrise/sunset from pvlib SPA for the given site and local calendar date.
+
+    Uses local noon as the SPA reference time: midnight is ambiguous across timezones
+    and can return the previous civil day's rise/set (yielding zero samples).
     """
     tz_key = tz.key
     loc = Location(latitude_deg, longitude_deg, tz_key, altitude=altitude_m)
-    day_midnight = pd.Timestamp(year=year, month=month, day=day, tz=tz_key).normalize()
-    idx = pd.DatetimeIndex([day_midnight])
-    rs = loc.get_sun_rise_set_transit(idx, method="spa")
+    day_noon = pd.Timestamp(year=year, month=month, day=day, hour=12, tz=tz_key)
+    rs = loc.get_sun_rise_set_transit(pd.DatetimeIndex([day_noon]), method="spa")
     sunrise_ts = rs["sunrise"].iloc[0]
     sunset_ts = rs["sunset"].iloc[0]
     if pd.isna(sunrise_ts) or pd.isna(sunset_ts):
@@ -245,54 +227,52 @@ def simulate_delivered_power_over_times(
 
 def build_default_simulation(
     *,
+    system: SystemConstants | None = None,
     sphere_center_offset_m: float | None = None,
 ) -> HotboxSimulation:
+    """Build the optical plant from ``config/system.yaml`` (via ``hotbox_shared``)."""
+    system = system or load_system_constants()
+    site = system.default_site
+    absorber_c = system.absorber
+    mirror_c = system.mirror
+
     sun = SunModel(
-        latitude_deg=SITE_LATITUDE_DEG,
-        longitude_deg=SITE_LONGITUDE_DEG,
-        altitude_m=SITE_ALTITUDE_M,
+        latitude_deg=site.latitude_deg,
+        longitude_deg=site.longitude_deg,
+        altitude_m=site.altitude_m,
     )
     absorber = SolarAbsorber(
-        width_m=ABSORBER_WIDTH_M,
-        height_m=ABSORBER_HEIGHT_M,
-        center_height_m=ABSORBER_CENTER_HEIGHT_M,
-        normal_angle_from_x_deg=ABSORBER_NORMAL_ANGLE_FROM_X_DEG,
+        width_m=absorber_c.width_m,
+        height_m=absorber_c.height_m,
+        center_height_m=absorber_c.center_height_m,
+        normal_angle_from_x_deg=absorber_c.normal_angle_from_x_deg,
     )
 
-    a = np.asarray(absorber.center, dtype=float)
-    fw = np.asarray(absorber.normal, dtype=float)
-    fw_xy = np.array([fw[0], fw[1], 0.0], dtype=float)
-    fw_xy /= max(float(np.linalg.norm(fw_xy)), 1e-12)
-    # Horizontal tangent direction to lay out multiple assemblies on one side of the absorber.
-    tw_xy = np.array([-fw_xy[1], fw_xy[0], 0.0], dtype=float)
-    base_mount = a + MIRROR_LOCATION_RING_RADIUS_M * fw_xy
-    tile_half_m = 0.5 * MIRROR_TILE_SIDE_M
-    pitch_m = MIRROR_GRID_PITCH_M
     dist_m = (
         sphere_center_offset_m
         if sphere_center_offset_m is not None
-        else MIRROR_RADIUS_OF_CURVATURE_M
+        else mirror_c.radius_of_curvature_m
     )
-    grids: list[AltAzFlatMirrorGrid] = []
-    for i in range(MIRROR_ASSEMBLY_COUNT):
-        offset = (i - 0.5 * (MIRROR_ASSEMBLY_COUNT - 1)) * MIRROR_ASSEMBLY_SPACING_M
-        mount_world = np.array(
-            [
-                base_mount[0] + offset * tw_xy[0],
-                base_mount[1] + offset * tw_xy[1],
-                MIRROR_GRID_MOUNT_HEIGHT_M,
-            ],
-            dtype=float,
+    tile_half_m = 0.5 * mirror_c.tile_side_m
+    mounts = system.fleet.mounts
+    if len(mounts) != system.fleet.assembly_count:
+        raise ValueError(
+            f"fleet.assembly_count={system.fleet.assembly_count} but "
+            f"len(fleet.mounts)={len(mounts)}"
         )
+
+    grids: list[AltAzFlatMirrorGrid] = []
+    for mount in mounts:
         grids.append(
             AltAzFlatMirrorGrid(
-                mount_world=mount_world,
-                grid_nx=MIRROR_GRID_NX,
-                grid_ny=MIRROR_GRID_NY,
-                pitch_m=pitch_m,
+                mount_world=system.mount_world(mount.node_id),
+                grid_nx=mirror_c.grid_nx,
+                grid_ny=mirror_c.grid_ny,
+                pitch_m=mirror_c.pitch_m,
                 tile_half_m=tile_half_m,
                 sun=sun,
                 sphere_center_offset_m=float(dist_m),
+                mount_offset_d_m=float(mirror_c.mount_offset_d_m),
             )
         )
 
@@ -313,8 +293,9 @@ def main() -> None:
         default=None,
         metavar="M",
         help=(
-            "Sphere center z in mirror assembly frame [m]: sphere at (0, 0, z) with facet grid in z = 0. "
-            f"Default: {MIRROR_RADIUS_OF_CURVATURE_M:.4g} m (+2× mirror ring radius)."
+            "Sphere center z in mirror assembly frame [m]: sphere at (0, 0, z) with facet grid "
+            "offset by mount_offset_d_m along +z. Default: mirror.radius_of_curvature_m from "
+            "config/system.yaml."
         ),
     )
     parser.add_argument(
@@ -333,8 +314,19 @@ def main() -> None:
             "(geometric facet/absorber hits only).",
             flush=True,
         )
+    with timed_step("Load shared plant constants (config/system.yaml)"):
+        system = load_system_constants()
+        site = system.default_site
+        print(
+            f"[hotbox] site lat={site.latitude_deg}, lon={site.longitude_deg}, "
+            f"alt={site.altitude_m} m; fleet={system.fleet.assembly_count} mounts",
+            flush=True,
+        )
     with timed_step("Build default simulation (geometry + mirror grids)"):
-        sim = build_default_simulation(sphere_center_offset_m=args.sphere_center_offset_m)
+        sim = build_default_simulation(
+            system=system,
+            sphere_center_offset_m=args.sphere_center_offset_m,
+        )
     print(f"Mirror assemblies: {len(sim.mirrors)} (facet normals toward assembly-frame sphere)")
     if sim.mirrors:
         g0 = sim.mirrors[0]
@@ -389,15 +381,15 @@ def main() -> None:
     # Spot grid: same calendar day as SCENE_VIS_WHEN, sunrise→sunset (see SPOT_GRID_*).
     with timed_step("Compute spot-pattern sample times"):
         spot_times = spot_pattern_sample_times(
-        SITE_LATITUDE_DEG,
-        SITE_LONGITUDE_DEG,
-        SITE_ALTITUDE_M,
-        SCENE_VIS_WHEN.year,
-        SCENE_VIS_WHEN.month,
-        SCENE_VIS_WHEN.day,
-        DAY_CURVE_TZ,
-        DAY_CURVE_STEP_MINUTES,
-        SPOT_GRID_NUM_PANELS,
+            site.latitude_deg,
+            site.longitude_deg,
+            site.altitude_m,
+            SCENE_VIS_WHEN.year,
+            SCENE_VIS_WHEN.month,
+            SCENE_VIS_WHEN.day,
+            DAY_CURVE_TZ,
+            DAY_CURVE_STEP_MINUTES,
+            SPOT_GRID_NUM_PANELS,
         )
     if not spot_times:
         spot_times = [when]
@@ -453,14 +445,14 @@ def main() -> None:
     for month_i, day_i in day_specs:
         with timed_step(f"Sunrise/sunset & timestep list for {month_i}/{day_i}/{DAY_CURVE_YEAR}"):
             day_times, sr, ss = local_times_sunrise_to_sunset(
-            SITE_LATITUDE_DEG,
-            SITE_LONGITUDE_DEG,
-            SITE_ALTITUDE_M,
-            DAY_CURVE_YEAR,
-            month_i,
-            day_i,
-            DAY_CURVE_TZ,
-            DAY_CURVE_STEP_MINUTES,
+                site.latitude_deg,
+                site.longitude_deg,
+                site.altitude_m,
+                DAY_CURVE_YEAR,
+                month_i,
+                day_i,
+                DAY_CURVE_TZ,
+                DAY_CURVE_STEP_MINUTES,
             )
         label = f"{month_i}/{day_i}/{DAY_CURVE_YEAR}"
         if sr is not None and ss is not None:

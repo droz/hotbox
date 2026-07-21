@@ -1,5 +1,5 @@
 # Hot-Box plant / geometry constants
-# Shared by controller, sim_in_the_loop, and (via generated header) firmware.
+# Shared by controller, sim_in_the_loop, sim_full_raytrace, and (via generated header) firmware.
 # Edit this file rather than hardcoding values in Python or C++.
 
 default_site:
@@ -7,14 +7,23 @@ default_site:
   latitude_deg: 45.5885
   longitude_deg: 5.0904
   altitude_m: 380.0
+#  # Berkeley, California
+#  latitude_deg: 37.8716
+#  longitude_deg: -122.2585
+#  altitude_m: 186.0
+#  # Gerlach, Nevada
+#  latitude_deg: 40.6518
+#  longitude_deg: -119.3562
+#  altitude_m: 1200.0
 
 # Absorber center O is the world origin XY, at center_height_m on Z.
 absorber:
   width_m: 0.40
   height_m: 0.40
   center_height_m: 1.0
-  # 0° = +X east, 90° = +Y north
-  normal_angle_from_x_deg: 90.0
+  # Oven / absorber face normal in the horizontal plane.
+  # 0° = +X east, 90° = +Y north. Changing this rotates the whole plant.
+  normal_angle_from_x_deg: 0.0
 
 mirror:
   # Faceted spherical assembly on one alt-az mount
@@ -22,7 +31,7 @@ mirror:
   grid_ny: 5
   tile_side_m: 0.254
   pitch_m: 0.26035          # tile_side + 0.0254/4
-  mount_offset_d_m: 0.2     # |An Mn| along mirror-frame Z
+  mount_offset_d_m: 0.0     # |An Mn| along mirror-frame Z
   radius_of_curvature_m: 5.5  # design sphere radius
   focal_length_m: 2.75        # typically R/2 for a spherical mirror
   default_oa_distance_m: 2.5  # |O An| horizontal design distance
@@ -32,19 +41,20 @@ fleet:
   assembly_count: 3
   # Center-to-center spacing between assemblies along an arc / line [m]
   assembly_spacing_m: 1.0
-  # Design layout: mounts placed on a horizontal ring around O in the XY plane.
-  # bearing_deg is measured from north (+Y) toward east (+X), same as OA bearing.
+  # Design layout: mounts on a horizontal arc in front of the oven back.
+  # bearing_deg is relative to absorber.normal_angle_from_x_deg:
+  #   0 = straight out along the oven normal; +CCW about +Z (up).
   mounts:
     - node_id: 0
-      bearing_deg: 90.0
+      bearing_deg: 0.0
       oa_distance_m: 2.5
       mount_height_m: 1.0
     - node_id: 1
-      bearing_deg: 60.0
+      bearing_deg: -30.0
       oa_distance_m: 2.5
       mount_height_m: 1.0
     - node_id: 2
-      bearing_deg: 120.0
+      bearing_deg: 30.0
       oa_distance_m: 2.5
       mount_height_m: 1.0
 

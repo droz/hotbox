@@ -35,7 +35,7 @@ def _layouts_from_system(system: SystemConstants) -> dict[int, TrueMirrorLayout]
     for mount in system.fleet.mounts:
         layouts[mount.node_id] = TrueMirrorLayout(
             node_id=mount.node_id,
-            mount_world=mount.mount_world(),
+            mount_world=system.mount_world(mount.node_id),
             facet_offset_world=offset.copy(),
             mirror_offset_d_m=system.mirror.mount_offset_d_m,
             focal_length_m=system.mirror.focal_length_m,
@@ -43,11 +43,11 @@ def _layouts_from_system(system: SystemConstants) -> dict[int, TrueMirrorLayout]
     return layouts
 
 
-def _calibration_from_layout(layout: TrueMirrorLayout, bearing_deg: float) -> MirrorCalibration:
+def _calibration_from_layout(layout: TrueMirrorLayout, oa_bearing_from_north_deg: float) -> MirrorCalibration:
     mount = np.asarray(layout.mount_world, dtype=float).reshape(3)
     return MirrorCalibration(
         node_id=layout.node_id,
-        oa_bearing_deg=bearing_deg,
+        oa_bearing_deg=oa_bearing_from_north_deg,
         oa_height_delta_m=float(mount[2]),
         home_azimuth_offset_deg=0.0,
         home_elevation_offset_deg=0.0,
@@ -55,7 +55,6 @@ def _calibration_from_layout(layout: TrueMirrorLayout, bearing_deg: float) -> Mi
         mirror_offset_d_m=layout.mirror_offset_d_m,
         focal_length_m=layout.focal_length_m,
     )
-
 
 class SitlHarness:
     def __init__(
@@ -92,7 +91,9 @@ class SitlHarness:
         self.controller.calibrations = {
             node_id: _calibration_from_layout(
                 layout,
-                bearing_deg=self.system.fleet.mount_by_id(node_id).bearing_deg,
+                oa_bearing_from_north_deg=self.system.fleet.mount_by_id(node_id).oa_bearing_from_north_deg(
+                    normal_angle_from_x_deg=self.system.absorber.normal_angle_from_x_deg
+                ),
             )
             for node_id, layout in self.true_layouts.items()
         }
