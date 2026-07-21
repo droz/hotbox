@@ -27,6 +27,7 @@ def test_sitl_harness_runs() -> None:
     harness.startup()
     snapshot = harness.step(0.05)
     assert "0" in snapshot["mirrors"] or 0 in snapshot["mirrors"]
+    assert snapshot["geometry"]["target"] is not None
     assert snapshot["geometry"]["estimated"] is not None
     assert snapshot["geometry"]["true"] is not None
     assert "0" in snapshot["true_miss_m"]

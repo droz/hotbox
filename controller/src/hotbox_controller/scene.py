@@ -4,19 +4,9 @@ from typing import Any
 
 import numpy as np
 
-from .geometry import MirrorCalibration, normalize
-from .protocol import MirrorStatus
+from .geometry import MirrorCalibration, mount_rotation_matrix, normalize
 from .sun import SunVector
-
-
-def mount_rotation_matrix(azimuth_deg: float, elevation_deg: float) -> np.ndarray:
-    az = np.deg2rad(azimuth_deg)
-    el = np.deg2rad(elevation_deg)
-    cx, sx = np.cos(el), np.sin(el)
-    cz, sz = np.cos(az), np.sin(az)
-    r_x = np.array([[1.0, 0.0, 0.0], [0.0, cx, -sx], [0.0, sx, cx]], dtype=float)
-    r_z = np.array([[cz, -sz, 0.0], [sz, cz, 0.0], [0.0, 0.0, 1.0]], dtype=float)
-    return r_z @ r_x
+from .tracking import TrackingTarget
 
 
 def mount_world_from_calibration(calibration: MirrorCalibration) -> np.ndarray:
@@ -178,12 +168,13 @@ def build_mirror_scene_entry(
     center_index = (grid_ny // 2) * grid_nx + (grid_nx // 2)
     facet = np.asarray(facets[center_index]["center"], dtype=float)
     normal = np.asarray(facets[center_index]["normal"], dtype=float)
-    incoming = -normalize(sun.world_vector)
+    sun_toward_scene = -normalize(sun.world_vector)
+    incoming = sun_toward_scene
     reflected = reflect_ray(incoming, normal)
     absorber = np.asarray(absorber_world, dtype=float).reshape(3)
     to_absorber = normalize(absorber - facet)
     miss_m = float(np.linalg.norm(np.cross(to_absorber, reflected)))
-    sun_start = facet - normalize(sun.world_vector) * upstream_distance_m
+    sun_start = facet - incoming * upstream_distance_m
     reflected_end = facet + reflected * float(np.linalg.norm(absorber - facet))
     return {
         "node_id": node_id,
@@ -223,27 +214,26 @@ def _mirror_params_from_system(system: Any | None) -> dict[str, float | int]:
     }
 
 
-def build_estimated_scene(
+def build_target_scene(
     *,
     sun: SunVector,
     absorber_world: np.ndarray,
-    statuses: dict[int, MirrorStatus],
+    targets: dict[int, TrackingTarget],
     calibrations: dict[int, MirrorCalibration],
     absorber_height_m: float,
     default_oa_distance_m: float = 2.5,
     default_mirror_offset_d_m: float = 0.2,
     system: Any | None = None,
 ) -> dict[str, Any]:
+    """Scene geometry from commanded tracking targets (stable one-shot bisector solve)."""
     params = _mirror_params_from_system(system)
     mirrors = []
     mounts_for_oven: list[np.ndarray] = []
-    for node_id, status in sorted(statuses.items()):
+    for node_id, target in sorted(targets.items()):
         calibration = calibrations.get(node_id)
         if calibration is not None:
             mount = mount_world_from_calibration(calibration)
             offset = calibration.mirror_offset_d_m
-            az = status.azimuth_deg + calibration.home_azimuth_offset_deg
-            el = status.elevation_deg + calibration.home_elevation_offset_deg
         else:
             if system is not None:
                 try:
@@ -253,15 +243,13 @@ def build_estimated_scene(
             else:
                 mount = default_mount_world(node_id, absorber_height_m, default_oa_distance_m)
             offset = float(params["mount_offset_d_m"])
-            az = status.azimuth_deg
-            el = status.elevation_deg
         mounts_for_oven.append(mount)
         mirrors.append(
             build_mirror_scene_entry(
                 node_id=node_id,
                 mount_world=mount,
-                azimuth_deg=az,
-                elevation_deg=el,
+                azimuth_deg=target.azimuth_deg,
+                elevation_deg=target.elevation_deg,
                 mirror_offset_d_m=offset,
                 sun=sun,
                 absorber_world=absorber_world,
@@ -287,7 +275,7 @@ def build_estimated_scene(
     sun_distance_m = 10.0
     sun_pos = normalize(sun.world_vector) * sun_distance_m
     return {
-        "label": "estimated",
+        "label": "target",
         "frame": {"x": "east", "y": "north", "z": "up"},
         "ground_z": 0.0,
         "absorber": {"center": np.asarray(absorber_world, dtype=float).reshape(3).tolist()},
@@ -301,3 +289,7 @@ def build_estimated_scene(
         },
         "mirrors": mirrors,
     }
+
+
+# Back-compat alias
+build_estimated_scene = build_target_scene

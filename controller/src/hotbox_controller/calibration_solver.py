@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.optimize import least_squares
 
-from .geometry import MirrorCalibration, az_el_from_normal, mirror_normal_for_reflection, normalize
+from .geometry import MirrorCalibration, facet_normal_world, mirror_normal_for_reflection, normalize, pivot_facet_normal_body
 
 
 @dataclass(slots=True)
@@ -27,6 +27,13 @@ def solve_mirror_calibration(
 ) -> MirrorCalibration:
     sun = normalize(np.asarray(sample.sun_vector_world, dtype=float).reshape(3))
 
+    pivot_normal_body = pivot_facet_normal_body(
+        grid_nx=3,
+        grid_ny=5,
+        pitch_m=0.26035,
+        radius_of_curvature_m=5.5,
+    )
+
     def residuals(params: np.ndarray) -> np.ndarray:
         bearing_deg, height_delta_m, home_az_offset, home_el_offset = params
         bearing = np.deg2rad(bearing_deg)
@@ -40,13 +47,13 @@ def solve_mirror_calibration(
         )
         az1 = sample.look_at_oven_az_deg - home_az_offset
         el1 = sample.look_at_oven_el_deg - home_el_offset
-        normal1 = _mount_normal(az1, el1)
+        normal1 = facet_normal_world(az1, el1, pivot_normal_body)
         look_dir = normalize(mount_world + mirror_offset_d_m * normal1 - np.zeros(3))
         err1 = look_dir - normalize(-mount_world)
 
         az2 = sample.focus_on_oven_az_deg - home_az_offset
         el2 = sample.focus_on_oven_el_deg - home_el_offset
-        normal2 = _mount_normal(az2, el2)
+        normal2 = facet_normal_world(az2, el2, pivot_normal_body)
         incoming = -sun
         outgoing = normalize(-mount_world)
         bisector = mirror_normal_for_reflection(incoming, outgoing)
@@ -66,14 +73,3 @@ def solve_mirror_calibration(
         mirror_offset_d_m=mirror_offset_d_m,
         focal_length_m=focal_length_m,
     )
-
-
-def _mount_normal(azimuth_deg: float, elevation_deg: float) -> np.ndarray:
-    az = np.deg2rad(azimuth_deg)
-    el = np.deg2rad(elevation_deg)
-    body_z = np.array([0.0, 0.0, 1.0], dtype=float)
-    cx, sx = np.cos(el), np.sin(el)
-    cz, sz = np.cos(az), np.sin(az)
-    r_x = np.array([[1.0, 0.0, 0.0], [0.0, cx, -sx], [0.0, sx, cx]], dtype=float)
-    r_z = np.array([[cz, -sz, 0.0], [sz, cz, 0.0], [0.0, 0.0, 1.0]], dtype=float)
-    return normalize(r_z @ r_x @ body_z)

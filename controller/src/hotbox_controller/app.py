@@ -16,7 +16,7 @@ from .config import AppConfig, SiteConfig, app_config_from_system
 from .gps import GpsService
 from .mirror_fleet import MirrorFleet
 from .protocol import CommandName, MirrorCommand
-from .scene import build_estimated_scene, build_mirror_scene_entry, default_mount_world, mount_world_from_calibration
+from .scene import build_mirror_scene_entry, build_target_scene, default_mount_world, mount_world_from_calibration
 from .sun import SunService, SunVector
 from .tracking import TrackingTarget, safe_park, track_absorber
 from .transport import MirrorTransport, build_transport
@@ -80,6 +80,31 @@ class ControllerApplication:
     def set_true_geometry(self, geometry: dict[str, Any] | None) -> None:
         self._true_geometry = geometry
 
+    def _tracking_kwargs(self) -> dict[str, float | int]:
+        mirror = self.config.mirror
+        return {
+            "grid_nx": mirror.grid_nx,
+            "grid_ny": mirror.grid_ny,
+            "pitch_m": mirror.pitch_m,
+            "radius_of_curvature_m": mirror.radius_of_curvature_m,
+        }
+
+    def _tracking_targets(
+        self,
+        sun: SunVector,
+        statuses: dict[int, Any],
+    ) -> dict[int, TrackingTarget]:
+        targets: dict[int, TrackingTarget] = {}
+        for node_id in self.fleet.nodes():
+            if statuses[node_id].homed:
+                mirror_world = self._mirror_world_for_node(node_id)
+                targets[node_id] = track_absorber(
+                    sun, mirror_world, self.absorber_world, **self._tracking_kwargs()
+                )
+            else:
+                targets[node_id] = safe_park(self.config.oven)
+        return targets
+
     def control_tick(self) -> None:
         if self.mode != "auto":
             return
@@ -94,11 +119,10 @@ class ControllerApplication:
             )
         sun = self.sun.sun_vector(fix.when_utc)
         statuses = self.fleet.poll()
-        for node_id in self.fleet.nodes():
+        targets = self._tracking_targets(sun, statuses)
+        for node_id, target in targets.items():
             if not statuses[node_id].homed:
                 continue
-            mirror_world = self._mirror_world_for_node(node_id)
-            target = track_absorber(sun, mirror_world, self.absorber_world)
             self.fleet.apply_targets({node_id: target})
 
     def current_snapshot(self) -> dict[str, Any]:
@@ -113,21 +137,12 @@ class ControllerApplication:
             )
         sun = self.sun.sun_vector(fix.when_utc)
         statuses = self.fleet.poll()
+        targets = self._tracking_targets(sun, statuses)
 
-        targets: dict[int, dict[str, float | str]] = {}
-        for node_id in self.fleet.nodes():
-            mirror_world = self._mirror_world_for_node(node_id)
-            target = (
-                track_absorber(sun, mirror_world, self.absorber_world)
-                if statuses[node_id].homed
-                else safe_park(self.config.oven)
-            )
-            targets[node_id] = asdict(target)
-
-        estimated = build_estimated_scene(
+        target_scene = build_target_scene(
             sun=sun,
             absorber_world=self.absorber_world,
-            statuses=statuses,
+            targets=targets,
             calibrations=self.calibrations,
             absorber_height_m=self.config.oven.absorber_height_m,
             default_oa_distance_m=self.config.mirror.default_oa_distance_m,
@@ -146,10 +161,11 @@ class ControllerApplication:
             },
             "transport": self.config.transport.mode,
             "mirrors": {str(node_id): status.as_dict() for node_id, status in statuses.items()},
-            "targets": {str(node_id): target for node_id, target in targets.items()},
+            "targets": {str(node_id): asdict(target) for node_id, target in targets.items()},
             "calibration_count": len(self.calibrations),
             "geometry": {
-                "estimated": estimated,
+                "target": target_scene,
+                "estimated": target_scene,
                 "true": self._true_geometry,
             },
         }

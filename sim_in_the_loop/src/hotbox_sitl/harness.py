@@ -131,8 +131,11 @@ class SitlHarness:
                 "mirrors": snapshot["mirrors"],
                 "geometry": snapshot["geometry"],
                 "true_miss_m": {str(m["node_id"]): m["miss_m"] for m in true_geometry["mirrors"]},
+                "target_miss_m": {
+                    str(m["node_id"]): m["miss_m"] for m in snapshot["geometry"]["target"]["mirrors"]
+                },
                 "estimated_miss_m": {
-                    str(m["node_id"]): m["miss_m"] for m in snapshot["geometry"]["estimated"]["mirrors"]
+                    str(m["node_id"]): m["miss_m"] for m in snapshot["geometry"]["target"]["mirrors"]
                 },
             }
             return self._latest
@@ -156,7 +159,7 @@ class SitlHarness:
         print("Hot-Box sim-in-the-loop running")
         print(f"Open the UI at http://{self.host}:{self.port}/")
         print(f"Plant constants from config/system.yaml ({self.system.fleet.assembly_count} mirrors)")
-        print("Estimated geometry (blue) and true simulator geometry (yellow) are overlaid.")
+        print("Target geometry (blue) and true simulator geometry (yellow) are overlaid.")
         print("Use Home / Park / Auto / Jog in the UI to interact with the simulated mirrors.")
         try:
             uvicorn.run(

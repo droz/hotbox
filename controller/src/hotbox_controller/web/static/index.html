@@ -225,7 +225,7 @@
   <body>
     <header>
       <h1>Hot-Box Controller</h1>
-      <p>World frame: +X east, +Y north, +Z up · estimated vs true geometry</p>
+      <p>World frame: +X east, +Y north, +Z up · target vs true (sim) geometry</p>
     </header>
     <main class="app">
       <section class="viewport">
@@ -234,7 +234,7 @@
         </div>
         <div class="viewport-meta">
           <span id="scene-status">Loading 3D viewer…</span>
-          <span><span class="swatch est"></span>estimated</span>
+          <span><span class="swatch est"></span>target</span>
           <span><span class="swatch true"></span>true (sim)</span>
         </div>
       </section>
@@ -345,8 +345,8 @@
       function updateMirrorCards(state) {
         const mirrors = state.mirrors || {};
         const targets = state.targets || {};
-        const estimated = state.geometry?.estimated?.mirrors || [];
-        const missById = Object.fromEntries(estimated.map((m) => [String(m.node_id), m.miss_m]));
+        const targetMirrors = state.geometry?.target?.mirrors || state.geometry?.estimated?.mirrors || [];
+        const missById = Object.fromEntries(targetMirrors.map((m) => [String(m.node_id), m.miss_m]));
         Object.keys(mirrors).sort((a, b) => Number(a) - Number(b)).forEach((id) => {
           const status = mirrors[id];
           const target = targets[id];
@@ -478,9 +478,9 @@
       );
       scene.add(sunStem);
 
-      const estimatedGroup = new THREE.Group();
+      const targetGroup = new THREE.Group();
       const trueGroup = new THREE.Group();
-      scene.add(estimatedGroup);
+      scene.add(targetGroup);
       scene.add(trueGroup);
 
       function clearGroup(group) {
@@ -599,11 +599,11 @@
         ovenGroup.add(handle);
       }
 
-      function renderGeometry(estimated, truth) {
-        clearGroup(estimatedGroup);
+      function renderGeometry(targetScene, truth) {
+        clearGroup(targetGroup);
         clearGroup(trueGroup);
 
-        const source = estimated || truth;
+        const source = targetScene || truth;
         if (source?.oven) renderOven(source.oven);
 
         if (source?.sun?.display_position) {
@@ -620,8 +620,8 @@
             `pos (${p[0].toFixed(2)}, ${p[1].toFixed(2)}, ${p[2].toFixed(2)})`;
         }
 
-        if (estimated?.mirrors) {
-          estimated.mirrors.forEach((mirror) => addMirrorAssembly(estimatedGroup, mirror, 0x7ec8ff));
+        if (targetScene?.mirrors) {
+          targetScene.mirrors.forEach((mirror) => addMirrorAssembly(targetGroup, mirror, 0x7ec8ff));
         }
         if (truth?.mirrors) {
           truth.mirrors.forEach((mirror) => addMirrorAssembly(trueGroup, mirror, 0xffd166));
@@ -637,7 +637,7 @@
       }
 
       window.hotboxOnState = (state) => {
-        renderGeometry(state.geometry?.estimated, state.geometry?.true);
+        renderGeometry(state.geometry?.target || state.geometry?.estimated, state.geometry?.true);
       };
       if (window.hotboxLatestState) window.hotboxOnState(window.hotboxLatestState);
 
