@@ -23,6 +23,13 @@ from datetime import datetime
 
 import numpy as np
 
+from hotbox_shared import (
+    heading_and_tilt_from_normal,
+    mount_az_el_align_body_normal_to_world,
+    mount_rotation_matrix,
+    normalize_mount_az_el,
+)
+
 from src.geometry import normalize, orthonormal_basis_from_direction
 from src.mirror_grid_design import (
     FacetGridInLocalFrame,
@@ -38,132 +45,9 @@ __all__ = (
     "grid_mount_rotation_matrix",
 )
 
-
-def _normalize_mount_az_el(az_deg: float, el_deg: float) -> tuple[float, float]:
-    """
-    Mount convention (see ``grid_mount_rotation_matrix``):
-
-    - **Elevation** ``[-90, 90]`` [deg]: right-handed rotation about **+world X** (east), then
-    - **Azimuth** ``[0, 360)``: rotation about **+world Z** (up): ``R = R_z(az) @ R_x(el)``.
-    """
-    az = float(az_deg % 360.0)
-    el = float(el_deg)
-    if not np.isfinite(el) or abs(el) > 720.0:
-        el = 45.0
-    el = float(np.clip(el, -90.0, 90.0))
-    return az, el
-
-
-def grid_mount_rotation_matrix(azimuth_deg: float, elevation_deg: float) -> np.ndarray:
-    """
-    Active rotation **body → world** (same frame: x east, y north, z up).
-
-    ``p_w = R @ p_b``,  ``R = R_z(azimuth) @ R_x(elevation)``.
-    """
-    az = np.deg2rad(azimuth_deg)
-    el = np.deg2rad(elevation_deg)
-    cx, sx = np.cos(el), np.sin(el)
-    r_x = np.array([[1.0, 0.0, 0.0], [0.0, cx, -sx], [0.0, sx, cx]], dtype=float)
-    cz, sz = np.cos(az), np.sin(az)
-    r_z = np.array([[cz, -sz, 0.0], [sz, cz, 0.0], [0.0, 0.0, 1.0]], dtype=float)
-    return r_z @ r_x
-
-
-def mount_az_el_align_body_normal_to_world(
-    lattice_normal_body: np.ndarray,
-    lattice_normal_target_world: np.ndarray,
-) -> tuple[float, float]:
-    """
-    ``(azimuth_deg, elevation_deg)`` so ``R_mount(az,el) @ n_B ≈ n_W`` (both unit).
-
-    Mount is ``R_z(az) @ R_x(el)`` (**body → world**). For a unit ``n_B``, ``R_x(el)`` fixes how
-    ``z`` mixes from ``(n_y, n_z)``; ``R_z(az)`` only rotates ``x,y``, so ``el`` is solved from the
-    scalar constraint ``(R_x n_B)_z = n_{W,z}``, then ``az`` from the ``xy`` heading. No grid search.
-    """
-    nb = np.asarray(lattice_normal_body, dtype=float).reshape(3)
-    nw = np.asarray(lattice_normal_target_world, dtype=float).reshape(3)
-    nb = nb / max(float(np.linalg.norm(nb)), 1e-15)
-    nw = nw / max(float(np.linalg.norm(nw)), 1e-15)
-    nx, ny, nz = float(nb[0]), float(nb[1]), float(nb[2])
-    tx, ty, tz = float(nw[0]), float(nw[1]), float(nw[2])
-
-    def sqerr(az_deg: float, el_deg: float) -> float:
-        r = grid_mount_rotation_matrix(az_deg, el_deg)
-        d = r @ nb - nw
-        return float(np.dot(d, d))
-
-    def finish(az_deg: float, el_deg: float) -> tuple[float, float]:
-        return _normalize_mount_az_el(float(az_deg), float(el_deg))
-
-    r_yz = float(np.hypot(ny, nz))
-
-    candidates: list[tuple[float, float]] = []
-
-    if r_yz < 1e-12:
-        # n_B is (±1, 0, 0): R_x leaves it unchanged; only R_z spins x,y.
-        vx, vy = nx, 0.0
-        r_xy = float(np.hypot(tx, ty))
-        if r_xy < 1e-12:
-            return finish(0.0, 0.0)
-        az_deg = float(np.rad2deg(np.arctan2(ty, tx) - np.arctan2(vy, vx)))
-        return finish(az_deg, 0.0)
-
-    # (R_x(el) n_B)_z = n_y sin(el) + n_z cos(el) = r_yz * sin(el + phi),  phi = atan2(n_z, n_y)
-    phi = float(np.arctan2(nz, ny))
-    arg = float(np.clip(tz / r_yz, -1.0, 1.0))
-    for delta in (float(np.arcsin(arg)), float(np.pi - np.arcsin(arg))):
-        el_rad = delta - phi
-        el_deg = float(np.rad2deg(el_rad))
-        if not (-90.0 - 1e-9 <= el_deg <= 90.0 + 1e-9):
-            continue
-        el_deg = float(np.clip(el_deg, -90.0, 90.0))
-        elr = np.deg2rad(el_deg)
-        cr, sr = np.cos(elr), np.sin(elr)
-        vx = nx
-        vy = cr * ny - sr * nz
-        vz = sr * ny + cr * nz
-        r_xy_v = float(np.hypot(vx, vy))
-        r_xy_t = float(np.hypot(tx, ty))
-        if r_xy_v < 1e-12 or r_xy_t < 1e-12:
-            if abs(vz - tz) < 1e-6 and r_xy_t < 1e-12:
-                candidates.append((0.0, el_deg))
-            continue
-        az_deg = float(np.rad2deg(np.arctan2(ty, tx) - np.arctan2(vy, vx)))
-        candidates.append((az_deg, el_deg))
-
-    if not candidates:
-        # |t_z| > r_yz: no exact z match; minimize z error over elevation (endpoints + stationary).
-        el_cands = [-90.0, 90.0]
-        el_crit = float(np.rad2deg(np.arctan2(ny, nz)))
-        for shift in (-360.0, 0.0, 360.0):
-            e = el_crit + shift
-            if -90.0 <= e <= 90.0:
-                el_cands.append(e)
-        best_az_f, best_el_f, best_e_f = 0.0, 0.0, 1e30
-        for el_deg in el_cands:
-            elr = np.deg2rad(float(el_deg))
-            cr, sr = np.cos(elr), np.sin(elr)
-            vy = cr * ny - sr * nz
-            vx = nx
-            r_xy_v = float(np.hypot(vx, vy))
-            r_xy_t = float(np.hypot(tx, ty))
-            if r_xy_v < 1e-12:
-                az_deg = 0.0
-            else:
-                az_deg = float(np.rad2deg(np.arctan2(ty, tx) - np.arctan2(vy, vx)))
-            e = sqerr(az_deg, el_deg)
-            if e < best_e_f:
-                best_e_f, best_az_f, best_el_f = e, az_deg, el_deg
-        return finish(best_az_f, best_el_f)
-
-    best_az, best_el = candidates[0]
-    best_e = sqerr(best_az, best_el)
-    for az_deg, el_deg in candidates[1:]:
-        e = sqerr(az_deg, el_deg)
-        if e < best_e:
-            best_e, best_az, best_el = e, az_deg, el_deg
-
-    return finish(best_az, best_el)
+# Shared mount kinematics (same implementation as the live controller).
+grid_mount_rotation_matrix = mount_rotation_matrix
+_normalize_mount_az_el = normalize_mount_az_el
 
 
 @dataclass(slots=True)
@@ -350,13 +234,14 @@ class AltAzFlatMirrorGrid:
     def physical_mount_tilt_deg(self) -> float:
         r = grid_mount_rotation_matrix(self.azimuth_deg, self.elevation_deg)
         n_w = r @ self._pivot_facet_normal_body.reshape(3)
-        nz = float(np.clip(n_w[2], -1.0, 1.0))
-        return float(np.rad2deg(abs(np.arcsin(nz))))
+        _, tilt_deg = heading_and_tilt_from_normal(n_w)
+        return tilt_deg
 
     def physical_mount_azimuth_deg(self) -> float:
         r = grid_mount_rotation_matrix(self.azimuth_deg, self.elevation_deg)
         n_w = r @ self._pivot_facet_normal_body.reshape(3)
-        return float(np.rad2deg(np.arctan2(float(n_w[0]), float(n_w[1]))) % 360.0)
+        azimuth_deg, _ = heading_and_tilt_from_normal(n_w)
+        return azimuth_deg
 
     def tile_surface_grids(self, nu: int = 7, nv: int = 7) -> list[np.ndarray]:
         c_w, n_w, u_w, v_w = self._world_facets()

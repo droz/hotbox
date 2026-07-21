@@ -4,13 +4,9 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from hotbox_shared import MirrorGridSpec, solve_bisector_tracking_for_grid
+
 from .config import OvenConfig
-from .geometry import (
-    mirror_normal_for_reflection,
-    mount_az_el_align_body_normal_to_world,
-    normalize,
-    pivot_facet_normal_body,
-)
 from .sun import SunVector
 
 
@@ -31,18 +27,19 @@ def track_absorber(
     pitch_m: float = 0.26035,
     radius_of_curvature_m: float = 5.5,
 ) -> TrackingTarget:
-    incoming = -normalize(sun.world_vector)
-    mount = np.asarray(mirror_position_world, dtype=float).reshape(3)
-    outgoing = normalize(np.asarray(absorber_world, dtype=float).reshape(3) - mount)
-    bisector = mirror_normal_for_reflection(incoming, outgoing)
-    pivot_normal_body = pivot_facet_normal_body(
+    grid = MirrorGridSpec(
         grid_nx=grid_nx,
         grid_ny=grid_ny,
         pitch_m=pitch_m,
         radius_of_curvature_m=radius_of_curvature_m,
     )
-    azimuth_deg, elevation_deg = mount_az_el_align_body_normal_to_world(pivot_normal_body, bisector)
-    return TrackingTarget(azimuth_deg=azimuth_deg, elevation_deg=elevation_deg, mode="tracking")
+    angles = solve_bisector_tracking_for_grid(
+        sun_direction_toward_scene=-np.asarray(sun.world_vector, dtype=float).reshape(3),
+        mount_world=mirror_position_world,
+        target_world=absorber_world,
+        grid=grid,
+    )
+    return TrackingTarget(azimuth_deg=angles.azimuth_deg, elevation_deg=angles.elevation_deg, mode="tracking")
 
 
 def safe_park(config: OvenConfig) -> TrackingTarget:
