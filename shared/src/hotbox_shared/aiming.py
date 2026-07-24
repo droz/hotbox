@@ -118,28 +118,19 @@ def _limited_angles(
 def horizontal_stow_angles(
     pivot_facet_normal_body: np.ndarray,
     *,
-    mount_world: np.ndarray,
-    target_world: np.ndarray,
+    mount_world: np.ndarray | None = None,
+    target_world: np.ndarray | None = None,
     joint_limits: MountJointLimits | None = None,
 ) -> MountAngles:
     """
-    Night / wind stow: aim the pivot facet normal at world +Z (mirror face horizontal).
+    Face-up stow: mount ``(azimuth, elevation) = (0, 0)``.
 
-    Minimizes projected area for wind loading when the sun is down. Dual-branch choice
-    and clipping use :func:`apply_mount_joint_limits`.
+    At identity the body axes match world, so a +Z body normal points at zenith and the
+    mirror face is horizontal. Fixed angles (not joint-limited) so Park / night stow are
+    unambiguous. Unused kwargs kept for call-site compatibility.
     """
-    az, el = mount_az_el_align_body_normal_to_world(
-        pivot_facet_normal_body,
-        np.array([0.0, 0.0, 1.0], dtype=float),
-    )
-    return _limited_angles(
-        az,
-        el,
-        mount_world=mount_world,
-        target_world=target_world,
-        joint_limits=joint_limits,
-        night_stow=True,
-    )
+    _ = pivot_facet_normal_body, mount_world, target_world, joint_limits
+    return MountAngles(azimuth_deg=0.0, elevation_deg=0.0, night_stow=True)
 
 
 @dataclass(frozen=True, slots=True)

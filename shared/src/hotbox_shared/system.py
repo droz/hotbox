@@ -94,6 +94,9 @@ class FleetConstants:
 class ControlConstants:
     safe_park_azimuth_deg: float
     safe_park_elevation_deg: float
+    # When the oven is not requesting heat, Track mirrors aim this far above the absorber
+    # (world +Z) rather than at the absorber center.
+    idle_aim_height_above_absorber_m: float = 2.0
     # When true, aiming solves for mount_offset so the center facet reflects onto the
     # absorber (least squares after the bisector seed). Set false to skip (testing).
     solve_for_mount_offset: bool = True

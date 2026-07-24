@@ -61,8 +61,12 @@ fleet:
       mount_height_m: 1.0
 
 control:
-  safe_park_azimuth_deg: 180.0
-  safe_park_elevation_deg: 75.0
+  # Face-up stow: mount identity (az=0, el=0) → mirror horizontal, normal toward zenith.
+  safe_park_azimuth_deg: 0.0
+  safe_park_elevation_deg: 0.0
+  # When the oven is not requesting heat, Track mirrors aim this far above the absorber
+  # center (world +Z) instead of focusing on the absorber.
+  idle_aim_height_above_absorber_m: 2.0
   # When true, solve for mount_offset_d_m via least squares after the bisector seed.
   # Set false to use the pivot-bisector seed only (useful for A/B testing).
   solve_for_mount_offset: true

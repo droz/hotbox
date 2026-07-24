@@ -44,6 +44,8 @@ def test_track_absorber_below_horizon_parks_horizontal() -> None:
     assert sun.world_vector[2] < 0.0
     target = track_absorber(sun, np.array([0.0, 2.5, 1.0]), np.array([0.0, 0.0, 1.0]))
     assert target.mode == "parked"
+    assert target.azimuth_deg == 0.0
+    assert target.elevation_deg == 0.0
     pivot = pivot_facet_normal_body(grid_nx=3, grid_ny=5, pitch_m=0.26035, radius_of_curvature_m=5.5)
     got = normalize(mount_rotation_matrix(target.azimuth_deg, target.elevation_deg) @ pivot)
     np.testing.assert_allclose(got, np.array([0.0, 0.0, 1.0]), atol=1e-6)

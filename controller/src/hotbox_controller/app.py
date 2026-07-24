@@ -18,7 +18,7 @@ from .mirror_fleet import MirrorFleet
 from .protocol import CommandName, MirrorCommand
 from .scene import build_mirror_scene_entry, build_target_scene, default_mount_world, mount_world_from_calibration
 from .sun import SunService, SunVector
-from .tracking import TrackingTarget, safe_park, track_absorber
+from .tracking import TrackingTarget, idle_dump_world, safe_park, track_point
 from .transport import MirrorTransport, build_transport
 
 
@@ -40,13 +40,24 @@ class NodeRequest(BaseModel):
 
 
 class ModeRequest(BaseModel):
-    """Supervisor mode: track (sun follow), park (hold safe pose), manual (operator)."""
+    """Supervisor mode: track | park | jog (``manual`` / ``auto`` accepted as aliases)."""
 
     mode: str
 
 
-# Canonical supervisor modes exposed to the UI. ``auto`` is accepted as an alias for ``track``.
-SUPERVISOR_MODES = frozenset({"track", "park", "manual"})
+class MirrorModeRequest(BaseModel):
+    node_id: int
+    mode: str
+
+
+class HeatDemandRequest(BaseModel):
+    """Simulated oven heat-demand relay (GPIO later)."""
+
+    enabled: bool
+
+
+# Canonical modes. ``auto`` → track, ``manual`` → jog.
+SUPERVISOR_MODES = frozenset({"track", "park", "jog"})
 
 
 class ControllerApplication:
@@ -66,8 +77,24 @@ class ControllerApplication:
         else:
             self.absorber_world = np.array([0.0, 0.0, self.config.oven.absorber_height_m], dtype=float)
         self._true_geometry: dict[str, Any] | None = None
-        self.mode = "track"
+        # Simulated oven heat-demand relay. When False, Track mirrors park (product behavior).
+        self.heat_demand = True
+        # Per-mirror supervisor mode (track|park|jog). Fleet switcher sets all of these.
+        self._node_modes: dict[int, str] = {}
         self.fastapi = self._build_fastapi()
+
+    def node_mode(self, node_id: int) -> str:
+        return self._node_modes.get(int(node_id), "track")
+
+    @property
+    def mode(self) -> str:
+        """Fleet-wide mode when unanimous; otherwise ``mixed``."""
+        modes = {self.node_mode(node_id) for node_id in self.fleet.nodes()}
+        if not modes:
+            return "track"
+        if len(modes) == 1:
+            return next(iter(modes))
+        return "mixed"
 
     def _mirror_world_for_node(self, node_id: int) -> np.ndarray:
         calibration = self.calibrations.get(node_id)
@@ -86,9 +113,15 @@ class ControllerApplication:
 
     def startup(self) -> None:
         self.fleet.discover()
+        for node_id in self.fleet.nodes():
+            self._node_modes.setdefault(int(node_id), "track")
 
     def set_true_geometry(self, geometry: dict[str, Any] | None) -> None:
         self._true_geometry = geometry
+
+    def set_heat_demand(self, enabled: bool) -> None:
+        """Simulate the oven heat-demand relay (True = oven wants power)."""
+        self.heat_demand = bool(enabled)
 
     def _tracking_kwargs(self) -> dict[str, float | int | bool | object]:
         mirror = self.config.mirror
@@ -111,14 +144,20 @@ class ControllerApplication:
         self,
         sun: SunVector,
         statuses: dict[int, Any],
+        *,
+        target_world: np.ndarray | None = None,
     ) -> dict[int, TrackingTarget]:
+        aim = (
+            np.asarray(self.absorber_world, dtype=float).reshape(3)
+            if target_world is None
+            else np.asarray(target_world, dtype=float).reshape(3)
+        )
+        kwargs = self._tracking_kwargs()
         targets: dict[int, TrackingTarget] = {}
         for node_id in self.fleet.nodes():
             if statuses[node_id].homed:
                 mirror_world = self._mirror_world_for_node(node_id)
-                targets[node_id] = track_absorber(
-                    sun, mirror_world, self.absorber_world, **self._tracking_kwargs()
-                )
+                targets[node_id] = track_point(sun, mirror_world, aim, **kwargs)
             else:
                 targets[node_id] = safe_park(self.config.oven)
         return targets
@@ -128,34 +167,87 @@ class ControllerApplication:
         key = str(mode).strip().lower()
         if key == "auto":
             return "track"
+        if key == "manual":
+            return "jog"
         if key not in SUPERVISOR_MODES:
-            raise ValueError(f"unsupported supervisor mode: {mode!r} (want track|park|manual)")
+            raise ValueError(f"unsupported supervisor mode: {mode!r} (want track|park|jog)")
         return key
 
     def set_mode(self, mode: str) -> None:
-        """Switch supervisor mode. Track/Park are closed-loop; Manual leaves operator in charge."""
-        self.mode = self.normalize_supervisor_mode(mode)
-        if self.mode == "park":
+        """Set Track/Park/Jog on every discovered mirror."""
+        normalized = self.normalize_supervisor_mode(mode)
+        for node_id in self.fleet.nodes():
+            self._set_node_mode(int(node_id), normalized, apply_immediate=False)
+        if normalized == "park":
             self._apply_park_all()
+
+    def set_mirror_mode(self, node_id: int, mode: str) -> None:
+        """Set Track/Park/Jog for one mirror."""
+        self._set_node_mode(int(node_id), self.normalize_supervisor_mode(mode), apply_immediate=True)
+
+    def _set_node_mode(self, node_id: int, mode: str, *, apply_immediate: bool) -> None:
+        previous = self._node_modes.get(node_id)
+        self._node_modes[node_id] = mode
+        if not apply_immediate:
+            return
+        if mode == "park":
+            self.fleet.apply_targets({node_id: safe_park(self.config.oven)})
+        elif mode == "jog" and previous != "jog":
+            self.fleet.stop(node_id)
 
     def _apply_park_all(self) -> None:
         target = safe_park(self.config.oven)
         self.fleet.apply_targets({node_id: target for node_id in self.fleet.nodes()})
+
+    def _track_aim_point(self) -> np.ndarray:
+        """Absorber center when heat is demanded; otherwise the idle dump above it."""
+        if self.heat_demand:
+            return np.asarray(self.absorber_world, dtype=float).reshape(3)
+        return idle_dump_world(
+            self.absorber_world,
+            self.config.oven.idle_aim_height_above_absorber_m,
+        )
+
+    def _desired_target_for_node(
+        self,
+        node_id: int,
+        *,
+        sun: SunVector,
+        statuses: dict[int, Any],
+        tracking: dict[int, TrackingTarget],
+    ) -> TrackingTarget | None:
+        """
+        Closed-loop command for one mirror, or None when Jog (operator owns the axes).
+
+        Track + heat demand → aim at absorber. Track without demand → aim above absorber.
+        Park → face-up stow (az/el from config, default 0°/0°).
+        """
+        mode = self.node_mode(node_id)
+        if mode == "jog":
+            return None
+        if mode == "park":
+            return safe_park(self.config.oven)
+        return tracking[node_id]
 
     def _command_targets(
         self,
         sun: SunVector,
         statuses: dict[int, Any],
     ) -> dict[int, TrackingTarget]:
-        if self.mode == "park":
-            park = safe_park(self.config.oven)
-            return {node_id: park for node_id in self.fleet.nodes()}
-        # track and manual: show / command the sun-tracking solution (manual does not apply it).
-        return self._tracking_targets(sun, statuses)
+        tracking = self._tracking_targets(sun, statuses, target_world=self._track_aim_point())
+        out: dict[int, TrackingTarget] = {}
+        for node_id in self.fleet.nodes():
+            desired = self._desired_target_for_node(
+                node_id, sun=sun, statuses=statuses, tracking=tracking
+            )
+            if desired is None:
+                # Jog: keep last computed tracking pose for scene preview only.
+                out[node_id] = tracking[node_id]
+            else:
+                out[node_id] = desired
+        return out
 
     def control_tick(self) -> None:
-        if self.mode == "manual":
-            return
         fix = self.gps.current_fix()
         if fix.valid:
             self.sun = SunService(
@@ -168,11 +260,16 @@ class ControllerApplication:
             )
         sun = self.sun.sun_vector(fix.when_utc)
         statuses = self.fleet.poll()
-        targets = self._command_targets(sun, statuses)
-        for node_id, target in targets.items():
+        tracking = self._tracking_targets(sun, statuses, target_world=self._track_aim_point())
+        for node_id in self.fleet.nodes():
             if not statuses[node_id].homed:
                 continue
-            self.fleet.apply_targets({node_id: target})
+            desired = self._desired_target_for_node(
+                node_id, sun=sun, statuses=statuses, tracking=tracking
+            )
+            if desired is None:
+                continue
+            self.fleet.apply_targets({node_id: desired})
 
     def current_snapshot(self) -> dict[str, Any]:
         fix = self.gps.current_fix()
@@ -188,6 +285,7 @@ class ControllerApplication:
         sun = self.sun.sun_vector(fix.when_utc)
         statuses = self.fleet.poll()
         targets = self._command_targets(sun, statuses)
+        mirror_modes = {str(node_id): self.node_mode(node_id) for node_id in self.fleet.nodes()}
 
         target_scene = build_target_scene(
             sun=sun,
@@ -203,6 +301,8 @@ class ControllerApplication:
         return {
             "timestamp_utc": utc_now().isoformat(),
             "mode": self.mode,
+            "heat_demand": self.heat_demand,
+            "mirror_modes": mirror_modes,
             "gps": fix.as_dict(),
             "sun": {
                 "azimuth_deg": sun.azimuth_deg,
@@ -221,26 +321,25 @@ class ControllerApplication:
         }
 
     def home_all(self) -> None:
-        self.mode = "manual"
+        self.set_mode("jog")
         self.fleet.home_all()
 
     def home_one(self, node_id: int) -> None:
-        self.mode = "manual"
+        self.set_mirror_mode(node_id, "jog")
         self.fleet.home(node_id)
 
     def stop_one(self, node_id: int) -> None:
-        self.mode = "manual"
+        self.set_mirror_mode(node_id, "jog")
         self.fleet.stop(node_id)
 
     def park_all(self) -> None:
         self.set_mode("park")
 
     def park_one(self, node_id: int) -> None:
-        self.mode = "manual"
-        self.fleet.apply_targets({node_id: safe_park(self.config.oven)})
+        self.set_mirror_mode(node_id, "park")
 
     def set_manual_target(self, request: TargetRequest) -> None:
-        self.mode = "manual"
+        self.set_mirror_mode(request.node_id, "jog")
         self.fleet.apply_targets(
             {
                 request.node_id: TrackingTarget(
@@ -252,7 +351,7 @@ class ControllerApplication:
         )
 
     def jog(self, request: JogRequest) -> None:
-        self.mode = "manual"
+        self._node_modes[int(request.node_id)] = "jog"
         self.transport.send(
             MirrorCommand(
                 node_id=request.node_id,
@@ -290,17 +389,17 @@ class ControllerApplication:
             return {"status": "ok"}
 
         @app.post("/api/park")
-        def park() -> dict[str, str]:
+        def park() -> dict[str, Any]:
             self.park_all()
             return {"status": "ok", "mode": self.mode}
 
         @app.post("/api/park_one")
-        def api_park_one(request: NodeRequest) -> dict[str, str]:
+        def api_park_one(request: NodeRequest) -> dict[str, Any]:
             self.park_one(request.node_id)
-            return {"status": "ok", "mode": self.mode}
+            return {"status": "ok", "mode": self.mode, "mirror_mode": self.node_mode(request.node_id)}
 
         @app.post("/api/mode")
-        def api_mode(request: ModeRequest) -> dict[str, str]:
+        def api_mode(request: ModeRequest) -> dict[str, Any]:
             try:
                 self.set_mode(request.mode)
             except ValueError as exc:
@@ -309,22 +408,42 @@ class ControllerApplication:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             return {"status": "ok", "mode": self.mode}
 
+        @app.post("/api/mirror_mode")
+        def api_mirror_mode(request: MirrorModeRequest) -> dict[str, Any]:
+            try:
+                self.set_mirror_mode(request.node_id, request.mode)
+            except ValueError as exc:
+                from fastapi import HTTPException
+
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return {
+                "status": "ok",
+                "mode": self.mode,
+                "node_id": request.node_id,
+                "mirror_mode": self.node_mode(request.node_id),
+            }
+
+        @app.post("/api/heat_demand")
+        def api_heat_demand(request: HeatDemandRequest) -> dict[str, Any]:
+            self.set_heat_demand(request.enabled)
+            return {"status": "ok", "heat_demand": self.heat_demand}
+
         @app.post("/api/auto")
-        def auto() -> dict[str, str]:
+        def auto() -> dict[str, Any]:
             """Resume sun tracking (alias for ``POST /api/mode`` with ``track``)."""
             self.set_mode("track")
             return {"status": "ok", "mode": self.mode}
 
         @app.post("/api/manual")
-        def api_manual() -> dict[str, str]:
-            """Enter operator mode: stop closed-loop Track/Park commands."""
-            self.set_mode("manual")
+        def api_manual() -> dict[str, Any]:
+            """Enter jog mode on all mirrors (alias for ``POST /api/mode`` with ``jog``)."""
+            self.set_mode("jog")
             return {"status": "ok", "mode": self.mode}
 
         @app.post("/api/jog")
-        def api_jog(request: JogRequest) -> dict[str, str]:
+        def api_jog(request: JogRequest) -> dict[str, Any]:
             self.jog(request)
-            return {"status": "ok", "mode": self.mode}
+            return {"status": "ok", "mode": self.mode, "mirror_mode": self.node_mode(request.node_id)}
 
         @app.post("/api/target")
         def api_target(request: TargetRequest) -> dict[str, str]:

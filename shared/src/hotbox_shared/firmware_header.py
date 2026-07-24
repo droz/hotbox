@@ -29,6 +29,7 @@ def render_firmware_header(system: SystemConstants) -> str:
         f"#define HOTBOX_FLEET_ASSEMBLY_COUNT ({system.fleet.assembly_count})",
         f"#define HOTBOX_SAFE_PARK_AZIMUTH_DEG ({system.control.safe_park_azimuth_deg:.6f}f)",
         f"#define HOTBOX_SAFE_PARK_ELEVATION_DEG ({system.control.safe_park_elevation_deg:.6f}f)",
+        f"#define HOTBOX_IDLE_AIM_HEIGHT_ABOVE_ABSORBER_M ({system.control.idle_aim_height_above_absorber_m:.6f}f)",
         "",
     ]
     return "\n".join(lines)

@@ -213,6 +213,8 @@ def test_solve_tracking_below_horizon_returns_horizontal_stow() -> None:
         solve_for_mount_offset=True,
     )
     assert angles.night_stow is True
+    assert angles.azimuth_deg == 0.0
+    assert angles.elevation_deg == 0.0
     got = normalize(mount_rotation_matrix(angles.azimuth_deg, angles.elevation_deg) @ pivot)
     np.testing.assert_allclose(got, np.array([0.0, 0.0, 1.0]), atol=1e-6)
 
@@ -223,6 +225,8 @@ def test_horizontal_stow_angles_aligns_pivot_to_zenith() -> None:
     target = np.array([0.0, 0.0, 1.0], dtype=float)
     angles = horizontal_stow_angles(pivot, mount_world=mount, target_world=target)
     assert angles.night_stow is True
+    assert angles.azimuth_deg == 0.0
+    assert angles.elevation_deg == 0.0
     got = normalize(mount_rotation_matrix(angles.azimuth_deg, angles.elevation_deg) @ pivot)
     np.testing.assert_allclose(got, np.array([0.0, 0.0, 1.0]), atol=1e-12)
 
@@ -316,3 +320,6 @@ def test_system_yaml_loads_joint_limits() -> None:
     assert lim.elevation_max_deg == 90.0
     assert lim.azimuth_min_deg == -150.0
     assert lim.azimuth_max_deg == 150.0
+    assert system.control.safe_park_azimuth_deg == 0.0
+    assert system.control.safe_park_elevation_deg == 0.0
+    assert system.control.idle_aim_height_above_absorber_m == 2.0
