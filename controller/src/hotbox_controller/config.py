@@ -30,7 +30,6 @@ class MirrorPlantConfig:
     pitch_m: float = 0.26035
     mount_offset_d_m: float = 0.2
     radius_of_curvature_m: float = 5.5
-    focal_length_m: float = 2.75
     default_oa_distance_m: float = 2.5
     default_mount_height_m: float = 1.0
 
@@ -89,7 +88,6 @@ def app_config_from_system(system: SystemConstants | None = None) -> AppConfig:
             pitch_m=system.mirror.pitch_m,
             mount_offset_d_m=system.mirror.mount_offset_d_m,
             radius_of_curvature_m=system.mirror.radius_of_curvature_m,
-            focal_length_m=system.mirror.focal_length_m,
             default_oa_distance_m=system.mirror.default_oa_distance_m,
             default_mount_height_m=system.mirror.default_mount_height_m,
         ),

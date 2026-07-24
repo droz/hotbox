@@ -23,7 +23,6 @@ def solve_mirror_calibration(
     node_id: int,
     oa_distance_m: float,
     mirror_offset_d_m: float,
-    focal_length_m: float,
 ) -> MirrorCalibration:
     sun = normalize(np.asarray(sample.sun_vector_world, dtype=float).reshape(3))
 
@@ -71,5 +70,4 @@ def solve_mirror_calibration(
         home_elevation_offset_deg=float(home_el_offset),
         oa_distance_m=oa_distance_m,
         mirror_offset_d_m=mirror_offset_d_m,
-        focal_length_m=focal_length_m,
     )

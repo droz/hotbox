@@ -30,10 +30,9 @@ mirror:
   grid_nx: 3
   grid_ny: 5
   tile_side_m: 0.254
-  pitch_m: 0.26035          # tile_side + 0.0254/4
-  mount_offset_d_m: 0.20     # |An Mn| along mirror-frame Z
-  radius_of_curvature_m: 5.5  # design sphere radius
-  focal_length_m: 2.75        # typically R/2 for a spherical mirror
+  pitch_m: 0.26035            # tile_side + 0.0254/4
+  mount_offset_d_m: 0.1       # |An Mn| along mirror-frame Z (offset between mirrror surface andmount rotation point)
+  radius_of_curvature_m: 5.5  # design sphere radius (paraxial focal length ≈ R/2)
   default_oa_distance_m: 2.5  # |O An| horizontal design distance
   default_mount_height_m: 1.0 # An height above ground (world Z)
 

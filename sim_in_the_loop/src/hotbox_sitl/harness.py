@@ -26,7 +26,6 @@ class TrueMirrorLayout:
     mount_world: np.ndarray
     facet_offset_world: np.ndarray
     mirror_offset_d_m: float
-    focal_length_m: float
 
 
 def _layouts_from_system(system: SystemConstants) -> dict[int, TrueMirrorLayout]:
@@ -38,7 +37,6 @@ def _layouts_from_system(system: SystemConstants) -> dict[int, TrueMirrorLayout]
             mount_world=system.mount_world(mount.node_id),
             facet_offset_world=offset.copy(),
             mirror_offset_d_m=system.mirror.mount_offset_d_m,
-            focal_length_m=system.mirror.focal_length_m,
         )
     return layouts
 
@@ -53,7 +51,6 @@ def _calibration_from_layout(layout: TrueMirrorLayout, oa_bearing_from_north_deg
         home_elevation_offset_deg=0.0,
         oa_distance_m=float(np.hypot(mount[0], mount[1])),
         mirror_offset_d_m=layout.mirror_offset_d_m,
-        focal_length_m=layout.focal_length_m,
     )
 
 class SitlHarness:

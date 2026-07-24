@@ -24,7 +24,6 @@ def render_firmware_header(system: SystemConstants) -> str:
         f"#define HOTBOX_MIRROR_PITCH_M ({system.mirror.pitch_m:.6f}f)",
         f"#define HOTBOX_MIRROR_OFFSET_D_M ({system.mirror.mount_offset_d_m:.6f}f)",
         f"#define HOTBOX_MIRROR_RADIUS_OF_CURVATURE_M ({system.mirror.radius_of_curvature_m:.6f}f)",
-        f"#define HOTBOX_MIRROR_FOCAL_LENGTH_M ({system.mirror.focal_length_m:.6f}f)",
         f"#define HOTBOX_DEFAULT_OA_DISTANCE_M ({system.mirror.default_oa_distance_m:.6f}f)",
         f"#define HOTBOX_DEFAULT_MOUNT_HEIGHT_M ({system.mirror.default_mount_height_m:.6f}f)",
         f"#define HOTBOX_FLEET_ASSEMBLY_COUNT ({system.fleet.assembly_count})",

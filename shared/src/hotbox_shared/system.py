@@ -34,7 +34,6 @@ class MirrorConstants:
     pitch_m: float
     mount_offset_d_m: float
     radius_of_curvature_m: float
-    focal_length_m: float
     default_oa_distance_m: float
     default_mount_height_m: float
 

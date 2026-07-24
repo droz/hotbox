@@ -47,4 +47,3 @@ class MirrorCalibration:
     home_elevation_offset_deg: float
     oa_distance_m: float
     mirror_offset_d_m: float
-    focal_length_m: float
