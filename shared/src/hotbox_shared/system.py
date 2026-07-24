@@ -92,6 +92,9 @@ class FleetConstants:
 class ControlConstants:
     safe_park_azimuth_deg: float
     safe_park_elevation_deg: float
+    # When true, aiming solves for mount_offset so the center facet reflects onto the
+    # absorber (least squares after the bisector seed). Set false to skip (testing).
+    solve_for_mount_offset: bool = True
 
 
 @dataclass(slots=True, frozen=True)

@@ -24,69 +24,83 @@ system = load_system_constants()
 print(system.default_site.latitude_deg)
 print(system.absorber.center_height_m)
 print(system.mirror.grid_nx, system.mirror.grid_ny)
+print(system.control.solve_for_mount_offset)
 ```
 
 ## Mirror pointing
 
-Both the live controller and the full raytrace simulation use the same bisector-tracking
-solver in `hotbox_shared.aiming`. This is the single source of truth for deciding where
-each alt-az mount should point.
+Both the live controller and the full raytrace simulation use the same aiming solver in
+`hotbox_shared.aiming`. This is the single source of truth for deciding where each alt-az
+mount should point.
 
 ### Quick start
 
 ```python
 import numpy as np
-from hotbox_shared import MirrorGridSpec, solve_bisector_tracking_for_grid
+from hotbox_shared import MirrorGridSpec, evaluate_center_ray, solve_tracking_for_grid
 
 grid = MirrorGridSpec(
     grid_nx=3,
     grid_ny=5,
     pitch_m=0.26035,
     radius_of_curvature_m=5.5,
+    mount_offset_d_m=0.1,
 )
 
 # Unit vector from the sun toward the plant (ENU world frame).
 sun_toward_scene = -sun_vector_from_pvlib
+mount = np.array([0.0, 2.5, 1.0])
+target = np.array([0.0, 0.0, 1.0])  # absorber center
 
-angles = solve_bisector_tracking_for_grid(
+angles = solve_tracking_for_grid(
     sun_direction_toward_scene=sun_toward_scene,
-    mount_world=np.array([0.0, 2.5, 1.0]),
-    target_world=np.array([0.0, 0.0, 1.0]),  # absorber center
+    mount_world=mount,
+    target_world=target,
     grid=grid,
+    solve_for_mount_offset=True,  # also controlled by control.solve_for_mount_offset in YAML
 )
 
-print(angles.azimuth_deg, angles.elevation_deg)  # send to firmware
+# Forward model: where does the center ray go?
+ray = evaluate_center_ray(
+    sun_direction_toward_scene=sun_toward_scene,
+    mount_world=mount,
+    azimuth_deg=angles.azimuth_deg,
+    elevation_deg=angles.elevation_deg,
+    mount_offset_d_m=grid.mount_offset_d_m,
+    pivot_facet_normal_body=grid.pivot_normal_body(),
+)
+print(angles.azimuth_deg, angles.elevation_deg)
+print("miss_m", ray.miss_m(target))
+print("impact on absorber plane", ray.impact_on_plane(target, np.array([0.0, 1.0, 0.0])))
 ```
 
 ### Algorithm
 
-1. **Sun ray** — unit vector from the sun toward the mirrors.
-2. **Target ray** — unit vector from the mount pivot toward the absorber center.
-3. **Bisector normal** — specular mirror normal that reflects (1) toward (2).
-4. **Inverse kinematics** — solve mount `(azimuth, elevation)` so the pivot facet body
-   normal aligns with the bisector under `R = R_z(az) @ R_x(el)`.
+1. **Bisector seed** — flat heliostat at the mount pivot (ignores `mount_offset_d_m`).
+2. **Offset refine** (optional) — `scipy.optimize.least_squares` nudges `(az, el)` so the
+   **center facet** reflected ray aims at the absorber. Forward model:
+   `evaluate_center_ray`.
 
-The approximation is a **flat heliostat at the pivot**: outgoing direction uses
-`mount → absorber`, not the facet center offset.
+Toggle refinement with `control.solve_for_mount_offset` in `config/system.yaml`
+(set `false` to keep the bisector seed only).
 
 ### API reference
 
 | Symbol | Role |
 |--------|------|
-| `solve_bisector_tracking` | Primary solver — takes explicit pivot facet normal |
-| `solve_bisector_tracking_for_grid` | Convenience wrapper using `MirrorGridSpec` |
+| `solve_tracking` / `solve_tracking_for_grid` | **Primary** aiming API (seed + optional refine) |
+| `evaluate_center_ray` / `CenterRay` | Forward geometry: facet pose, reflected ray, miss / plane impact |
+| `solve_bisector_tracking` | Closed-form pivot bisector seed only |
 | `MountAngles` | Result: `azimuth_deg`, `elevation_deg` |
-| `MirrorGridSpec` | Facet grid parameters from `system.yaml` mirror section |
-| `bisector_normal` | Low-level specular normal from incoming/outgoing rays |
-| `bisector_normal_at_mount` | Bisector at a mount position toward a target point |
+| `MirrorGridSpec` | Facet grid + `mount_offset_d_m` |
+| `pivot_facet_center_world` | `mount + R @ (0,0,d)` |
 | `mount_rotation_matrix` | Body → world rotation `R_z(az) @ R_x(el)` |
-| `mount_az_el_align_body_normal_to_world` | Inverse kinematics for a body normal |
-| `pivot_facet_normal_body` | Center facet normal at identity mount |
 
 ### Frames
 
 Right-handed ENU world frame: **+x east**, **+y north**, **+z up**. Mount body frame
-matches world at `(azimuth, elevation) = (0, 0)`.
+matches world at `(azimuth, elevation) = (0, 0)`. Center facet at `(0, 0, mount_offset_d_m)`
+in body coordinates.
 
 ## Firmware header
 

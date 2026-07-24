@@ -175,6 +175,7 @@ source = { editable = "../shared" }
 dependencies = [
     { name = "numpy" },
     { name = "pyyaml" },
+    { name = "scipy" },
 ]
 
 [package.metadata]
@@ -182,6 +183,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3.0" },
     { name = "pyyaml", specifier = ">=6.0.2" },
+    { name = "scipy", specifier = ">=1.11.0" },
 ]
 provides-extras = ["dev"]
 

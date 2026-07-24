@@ -4,6 +4,8 @@ from typing import Any
 
 import numpy as np
 
+from hotbox_shared import evaluate_center_ray, pivot_facet_center_world, reflect_ray
+
 from .geometry import MirrorCalibration, mount_rotation_matrix, normalize
 from .sun import SunVector
 from .tracking import TrackingTarget
@@ -73,14 +75,7 @@ def facet_center_world(
     elevation_deg: float,
     mirror_offset_d_m: float,
 ) -> np.ndarray:
-    r = mount_rotation_matrix(azimuth_deg, elevation_deg)
-    return np.asarray(mount_world, dtype=float).reshape(3) + r @ np.array([0.0, 0.0, mirror_offset_d_m], dtype=float)
-
-
-def reflect_ray(incoming_toward_mirror: np.ndarray, normal: np.ndarray) -> np.ndarray:
-    d = normalize(incoming_toward_mirror)
-    n = normalize(normal)
-    return normalize(d - 2.0 * float(np.dot(d, n)) * n)
+    return pivot_facet_center_world(mount_world, azimuth_deg, elevation_deg, mirror_offset_d_m)
 
 
 def build_oven_scene(
@@ -166,15 +161,23 @@ def build_mirror_scene_entry(
         )
 
     center_index = (grid_ny // 2) * grid_nx + (grid_nx // 2)
-    facet = np.asarray(facets[center_index]["center"], dtype=float)
-    normal = np.asarray(facets[center_index]["normal"], dtype=float)
     sun_toward_scene = -normalize(sun.world_vector)
-    incoming = sun_toward_scene
-    reflected = reflect_ray(incoming, normal)
+    pivot_body = normalize(np.asarray(normals_b[center_index], dtype=float).reshape(3))
+    # Normals are designed before the +Z offset shift; center facet normal is unchanged by the shift.
+    center_ray = evaluate_center_ray(
+        sun_direction_toward_scene=sun_toward_scene,
+        mount_world=mount,
+        azimuth_deg=azimuth_deg,
+        elevation_deg=elevation_deg,
+        mount_offset_d_m=mirror_offset_d_m,
+        pivot_facet_normal_body=pivot_body,
+    )
+    facet = center_ray.facet_center_world
+    normal = center_ray.normal_world
+    reflected = center_ray.reflected_direction
     absorber = np.asarray(absorber_world, dtype=float).reshape(3)
-    to_absorber = normalize(absorber - facet)
-    miss_m = float(np.linalg.norm(np.cross(to_absorber, reflected)))
-    sun_start = facet - incoming * upstream_distance_m
+    miss_m = center_ray.miss_m(absorber)
+    sun_start = facet - sun_toward_scene * upstream_distance_m
     reflected_end = facet + reflected * float(np.linalg.norm(absorber - facet))
     return {
         "node_id": node_id,

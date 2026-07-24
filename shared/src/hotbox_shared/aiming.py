@@ -1,19 +1,23 @@
 """
-Mirror pointing — single source of truth for bisector tracking.
+Mirror pointing — single source of truth for heliostat aiming.
 
-Both the live controller and the full raytrace simulation call :func:`solve_bisector_tracking`
-to decide where each alt-az mount should point. The algorithm is **flat heliostat at the pivot**:
+Both the live controller and the full raytrace simulation call :func:`solve_tracking`
+to decide where each alt-az mount should point.
 
-1. Form the unit sun ray **toward the plant** (from the sun toward the mirrors).
-2. Form the unit ray from the mount pivot toward the target (typically the absorber center).
-3. Compute the specular bisector normal ``n_W`` that reflects (1) toward (2).
-4. Solve mount angles so the **pivot facet** body normal aligns with ``n_W`` under
-   ``R_mount = R_z(azimuth) @ R_x(elevation)``.
+Algorithm
+---------
+1. **Bisector seed** (:func:`solve_bisector_tracking`): treat the mirror as a flat
+   heliostat at the **mount pivot** (ignores ``mount_offset_d_m``). Fast closed form.
+2. **Optional offset refine** (:func:`refine_tracking_for_mount_offset`): use
+   :func:`evaluate_center_ray` as the forward model and ``scipy.optimize.least_squares``
+   to nudge ``(az, el)`` so the **center-facet** reflected ray aims at the target.
+   Controlled by ``control.solve_for_mount_offset`` in ``config/system.yaml``.
 
 Frames (right-handed, meters):
 
 - **World W**: ENU fixed to the site — +x east, +y north, +z up.
 - **Mount body B**: rigid with the mirror assembly; at ``(az, el) = (0, 0)`` the body axes match world.
+  The center facet sits at ``(0, 0, mount_offset_d_m)_B`` (Mn), offset from pivot An along +Z body.
 """
 
 from __future__ import annotations
@@ -21,14 +25,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+from scipy.optimize import least_squares
 
 from .mount import (
     heading_and_tilt_from_normal,
     mount_az_el_align_body_normal_to_world,
     mount_rotation_matrix,
+    normalize_mount_az_el,
     pivot_facet_normal_body,
 )
-from .vectors import bisector_normal, normalize
+from .vectors import bisector_normal, normalize, reflect_ray
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +45,7 @@ class MirrorGridSpec:
     grid_ny: int
     pitch_m: float
     radius_of_curvature_m: float
+    mount_offset_d_m: float = 0.0
 
     def pivot_normal_body(self) -> np.ndarray:
         return pivot_facet_normal_body(
@@ -63,6 +70,88 @@ class MountAngles:
     def display_heading_and_tilt(self, pivot_normal_body: np.ndarray) -> tuple[float, float]:
         """Physical azimuth [deg] and tilt from horizontal [deg] of the pivot facet normal."""
         return heading_and_tilt_from_normal(self.pivot_normal_world(pivot_normal_body))
+
+
+@dataclass(frozen=True, slots=True)
+class CenterRay:
+    """Forward geometry of the sun ray reflected off the center (pivot) facet."""
+
+    facet_center_world: np.ndarray
+    """World position of the center facet [m] (Mn)."""
+
+    normal_world: np.ndarray
+    """Unit reflective normal of the center facet in world frame."""
+
+    reflected_direction: np.ndarray
+    """Unit reflected ray leaving the facet."""
+
+    def miss_vector_to_point(self, target_world: np.ndarray) -> np.ndarray:
+        """
+        Perpendicular miss from the reflected ray to ``target_world`` [m].
+
+        Zero iff the ray passes through the target. Magnitude equals the closest-approach distance.
+        """
+        target = np.asarray(target_world, dtype=float).reshape(3)
+        delta = target - self.facet_center_world
+        return delta - self.reflected_direction * float(np.dot(delta, self.reflected_direction))
+
+    def miss_m(self, target_world: np.ndarray) -> float:
+        """Closest-approach distance from the reflected ray to ``target_world`` [m]."""
+        return float(np.linalg.norm(self.miss_vector_to_point(target_world)))
+
+    def impact_on_plane(self, plane_point_world: np.ndarray, plane_normal_world: np.ndarray) -> np.ndarray:
+        """
+        Intersection of the reflected ray with a plane.
+
+        Raises ``ValueError`` if the ray is parallel to the plane (or hits from the wrong side
+        with zero length to the plane along the ray).
+        """
+        p0 = np.asarray(plane_point_world, dtype=float).reshape(3)
+        n = normalize(plane_normal_world)
+        denom = float(np.dot(self.reflected_direction, n))
+        if abs(denom) < 1e-12:
+            raise ValueError("reflected ray is parallel to the plane")
+        t = float(np.dot(p0 - self.facet_center_world, n) / denom)
+        return self.facet_center_world + t * self.reflected_direction
+
+
+def pivot_facet_center_world(
+    mount_world: np.ndarray,
+    azimuth_deg: float,
+    elevation_deg: float,
+    mount_offset_d_m: float,
+) -> np.ndarray:
+    """World position of the center facet: ``mount + R(az, el) @ (0, 0, d)``."""
+    mount = np.asarray(mount_world, dtype=float).reshape(3)
+    r = mount_rotation_matrix(azimuth_deg, elevation_deg)
+    return mount + r @ np.array([0.0, 0.0, float(mount_offset_d_m)], dtype=float)
+
+
+def evaluate_center_ray(
+    *,
+    sun_direction_toward_scene: np.ndarray,
+    mount_world: np.ndarray,
+    azimuth_deg: float,
+    elevation_deg: float,
+    mount_offset_d_m: float,
+    pivot_facet_normal_body: np.ndarray,
+) -> CenterRay:
+    """
+    Forward model: center-facet pose and reflected sun ray at the given mount angles.
+
+    This is the shared geometry used for display miss metrics and for offset refinement.
+    """
+    r = mount_rotation_matrix(azimuth_deg, elevation_deg)
+    pivot = normalize(pivot_facet_normal_body)
+    normal_world = normalize(r @ pivot)
+    facet = pivot_facet_center_world(mount_world, azimuth_deg, elevation_deg, mount_offset_d_m)
+    incoming = normalize(sun_direction_toward_scene)
+    reflected = reflect_ray(incoming, normal_world)
+    return CenterRay(
+        facet_center_world=facet,
+        normal_world=normal_world,
+        reflected_direction=reflected,
+    )
 
 
 def bisector_normal_at_mount(
@@ -93,23 +182,121 @@ def solve_bisector_tracking(
     pivot_facet_normal_body: np.ndarray,
 ) -> MountAngles:
     """
-    Compute mount angles for bisector tracking at the pivot.
+    Closed-form bisector seed: flat heliostat at the **pivot** (ignores mount offset).
+
+    Prefer :func:`solve_tracking` for production pointing unless you explicitly want the seed.
+    """
+    n_bisector = bisector_normal_at_mount(sun_direction_toward_scene, mount_world, target_world)
+    pivot = normalize(pivot_facet_normal_body)
+    azimuth_deg, elevation_deg = mount_az_el_align_body_normal_to_world(pivot, n_bisector)
+    return MountAngles(azimuth_deg=azimuth_deg, elevation_deg=elevation_deg)
+
+
+def refine_tracking_for_mount_offset(
+    *,
+    sun_direction_toward_scene: np.ndarray,
+    mount_world: np.ndarray,
+    target_world: np.ndarray,
+    pivot_facet_normal_body: np.ndarray,
+    mount_offset_d_m: float,
+    initial: MountAngles,
+) -> MountAngles:
+    """
+    Nudge ``initial`` mount angles so the center-facet reflected ray aims at ``target_world``.
+
+    Uses ``scipy.optimize.least_squares`` on the 3D ray–target miss vector from
+    :meth:`CenterRay.miss_vector_to_point`.
+    """
+    if abs(float(mount_offset_d_m)) < 1e-12:
+        return initial
+
+    sun = normalize(sun_direction_toward_scene)
+    mount = np.asarray(mount_world, dtype=float).reshape(3)
+    target = np.asarray(target_world, dtype=float).reshape(3)
+    pivot = normalize(pivot_facet_normal_body)
+    d = float(mount_offset_d_m)
+
+    def residual(x: np.ndarray) -> np.ndarray:
+        az, el = normalize_mount_az_el(float(x[0]), float(x[1]))
+        ray = evaluate_center_ray(
+            sun_direction_toward_scene=sun,
+            mount_world=mount,
+            azimuth_deg=az,
+            elevation_deg=el,
+            mount_offset_d_m=d,
+            pivot_facet_normal_body=pivot,
+        )
+        return ray.miss_vector_to_point(target)
+
+    result = least_squares(
+        residual,
+        x0=np.array([initial.azimuth_deg, initial.elevation_deg], dtype=float),
+        method="lm",
+    )
+    az, el = normalize_mount_az_el(float(result.x[0]), float(result.x[1]))
+    return MountAngles(azimuth_deg=az, elevation_deg=el)
+
+
+def solve_tracking(
+    *,
+    sun_direction_toward_scene: np.ndarray,
+    mount_world: np.ndarray,
+    target_world: np.ndarray,
+    pivot_facet_normal_body: np.ndarray,
+    mount_offset_d_m: float = 0.0,
+    solve_for_mount_offset: bool = True,
+) -> MountAngles:
+    """
+    Compute mount angles that aim the center-facet reflected ray at ``target_world``.
 
     This is the primary API used by both the controller and raytrace simulation.
 
     Args:
         sun_direction_toward_scene: Unit vector from the sun toward the plant.
         mount_world: Mount pivot position in world coordinates [m].
-        target_world: Point to reflect toward (typically absorber center) [m].
+        target_world: Point to aim at (typically absorber center) [m].
         pivot_facet_normal_body: Unit normal of the center facet in mount body frame at (0, 0).
+        mount_offset_d_m: Pivot-to-facet offset along +Z body [m].
+        solve_for_mount_offset: If true (and offset ≠ 0), refine the bisector seed with least squares.
 
     Returns:
         ``MountAngles`` with azimuth in ``[0, 360)`` and elevation in ``[-90, 90]``.
     """
-    n_bisector = bisector_normal_at_mount(sun_direction_toward_scene, mount_world, target_world)
-    pivot = normalize(pivot_facet_normal_body)
-    azimuth_deg, elevation_deg = mount_az_el_align_body_normal_to_world(pivot, n_bisector)
-    return MountAngles(azimuth_deg=azimuth_deg, elevation_deg=elevation_deg)
+    seed = solve_bisector_tracking(
+        sun_direction_toward_scene=sun_direction_toward_scene,
+        mount_world=mount_world,
+        target_world=target_world,
+        pivot_facet_normal_body=pivot_facet_normal_body,
+    )
+    if not solve_for_mount_offset:
+        return seed
+    return refine_tracking_for_mount_offset(
+        sun_direction_toward_scene=sun_direction_toward_scene,
+        mount_world=mount_world,
+        target_world=target_world,
+        pivot_facet_normal_body=pivot_facet_normal_body,
+        mount_offset_d_m=mount_offset_d_m,
+        initial=seed,
+    )
+
+
+def solve_tracking_for_grid(
+    *,
+    sun_direction_toward_scene: np.ndarray,
+    mount_world: np.ndarray,
+    target_world: np.ndarray,
+    grid: MirrorGridSpec,
+    solve_for_mount_offset: bool = True,
+) -> MountAngles:
+    """Convenience wrapper that derives the pivot facet normal and offset from ``grid``."""
+    return solve_tracking(
+        sun_direction_toward_scene=sun_direction_toward_scene,
+        mount_world=mount_world,
+        target_world=target_world,
+        pivot_facet_normal_body=grid.pivot_normal_body(),
+        mount_offset_d_m=grid.mount_offset_d_m,
+        solve_for_mount_offset=solve_for_mount_offset,
+    )
 
 
 def solve_bisector_tracking_for_grid(
@@ -119,7 +306,7 @@ def solve_bisector_tracking_for_grid(
     target_world: np.ndarray,
     grid: MirrorGridSpec,
 ) -> MountAngles:
-    """Convenience wrapper that derives the pivot facet normal from grid geometry."""
+    """Bisector-only convenience wrapper (no mount-offset refine)."""
     return solve_bisector_tracking(
         sun_direction_toward_scene=sun_direction_toward_scene,
         mount_world=mount_world,

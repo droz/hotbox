@@ -4,13 +4,13 @@
 
 default_site:
   # Diemoz, France
-  latitude_deg: 45.5885
-  longitude_deg: 5.0904
-  altitude_m: 380.0
-#  # Berkeley, California
-#  latitude_deg: 37.8716
-#  longitude_deg: -122.2585
-#  altitude_m: 186.0
+#  latitude_deg: 45.5885
+#  longitude_deg: 5.0904
+#  altitude_m: 380.0
+  # Berkeley, California
+  latitude_deg: 37.8716
+  longitude_deg: -122.2585
+  altitude_m: 186.0
 #  # Gerlach, Nevada
 #  latitude_deg: 40.6518
 #  longitude_deg: -119.3562
@@ -60,3 +60,6 @@ fleet:
 control:
   safe_park_azimuth_deg: 180.0
   safe_park_elevation_deg: 75.0
+  # When true, solve for mount_offset_d_m via least squares after the bisector seed.
+  # Set false to use the pivot-bisector seed only (useful for A/B testing).
+  solve_for_mount_offset: true

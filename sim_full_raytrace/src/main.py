@@ -169,6 +169,7 @@ def simulate_delivered_power_over_times(
     progress_label: str = "day power curve",
     sim_verbose: bool = False,
     bypass_mirror_occlusion: bool = False,
+    solve_for_mount_offset: bool = True,
 ) -> tuple[list[datetime], list[float], list[float], list[list[tuple[float, float]]]]:
     """For each time: total delivered power, total power hitting mirrors, orientations [deg]."""
     delivered_w: list[float] = []
@@ -198,6 +199,7 @@ def simulate_delivered_power_over_times(
             absorber_center=sim.absorber.center,
             mirrors=sim.mirrors,
             absorber=sim.absorber,
+            solve_for_mount_offset=solve_for_mount_offset,
         )
         t_after_mount = time.perf_counter()
         result = sim.run(when, verbose=sim_verbose, bypass_mirror_occlusion=bypass_mirror_occlusion)
@@ -317,9 +319,11 @@ def main() -> None:
     with timed_step("Load shared plant constants (config/system.yaml)"):
         system = load_system_constants()
         site = system.default_site
+        solve_for_mount_offset = bool(system.control.solve_for_mount_offset)
         print(
             f"[hotbox] site lat={site.latitude_deg}, lon={site.longitude_deg}, "
-            f"alt={site.altitude_m} m; fleet={system.fleet.assembly_count} mounts",
+            f"alt={site.altitude_m} m; fleet={system.fleet.assembly_count} mounts; "
+            f"solve_for_mount_offset={solve_for_mount_offset}",
             flush=True,
         )
     with timed_step("Build default simulation (geometry + mirror grids)"):
@@ -346,6 +350,7 @@ def main() -> None:
             absorber_center=sim.absorber.center,
             mirrors=sim.mirrors,
             absorber=sim.absorber,
+            solve_for_mount_offset=solve_for_mount_offset,
         )
 
     with timed_step("Raytrace snapshot (scene time)"):
@@ -409,6 +414,7 @@ def main() -> None:
                 absorber_center=sim.absorber.center,
                 mirrors=sim.mirrors,
                 absorber=sim.absorber,
+                solve_for_mount_offset=solve_for_mount_offset,
             )
             r_spot = sim.run(
                 t_spot,
@@ -469,6 +475,7 @@ def main() -> None:
                 progress_label=f"Day curve {label}",
                 sim_verbose=SHOW_MIRROR_TIMING,
                 bypass_mirror_occlusion=bypass_occ,
+                solve_for_mount_offset=solve_for_mount_offset,
             )
             day_series.append((label, day_times, day_delivered, day_intercepted, day_orients))
             if len(day_specs) == 1:

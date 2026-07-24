@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from hotbox_shared import MirrorGridSpec, solve_bisector_tracking_for_grid
+from hotbox_shared import MirrorGridSpec, solve_tracking_for_grid
 
 from .config import OvenConfig
 from .sun import SunVector
@@ -26,18 +26,22 @@ def track_absorber(
     grid_ny: int = 5,
     pitch_m: float = 0.26035,
     radius_of_curvature_m: float = 5.5,
+    mount_offset_d_m: float = 0.0,
+    solve_for_mount_offset: bool = True,
 ) -> TrackingTarget:
     grid = MirrorGridSpec(
         grid_nx=grid_nx,
         grid_ny=grid_ny,
         pitch_m=pitch_m,
         radius_of_curvature_m=radius_of_curvature_m,
+        mount_offset_d_m=mount_offset_d_m,
     )
-    angles = solve_bisector_tracking_for_grid(
+    angles = solve_tracking_for_grid(
         sun_direction_toward_scene=-np.asarray(sun.world_vector, dtype=float).reshape(3),
         mount_world=mirror_position_world,
         target_world=absorber_world,
         grid=grid,
+        solve_for_mount_offset=solve_for_mount_offset,
     )
     return TrackingTarget(azimuth_deg=angles.azimuth_deg, elevation_deg=angles.elevation_deg, mode="tracking")
 
