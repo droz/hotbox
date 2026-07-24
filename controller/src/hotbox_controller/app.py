@@ -176,14 +176,34 @@ class ControllerApplication:
     def set_mode(self, mode: str) -> None:
         """Set Track/Park/Jog on every discovered mirror."""
         normalized = self.normalize_supervisor_mode(mode)
+        previous = {int(node_id): self.node_mode(node_id) for node_id in self.fleet.nodes()}
         for node_id in self.fleet.nodes():
             self._set_node_mode(int(node_id), normalized, apply_immediate=False)
         if normalized == "park":
             self._apply_park_all()
+        elif normalized == "track":
+            for node_id, prev in previous.items():
+                if prev == "jog":
+                    self._halt_jog_rates(node_id)
 
     def set_mirror_mode(self, node_id: int, mode: str) -> None:
         """Set Track/Park/Jog for one mirror."""
-        self._set_node_mode(int(node_id), self.normalize_supervisor_mode(mode), apply_immediate=True)
+        node_id = int(node_id)
+        previous = self.node_mode(node_id)
+        normalized = self.normalize_supervisor_mode(mode)
+        self._set_node_mode(node_id, normalized, apply_immediate=True)
+        if normalized == "track" and previous == "jog":
+            self._halt_jog_rates(node_id)
+
+    def _halt_jog_rates(self, node_id: int) -> None:
+        """Zero jog rates without changing supervisor mode."""
+        self.transport.send(
+            MirrorCommand(
+                node_id=int(node_id),
+                command=CommandName.JOG,
+                payload={"azimuth_rate_deg_s": 0.0, "elevation_rate_deg_s": 0.0},
+            )
+        )
 
     def _set_node_mode(self, node_id: int, mode: str, *, apply_immediate: bool) -> None:
         previous = self._node_modes.get(node_id)
@@ -351,14 +371,19 @@ class ControllerApplication:
         )
 
     def jog(self, request: JogRequest) -> None:
-        self._node_modes[int(request.node_id)] = "jog"
+        az = float(request.azimuth_rate_deg_s)
+        el = float(request.elevation_rate_deg_s)
+        # Only enter Jog mode when commanding motion. A zero-rate "stop" must not
+        # override a concurrent Track/Park mode change (UI races on stick release).
+        if abs(az) > 1e-9 or abs(el) > 1e-9:
+            self._node_modes[int(request.node_id)] = "jog"
         self.transport.send(
             MirrorCommand(
                 node_id=request.node_id,
                 command=CommandName.JOG,
                 payload={
-                    "azimuth_rate_deg_s": request.azimuth_rate_deg_s,
-                    "elevation_rate_deg_s": request.elevation_rate_deg_s,
+                    "azimuth_rate_deg_s": az,
+                    "elevation_rate_deg_s": el,
                 },
             )
         )

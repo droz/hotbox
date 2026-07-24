@@ -205,14 +205,62 @@
         flex-direction: column;
         gap: 0.45rem;
       }
-      .jog-pad {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 0.25rem;
-        max-width: 9.5rem;
+      .jog-stick-wrap {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.3rem;
       }
-      .jog-pad .spacer { visibility: hidden; }
-      .jog-pad[hidden] { display: none !important; }
+      .jog-stick-wrap[hidden] { display: none !important; }
+      .jog-stick {
+        position: relative;
+        width: 7.25rem;
+        height: 7.25rem;
+        border-radius: 50%;
+        border: 1px solid #3a4a58;
+        background:
+          radial-gradient(circle at center, #1a222a 0%, #141b22 70%),
+          repeating-linear-gradient(0deg, transparent 0 49%, #2a3642 49% 51%, transparent 51% 100%),
+          repeating-linear-gradient(90deg, transparent 0 49%, #2a3642 49% 51%, transparent 51% 100%);
+        background-blend-mode: normal;
+        touch-action: none;
+        user-select: none;
+        cursor: grab;
+      }
+      .jog-stick:active,
+      .jog-stick.dragging { cursor: grabbing; }
+      .jog-stick-knob {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 2.1rem;
+        height: 2.1rem;
+        margin: -1.05rem 0 0 -1.05rem;
+        border-radius: 50%;
+        border: 1px solid color-mix(in srgb, var(--accent) 70%, #3a4a58);
+        background: color-mix(in srgb, var(--accent) 55%, #24303a);
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+        pointer-events: none;
+        transform: translate(0px, 0px);
+      }
+      .jog-stick-meta {
+        font-size: 0.7rem;
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+        min-height: 1em;
+      }
+      .jog-stick-axes {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        color: #5a6a78;
+        font-size: 0.62rem;
+        font-weight: 600;
+      }
+      .jog-stick-axes .n { position: absolute; top: 0.2rem; left: 50%; transform: translateX(-50%); }
+      .jog-stick-axes .s { position: absolute; bottom: 0.2rem; left: 50%; transform: translateX(-50%); }
+      .jog-stick-axes .w { position: absolute; left: 0.28rem; top: 50%; transform: translateY(-50%); }
+      .jog-stick-axes .e { position: absolute; right: 0.28rem; top: 50%; transform: translateY(-50%); }
       .mirror-secondary {
         display: flex;
         flex-wrap: wrap;
@@ -304,7 +352,7 @@
         header { padding: 0.5rem 0.75rem 0.25rem; }
         main.app { padding: 0 0.75rem 0.75rem; }
         .mirror-meta { grid-template-columns: 1fr; }
-        .jog-pad { max-width: none; }
+        .jog-stick { width: 8rem; height: 8rem; }
       }
     </style>
     <script type="importmap">
@@ -421,12 +469,20 @@
       }
 
       async function setFleetMode(mode) {
+        // Reset sticks without sending /api/jog first — a late zero-rate jog used to
+        // race the mode POST and flip mirrors back to Jog.
+        if (mode !== "jog") {
+          jogControllers.forEach((c) => c.stop({ sendZero: false }));
+        }
         updateFleetModeUi(mode);
         await post("/api/mode", { mode });
         refreshState();
       }
 
       async function setMirrorMode(nodeId, mode) {
+        if (mode !== "jog") {
+          jogControllers.get(String(nodeId))?.stop({ sendZero: false });
+        }
         await post("/api/mirror_mode", { node_id: nodeId, mode });
         refreshState();
       }
@@ -457,6 +513,143 @@
         return "";
       }
 
+      const JOG_MAX_RATE_DEG_S = 8;
+      const JOG_DEADZONE = 0.18; // normalized stick radius ignored near center
+      const jogControllers = new Map(); // nodeId -> controller
+
+      function sendJogRates(nodeId, azRate, elRate) {
+        return post("/api/jog", {
+          node_id: Number(nodeId),
+          azimuth_rate_deg_s: azRate,
+          elevation_rate_deg_s: elRate,
+        }).catch(console.error);
+      }
+
+      function shapedStickAxis(n) {
+        const a = Math.abs(n);
+        if (a <= JOG_DEADZONE) return 0;
+        // Remap deadzone→1 into 0→1, then square for finer near-center control.
+        const t = (a - JOG_DEADZONE) / (1 - JOG_DEADZONE);
+        return Math.sign(n) * t * t;
+      }
+
+      function bindJogStick(card, nodeId) {
+        if (jogControllers.has(nodeId)) return jogControllers.get(nodeId);
+
+        const wrap = card.querySelector('[data-field="jog-wrap"]');
+        const stick = card.querySelector('[data-field="jog-stick"]');
+        const knob = card.querySelector('[data-field="jog-knob"]');
+        const meta = card.querySelector('[data-field="jog-meta"]');
+        const radius = () => Math.max(8, stick.clientWidth * 0.5 - knob.clientWidth * 0.55);
+
+        let active = false;
+        let pointerId = null;
+        let lastSent = { az: 0, el: 0 };
+        let pending = null;
+        let sendTimer = null;
+
+        function setKnob(nx, ny) {
+          const r = radius();
+          knob.style.transform = `translate(${nx * r}px, ${-ny * r}px)`;
+          const az = shapedStickAxis(nx) * JOG_MAX_RATE_DEG_S;
+          const el = shapedStickAxis(ny) * JOG_MAX_RATE_DEG_S;
+          meta.textContent = `az ${az.toFixed(1)}°/s · el ${el.toFixed(1)}°/s`;
+          return { az, el };
+        }
+
+        function queueRates(az, el) {
+          pending = { az, el };
+          if (sendTimer != null) return;
+          sendTimer = setTimeout(() => {
+            sendTimer = null;
+            if (!pending) return;
+            const next = pending;
+            pending = null;
+            if (Math.abs(next.az - lastSent.az) < 0.05 && Math.abs(next.el - lastSent.el) < 0.05) {
+              return;
+            }
+            lastSent = next;
+            sendJogRates(nodeId, next.az, next.el);
+          }, 40); // ~25 Hz max
+        }
+
+        function ratesFromEvent(event) {
+          const rect = stick.getBoundingClientRect();
+          const cx = rect.left + rect.width * 0.5;
+          const cy = rect.top + rect.height * 0.5;
+          let dx = event.clientX - cx;
+          let dy = event.clientY - cy;
+          const r = radius();
+          const mag = Math.hypot(dx, dy);
+          if (mag > r && mag > 1e-6) {
+            dx = (dx / mag) * r;
+            dy = (dy / mag) * r;
+          }
+          const nx = dx / r;
+          const ny = -dy / r; // screen up → +elevation
+          return setKnob(nx, ny);
+        }
+
+        function stopJog(opts = {}) {
+          const sendZero = opts.sendZero !== false;
+          active = false;
+          pointerId = null;
+          stick.classList.remove("dragging");
+          setKnob(0, 0);
+          pending = null;
+          lastSent = { az: 0, el: 0 };
+          if (sendTimer != null) {
+            clearTimeout(sendTimer);
+            sendTimer = null;
+          }
+          if (sendZero) sendJogRates(nodeId, 0, 0);
+        }
+
+        stick.addEventListener("pointerdown", (event) => {
+          if (wrap.hidden) return;
+          event.preventDefault();
+          active = true;
+          pointerId = event.pointerId;
+          stick.classList.add("dragging");
+          stick.setPointerCapture(event.pointerId);
+          const rates = ratesFromEvent(event);
+          queueRates(rates.az, rates.el);
+        });
+
+        stick.addEventListener("pointermove", (event) => {
+          if (!active || event.pointerId !== pointerId) return;
+          event.preventDefault();
+          const rates = ratesFromEvent(event);
+          queueRates(rates.az, rates.el);
+        });
+
+        const end = (event) => {
+          if (!active || (pointerId != null && event.pointerId !== pointerId)) return;
+          event.preventDefault();
+          try { stick.releasePointerCapture(event.pointerId); } catch (_) { /* already released */ }
+          stopJog({ sendZero: true });
+        };
+        stick.addEventListener("pointerup", end);
+        stick.addEventListener("pointercancel", end);
+        stick.addEventListener("lostpointercapture", () => {
+          if (active) stopJog({ sendZero: true });
+        });
+
+        const controller = {
+          stop: (opts) => stopJog(opts),
+          setVisible(visible) {
+            const wasHidden = wrap.hidden;
+            wrap.hidden = !visible;
+            if (wasHidden && visible) stopJog({ sendZero: false });
+            // Leaving Jog: don't POST zero rates here — mode change owns the transition.
+            if (!wasHidden && !visible) stopJog({ sendZero: false });
+          },
+        };
+        jogControllers.set(nodeId, controller);
+        setKnob(0, 0);
+        return controller;
+      }
+
       function ensureMirrorCard(nodeId) {
         const grid = document.getElementById("mirror-grid");
         let card = document.getElementById(`mirror-card-${nodeId}`);
@@ -484,16 +677,17 @@
               <button type="button" class="tiny" data-mode="park">Park</button>
               <button type="button" class="tiny" data-mode="jog">Jog</button>
             </div>
-            <div class="jog-pad" data-field="jog-pad" hidden>
-              <button class="tiny spacer" tabindex="-1">.</button>
-              <button class="tiny" data-action="jog-up">+el</button>
-              <button class="tiny spacer" tabindex="-1">.</button>
-              <button class="tiny" data-action="jog-left">−az</button>
-              <button class="tiny" data-action="jog-stop">■</button>
-              <button class="tiny" data-action="jog-right">+az</button>
-              <button class="tiny spacer" tabindex="-1">.</button>
-              <button class="tiny" data-action="jog-down">−el</button>
-              <button class="tiny spacer" tabindex="-1">.</button>
+            <div class="jog-stick-wrap" data-field="jog-wrap" hidden>
+              <div class="jog-stick" data-field="jog-stick" role="application" aria-label="Jog stick for mirror ${nodeId}">
+                <div class="jog-stick-axes" aria-hidden="true">
+                  <span class="n">+el</span>
+                  <span class="s">−el</span>
+                  <span class="w">−az</span>
+                  <span class="e">+az</span>
+                </div>
+                <div class="jog-stick-knob" data-field="jog-knob"></div>
+              </div>
+              <div class="jog-stick-meta" data-field="jog-meta">az 0.0°/s · el 0.0°/s</div>
             </div>
             <div class="mirror-secondary">
               <button class="tiny" data-action="home">Home</button>
@@ -509,15 +703,13 @@
           button.addEventListener("click", () => {
             const action = button.getAttribute("data-action");
             const id = Number(nodeId);
-            const run = (p, body) => post(p, body).then(() => refreshState()).catch(console.error);
-            if (action === "home") run("/api/home_one", { node_id: id });
-            if (action === "jog-left") run("/api/jog", { node_id: id, azimuth_rate_deg_s: -5, elevation_rate_deg_s: 0 });
-            if (action === "jog-right") run("/api/jog", { node_id: id, azimuth_rate_deg_s: 5, elevation_rate_deg_s: 0 });
-            if (action === "jog-up") run("/api/jog", { node_id: id, azimuth_rate_deg_s: 0, elevation_rate_deg_s: 5 });
-            if (action === "jog-down") run("/api/jog", { node_id: id, azimuth_rate_deg_s: 0, elevation_rate_deg_s: -5 });
-            if (action === "jog-stop") run("/api/jog", { node_id: id, azimuth_rate_deg_s: 0, elevation_rate_deg_s: 0 });
+            if (action === "home") {
+              jogControllers.get(String(nodeId))?.stop({ sendZero: false });
+              post("/api/home_one", { node_id: id }).then(() => refreshState()).catch(console.error);
+            }
           });
         });
+        bindJogStick(card, String(nodeId));
         grid.appendChild(card);
         return card;
       }
@@ -551,8 +743,7 @@
           card.querySelector('[data-field="miss"]').textContent =
             miss === undefined || miss === null ? "—" : Number(miss).toFixed(3);
           setActiveModeButtons(card.querySelector(".mode-switch"), mirrorMode);
-          const jogPad = card.querySelector('[data-field="jog-pad"]');
-          jogPad.hidden = mirrorMode !== "jog";
+          bindJogStick(card, id).setVisible(mirrorMode === "jog");
         });
       }
 
@@ -582,6 +773,10 @@
           refreshInFlight = false;
         }
       }
+
+      window.addEventListener("blur", () => {
+        jogControllers.forEach((c) => c.stop({ sendZero: true }));
+      });
 
       // 20 Hz UI poll (SITL control loop is also ~20 Hz). Skip ticks while a fetch is in flight.
       setInterval(refreshState, 50);
@@ -734,18 +929,19 @@
         const n = new THREE.Vector3(...facet.normal).normalize();
         const u = new THREE.Vector3(...facet.u).normalize();
         const v = new THREE.Vector3(...facet.v).normalize();
-        mesh.position.set(facet.center[0], facet.center[1], facet.center[2]);
         // PlaneGeometry spans local XY with normal +Z; map Z->normal, X->u, Y->v
-        mesh.setRotationFromMatrix(new THREE.Matrix4().makeBasis(u, v, n));
+        const basis = new THREE.Matrix4().makeBasis(u, v, n);
+        mesh.position.set(facet.center[0], facet.center[1], facet.center[2]);
+        mesh.setRotationFromMatrix(basis);
         group.add(mesh);
 
+        // Parent the outline to the facet mesh so it shares the same pose (do not copy
+        // mesh.matrix here — it is stale until updateMatrix / render).
         const edge = new THREE.LineSegments(
           new THREE.EdgesGeometry(geom),
           new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.35 })
         );
-        edge.position.copy(mesh.position);
-        edge.setRotationFromMatrix(mesh.matrix);
-        group.add(edge);
+        mesh.add(edge);
       }
 
       function addMirrorAssembly(group, mirror, color) {

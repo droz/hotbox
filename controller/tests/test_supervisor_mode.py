@@ -94,6 +94,24 @@ def test_park_is_face_up_identity() -> None:
     assert all(c.payload.get("mode") == "parked" for c in parks)
 
 
+def test_zero_rate_jog_does_not_override_track_mode() -> None:
+    """UI stick-release posts jog@0; that must not clobber a Track/Park switch."""
+    from hotbox_controller.app import JogRequest
+
+    app, _transport = _app()
+    app.set_mode("jog")
+    assert app.mode == "jog"
+
+    app.set_mode("track")
+    assert app.mode == "track"
+    app.jog(JogRequest(node_id=0, azimuth_rate_deg_s=0.0, elevation_rate_deg_s=0.0))
+    assert app.node_mode(0) == "track"
+    assert app.mode == "track"
+
+    app.jog(JogRequest(node_id=0, azimuth_rate_deg_s=2.0, elevation_rate_deg_s=0.0))
+    assert app.node_mode(0) == "jog"
+
+
 def test_set_mode_rejects_unknown() -> None:
     app, _transport = _app()
     try:
