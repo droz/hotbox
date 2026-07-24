@@ -39,6 +39,16 @@ class NodeRequest(BaseModel):
     node_id: int
 
 
+class ModeRequest(BaseModel):
+    """Supervisor mode: track (sun follow), park (hold safe pose), manual (operator)."""
+
+    mode: str
+
+
+# Canonical supervisor modes exposed to the UI. ``auto`` is accepted as an alias for ``track``.
+SUPERVISOR_MODES = frozenset({"track", "park", "manual"})
+
+
 class ControllerApplication:
     def __init__(
         self,
@@ -56,7 +66,7 @@ class ControllerApplication:
         else:
             self.absorber_world = np.array([0.0, 0.0, self.config.oven.absorber_height_m], dtype=float)
         self._true_geometry: dict[str, Any] | None = None
-        self.mode = "auto"
+        self.mode = "track"
         self.fastapi = self._build_fastapi()
 
     def _mirror_world_for_node(self, node_id: int) -> np.ndarray:
@@ -113,8 +123,38 @@ class ControllerApplication:
                 targets[node_id] = safe_park(self.config.oven)
         return targets
 
+    @staticmethod
+    def normalize_supervisor_mode(mode: str) -> str:
+        key = str(mode).strip().lower()
+        if key == "auto":
+            return "track"
+        if key not in SUPERVISOR_MODES:
+            raise ValueError(f"unsupported supervisor mode: {mode!r} (want track|park|manual)")
+        return key
+
+    def set_mode(self, mode: str) -> None:
+        """Switch supervisor mode. Track/Park are closed-loop; Manual leaves operator in charge."""
+        self.mode = self.normalize_supervisor_mode(mode)
+        if self.mode == "park":
+            self._apply_park_all()
+
+    def _apply_park_all(self) -> None:
+        target = safe_park(self.config.oven)
+        self.fleet.apply_targets({node_id: target for node_id in self.fleet.nodes()})
+
+    def _command_targets(
+        self,
+        sun: SunVector,
+        statuses: dict[int, Any],
+    ) -> dict[int, TrackingTarget]:
+        if self.mode == "park":
+            park = safe_park(self.config.oven)
+            return {node_id: park for node_id in self.fleet.nodes()}
+        # track and manual: show / command the sun-tracking solution (manual does not apply it).
+        return self._tracking_targets(sun, statuses)
+
     def control_tick(self) -> None:
-        if self.mode != "auto":
+        if self.mode == "manual":
             return
         fix = self.gps.current_fix()
         if fix.valid:
@@ -128,7 +168,7 @@ class ControllerApplication:
             )
         sun = self.sun.sun_vector(fix.when_utc)
         statuses = self.fleet.poll()
-        targets = self._tracking_targets(sun, statuses)
+        targets = self._command_targets(sun, statuses)
         for node_id, target in targets.items():
             if not statuses[node_id].homed:
                 continue
@@ -147,7 +187,7 @@ class ControllerApplication:
             )
         sun = self.sun.sun_vector(fix.when_utc)
         statuses = self.fleet.poll()
-        targets = self._tracking_targets(sun, statuses)
+        targets = self._command_targets(sun, statuses)
 
         target_scene = build_target_scene(
             sun=sun,
@@ -181,6 +221,7 @@ class ControllerApplication:
         }
 
     def home_all(self) -> None:
+        self.mode = "manual"
         self.fleet.home_all()
 
     def home_one(self, node_id: int) -> None:
@@ -192,9 +233,7 @@ class ControllerApplication:
         self.fleet.stop(node_id)
 
     def park_all(self) -> None:
-        self.mode = "auto"
-        target = safe_park(self.config.oven)
-        self.fleet.apply_targets({node_id: target for node_id in self.fleet.nodes()})
+        self.set_mode("park")
 
     def park_one(self, node_id: int) -> None:
         self.mode = "manual"
@@ -253,22 +292,39 @@ class ControllerApplication:
         @app.post("/api/park")
         def park() -> dict[str, str]:
             self.park_all()
-            return {"status": "ok"}
+            return {"status": "ok", "mode": self.mode}
 
         @app.post("/api/park_one")
         def api_park_one(request: NodeRequest) -> dict[str, str]:
             self.park_one(request.node_id)
-            return {"status": "ok"}
+            return {"status": "ok", "mode": self.mode}
+
+        @app.post("/api/mode")
+        def api_mode(request: ModeRequest) -> dict[str, str]:
+            try:
+                self.set_mode(request.mode)
+            except ValueError as exc:
+                from fastapi import HTTPException
+
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return {"status": "ok", "mode": self.mode}
 
         @app.post("/api/auto")
         def auto() -> dict[str, str]:
-            self.mode = "auto"
-            return {"status": "ok"}
+            """Resume sun tracking (alias for ``POST /api/mode`` with ``track``)."""
+            self.set_mode("track")
+            return {"status": "ok", "mode": self.mode}
+
+        @app.post("/api/manual")
+        def api_manual() -> dict[str, str]:
+            """Enter operator mode: stop closed-loop Track/Park commands."""
+            self.set_mode("manual")
+            return {"status": "ok", "mode": self.mode}
 
         @app.post("/api/jog")
         def api_jog(request: JogRequest) -> dict[str, str]:
             self.jog(request)
-            return {"status": "ok"}
+            return {"status": "ok", "mode": self.mode}
 
         @app.post("/api/target")
         def api_target(request: TargetRequest) -> dict[str, str]:

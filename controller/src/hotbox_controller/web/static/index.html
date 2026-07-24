@@ -100,6 +100,28 @@
         flex-wrap: wrap;
         gap: 0.4rem;
       }
+      .mode-switch {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 0.3rem;
+        margin-bottom: 0.55rem;
+      }
+      .mode-switch button {
+        font-weight: 600;
+        letter-spacing: 0.01em;
+      }
+      .mode-switch button.active {
+        background: color-mix(in srgb, var(--accent) 35%, #24303a);
+        border-color: var(--accent);
+        color: #fff;
+        box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 50%, transparent);
+      }
+      .mode-hint {
+        margin: 0 0 0.55rem;
+        font-size: 0.75rem;
+        color: var(--muted);
+        line-height: 1.35;
+      }
       button, select {
         background: #24303a;
         color: var(--text);
@@ -111,6 +133,10 @@
       }
       button:hover { border-color: var(--accent); }
       button.tiny { padding: 0.28rem 0.45rem; font-size: 0.75rem; }
+      button:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
       .swatch { display: inline-block; width: 0.7rem; height: 0.7rem; border-radius: 2px; margin-right: 0.25rem; vertical-align: middle; }
       .swatch.est { background: var(--est); }
       .swatch.true { background: var(--true); }
@@ -245,10 +271,14 @@
             <div>GPS <span class="pill" id="gps-pill">…</span></div>
             <div>Sun <span class="pill" id="sun-pill">…</span></div>
           </div>
+          <div class="mode-switch" role="group" aria-label="Supervisor mode">
+            <button type="button" id="btn-mode-track" data-mode="track">Track</button>
+            <button type="button" id="btn-mode-park" data-mode="park">Park</button>
+            <button type="button" id="btn-mode-manual" data-mode="manual">Jog</button>
+          </div>
+          <p class="mode-hint" id="mode-hint">Track follows the sun. Park holds the safe pose. Jog unlocks the pads (and stops closed-loop commands).</p>
           <div class="controls">
             <button id="btn-home-all">Home all</button>
-            <button id="btn-park-all">Park all</button>
-            <button id="btn-auto">Auto track</button>
           </div>
           <details class="raw">
             <summary>Raw controller state</summary>
@@ -271,11 +301,46 @@
           body: JSON.stringify(body),
         });
         if (!response.ok) throw new Error(`${path} failed: ${response.status}`);
+        return response.json().catch(() => ({}));
       }
 
-      document.getElementById("btn-home-all").onclick = () => post("/api/home").catch(console.error);
-      document.getElementById("btn-park-all").onclick = () => post("/api/park").catch(console.error);
-      document.getElementById("btn-auto").onclick = () => post("/api/auto").catch(console.error);
+      const MODE_HINTS = {
+        track: "Closed-loop sun tracking for all homed mirrors. Use Park or Jog to leave Track.",
+        park: "Holding the safe park pose. Press Track to resume aiming, or Jog to take over.",
+        manual: "Operator control. Jog pads move mirrors; press Track or Park when done.",
+      };
+
+      function normalizeMode(mode) {
+        if (mode === "auto") return "track";
+        if (mode === "track" || mode === "park" || mode === "manual") return mode;
+        return "manual";
+      }
+
+      function setModeButtons(mode) {
+        const current = normalizeMode(mode);
+        document.querySelectorAll(".mode-switch [data-mode]").forEach((btn) => {
+          btn.classList.toggle("active", btn.getAttribute("data-mode") === current);
+        });
+        const pill = document.getElementById("mode-pill");
+        pill.textContent = current;
+        pill.className = `pill ${current === "track" ? "ok" : current === "park" ? "warn" : ""}`;
+        document.getElementById("mode-hint").textContent = MODE_HINTS[current] || MODE_HINTS.manual;
+      }
+
+      async function setSupervisorMode(mode) {
+        setModeButtons(mode); // optimistic UI
+        await post("/api/mode", { mode });
+        refreshState();
+      }
+
+      document.getElementById("btn-home-all").onclick = () =>
+        post("/api/home").then(() => refreshState()).catch(console.error);
+      document.getElementById("btn-mode-track").onclick = () =>
+        setSupervisorMode("track").catch(console.error);
+      document.getElementById("btn-mode-park").onclick = () =>
+        setSupervisorMode("park").catch(console.error);
+      document.getElementById("btn-mode-manual").onclick = () =>
+        setSupervisorMode("manual").catch(console.error);
 
       function pillClass(homed, fault, mode) {
         if (fault) return "bad";
@@ -298,7 +363,7 @@
           </div>
           <div class="mirror-meta">
             <div>Homed <strong data-field="homed">…</strong></div>
-            <div>Mode <strong data-field="mode">…</strong></div>
+            <div>Axis mode <strong data-field="mode">…</strong></div>
             <div>Az <strong data-field="az">…</strong></div>
             <div>El <strong data-field="el">…</strong></div>
             <div class="span2">Target <strong data-field="target">…</strong></div>
@@ -307,8 +372,9 @@
           </div>
           <div class="mirror-actions">
             <div class="controls">
-              <button class="tiny" data-action="home">Home</button>
+              <button class="tiny" data-action="track">Track</button>
               <button class="tiny" data-action="park">Park</button>
+              <button class="tiny" data-action="home">Home</button>
               <button class="tiny" data-action="stop">Stop</button>
             </div>
             <div class="jog-pad">
@@ -328,14 +394,16 @@
           button.addEventListener("click", () => {
             const action = button.getAttribute("data-action");
             const id = Number(nodeId);
-            if (action === "home") post("/api/home_one", { node_id: id }).catch(console.error);
-            if (action === "park") post("/api/park_one", { node_id: id }).catch(console.error);
-            if (action === "stop") post("/api/stop_one", { node_id: id }).catch(console.error);
-            if (action === "jog-left") post("/api/jog", { node_id: id, azimuth_rate_deg_s: -5, elevation_rate_deg_s: 0 }).catch(console.error);
-            if (action === "jog-right") post("/api/jog", { node_id: id, azimuth_rate_deg_s: 5, elevation_rate_deg_s: 0 }).catch(console.error);
-            if (action === "jog-up") post("/api/jog", { node_id: id, azimuth_rate_deg_s: 0, elevation_rate_deg_s: 5 }).catch(console.error);
-            if (action === "jog-down") post("/api/jog", { node_id: id, azimuth_rate_deg_s: 0, elevation_rate_deg_s: -5 }).catch(console.error);
-            if (action === "jog-stop") post("/api/jog", { node_id: id, azimuth_rate_deg_s: 0, elevation_rate_deg_s: 0 }).catch(console.error);
+            const run = (p, body) => post(p, body).then(() => refreshState()).catch(console.error);
+            if (action === "track") setSupervisorMode("track").catch(console.error);
+            if (action === "park") run("/api/park_one", { node_id: id });
+            if (action === "home") run("/api/home_one", { node_id: id });
+            if (action === "stop") run("/api/stop_one", { node_id: id });
+            if (action === "jog-left") run("/api/jog", { node_id: id, azimuth_rate_deg_s: -5, elevation_rate_deg_s: 0 });
+            if (action === "jog-right") run("/api/jog", { node_id: id, azimuth_rate_deg_s: 5, elevation_rate_deg_s: 0 });
+            if (action === "jog-up") run("/api/jog", { node_id: id, azimuth_rate_deg_s: 0, elevation_rate_deg_s: 5 });
+            if (action === "jog-down") run("/api/jog", { node_id: id, azimuth_rate_deg_s: 0, elevation_rate_deg_s: -5 });
+            if (action === "jog-stop") run("/api/jog", { node_id: id, azimuth_rate_deg_s: 0, elevation_rate_deg_s: 0 });
           });
         });
         grid.appendChild(card);
@@ -347,6 +415,7 @@
         const targets = state.targets || {};
         const targetMirrors = state.geometry?.target?.mirrors || state.geometry?.estimated?.mirrors || [];
         const missById = Object.fromEntries(targetMirrors.map((m) => [String(m.node_id), m.miss_m]));
+        const supervisor = normalizeMode(state.mode);
         Object.keys(mirrors).sort((a, b) => Number(a) - Number(b)).forEach((id) => {
           const status = mirrors[id];
           const target = targets[id];
@@ -365,6 +434,8 @@
           const miss = missById[id];
           card.querySelector('[data-field="miss"]').textContent =
             miss === undefined || miss === null ? "—" : Number(miss).toFixed(3);
+          // Jog pad is always available; highlight when supervisor is in Jog/manual.
+          card.querySelector(".jog-pad").style.opacity = supervisor === "manual" ? "1" : "0.55";
         });
       }
 
@@ -378,7 +449,7 @@
           const state = await response.json();
           window.hotboxLatestState = state;
           document.getElementById("state").textContent = JSON.stringify(state, null, 2);
-          document.getElementById("mode-pill").textContent = state.mode ?? "?";
+          setModeButtons(state.mode);
           const gps = state.gps || {};
           document.getElementById("gps-pill").textContent = gps.valid
             ? `${gps.source} · ${Number(gps.latitude_deg).toFixed(4)}, ${Number(gps.longitude_deg).toFixed(4)}`
