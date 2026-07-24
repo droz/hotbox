@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime
 import time
-from zoneinfo import ZoneInfo
 
 import numpy as np
-import pandas as pd
-from hotbox_shared import SystemConstants, load_system_constants
-from pvlib.location import Location
+from hotbox_shared import (
+    SitePose,
+    SystemConstants,
+    format_site_local,
+    load_system_constants,
+    local_times_sunrise_to_sunset,
+    site_local_datetime,
+)
 
 from src.absorber import SolarAbsorber
 from src.controller import mirror_orientations_for_time
@@ -18,7 +22,7 @@ from src.simulation import HotboxSimulation, SimulationResult
 from src.sun import SunModel
 from src.visualizer import SceneVisualizer, build_day_delivered_power_figure
 
-# --- Sim-only knobs (plant geometry comes from config/system.yaml via hotbox_shared) ---
+# --- Sim-only knobs (plant geometry / site TZ come from config/system.yaml via hotbox_shared) ---
 
 # Cell count along each axis on **each** square facet (rays per mirror ≈ grid_nx * grid_ny * U * V).
 SIM_SAMPLES_U = 8
@@ -31,17 +35,20 @@ SPOT_GRID_SAMPLES_U = 32
 SPOT_GRID_SAMPLES_V = 32
 SPOT_GRID_BINS = 80
 
-# Day curve: local sunrise → sunset, every N minutes. Int or same-length lists.
-# TZ matches the default Diémoz site in config/system.yaml.
+# Day curve: site-local sunrise → sunset, every N minutes. Int or same-length lists.
+# Civil times use default_site.timezone_id from config/system.yaml (not the laptop TZ).
 DAY_CURVE_YEAR = 2026
 DAY_CURVE_MONTH = [8, 9]
 DAY_CURVE_DAY = [30, 7]
-DAY_CURVE_TZ = ZoneInfo("Europe/Paris")
 DAY_CURVE_STEP_MINUTES = 20
 
-# Local wall time for the 3D scene / absorber spot figures and printed snapshot
-# (mount solve, mirror angles, ray bundle). Independent of DAY_CURVE_* curve list.
-SCENE_VIS_WHEN = datetime(2026, 9, 7, 14, 0, 0, tzinfo=DAY_CURVE_TZ)
+# Site-local wall clock for the 3D scene / absorber spot figures and printed snapshot
+# (mount solve, mirror angles, ray bundle). Built with the site timezone after load.
+SCENE_VIS_YEAR = 2026
+SCENE_VIS_MONTH = 9
+SCENE_VIS_DAY = 7
+SCENE_VIS_HOUR = 14
+SCENE_VIS_MINUTE = 0
 
 # 3D scene figure only: coarser facet grid and shorter incoming segments (sun-ward) than the
 # snapshot raytrace used for printed power (still uses SIM_SAMPLES_* via ``sim.run`` defaults).
@@ -67,48 +74,6 @@ def timed_step(label: str) -> None:
         print(f"[hotbox] {label} — done in {time.perf_counter() - t0:.3f}s", flush=True)
 
 
-def local_times_sunrise_to_sunset(
-    latitude_deg: float,
-    longitude_deg: float,
-    altitude_m: float,
-    year: int,
-    month: int,
-    day: int,
-    tz: ZoneInfo,
-    step_minutes: int,
-) -> tuple[list[datetime], datetime | None, datetime | None]:
-    """
-    Samples from first step on/after sunrise through last on/before sunset.
-    Sunrise/sunset from pvlib SPA for the given site and local calendar date.
-
-    Uses local noon as the SPA reference time: midnight is ambiguous across timezones
-    and can return the previous civil day's rise/set (yielding zero samples).
-    """
-    tz_key = tz.key
-    loc = Location(latitude_deg, longitude_deg, tz_key, altitude=altitude_m)
-    day_noon = pd.Timestamp(year=year, month=month, day=day, hour=12, tz=tz_key)
-    rs = loc.get_sun_rise_set_transit(pd.DatetimeIndex([day_noon]), method="spa")
-    sunrise_ts = rs["sunrise"].iloc[0]
-    sunset_ts = rs["sunset"].iloc[0]
-    if pd.isna(sunrise_ts) or pd.isna(sunset_ts):
-        return [], None, None
-
-    sunrise_ts = sunrise_ts.floor("s")
-    sunset_ts = sunset_ts.floor("s")
-    sunrise = sunrise_ts.to_pydatetime()
-    sunset = sunset_ts.to_pydatetime()
-    step = timedelta(minutes=step_minutes)
-    midnight = datetime(year, month, day, 0, 0, 0, tzinfo=tz)
-    t = midnight
-    while t < sunrise:
-        t += step
-    out: list[datetime] = []
-    while t <= sunset:
-        out.append(t)
-        t += step
-    return out, sunrise, sunset
-
-
 def day_curve_month_day_pairs(
     month: int | list[int] | tuple[int, ...],
     day: int | list[int] | tuple[int, ...],
@@ -129,29 +94,24 @@ def day_curve_month_day_pairs(
 
 
 def spot_pattern_sample_times(
-    latitude_deg: float,
-    longitude_deg: float,
-    altitude_m: float,
+    site: SitePose,
+    *,
     year: int,
     month: int,
     day: int,
-    tz: ZoneInfo,
     step_minutes: int,
     num_panels: int,
 ) -> list[datetime]:
     """
-    ``num_panels`` local times spread across sunrise–sunset for spot-pattern visualization.
+    ``num_panels`` site-local times spread across sunrise–sunset for spot-pattern visualization.
     Falls back to empty if there is no daylight interval.
     """
     day_times, _, _ = local_times_sunrise_to_sunset(
-        latitude_deg,
-        longitude_deg,
-        altitude_m,
-        year,
-        month,
-        day,
-        tz,
-        step_minutes,
+        site,
+        year=year,
+        month=month,
+        day=day,
+        step_minutes=step_minutes,
     )
     if not day_times:
         return []
@@ -318,11 +278,12 @@ def main() -> None:
         )
     with timed_step("Load shared plant constants (config/system.yaml)"):
         system = load_system_constants()
-        site = system.default_site
+        site = SitePose.from_constants(system.default_site)
         solve_for_mount_offset = bool(system.control.solve_for_mount_offset)
         print(
             f"[hotbox] site lat={site.latitude_deg}, lon={site.longitude_deg}, "
-            f"alt={site.altitude_m} m; fleet={system.fleet.assembly_count} mounts; "
+            f"alt={site.altitude_m} m; tz={site.timezone_id}; "
+            f"fleet={system.fleet.assembly_count} mounts; "
             f"solve_for_mount_offset={solve_for_mount_offset}",
             flush=True,
         )
@@ -341,7 +302,15 @@ def main() -> None:
             f"world xyz at current mount {o_w[0]:.4f}, {o_w[1]:.4f}, {o_w[2]:.4f} m"
         )
     day_specs = day_curve_month_day_pairs(DAY_CURVE_MONTH, DAY_CURVE_DAY)
-    when = SCENE_VIS_WHEN
+    when = site_local_datetime(
+        site,
+        SCENE_VIS_YEAR,
+        SCENE_VIS_MONTH,
+        SCENE_VIS_DAY,
+        SCENE_VIS_HOUR,
+        SCENE_VIS_MINUTE,
+    )
+    print(f"[hotbox] scene snapshot at site-local {format_site_local(when, site)}", flush=True)
 
     with timed_step("Solve mount angles for scene snapshot"):
         orientations = mirror_orientations_for_time(
@@ -383,18 +352,15 @@ def main() -> None:
     with timed_step("Build 3D scene figure (Plotly)"):
         scene_fig = viz.build_scene_figure(result_scene, scene_when_local=when)
 
-    # Spot grid: same calendar day as SCENE_VIS_WHEN, sunrise→sunset (see SPOT_GRID_*).
+    # Spot grid: same calendar day as scene snapshot, sunrise→sunset (see SPOT_GRID_*).
     with timed_step("Compute spot-pattern sample times"):
         spot_times = spot_pattern_sample_times(
-            site.latitude_deg,
-            site.longitude_deg,
-            site.altitude_m,
-            SCENE_VIS_WHEN.year,
-            SCENE_VIS_WHEN.month,
-            SCENE_VIS_WHEN.day,
-            DAY_CURVE_TZ,
-            DAY_CURVE_STEP_MINUTES,
-            SPOT_GRID_NUM_PANELS,
+            site,
+            year=when.year,
+            month=when.month,
+            day=when.day,
+            step_minutes=DAY_CURVE_STEP_MINUTES,
+            num_panels=SPOT_GRID_NUM_PANELS,
         )
     if not spot_times:
         spot_times = [when]
@@ -451,20 +417,17 @@ def main() -> None:
     for month_i, day_i in day_specs:
         with timed_step(f"Sunrise/sunset & timestep list for {month_i}/{day_i}/{DAY_CURVE_YEAR}"):
             day_times, sr, ss = local_times_sunrise_to_sunset(
-                site.latitude_deg,
-                site.longitude_deg,
-                site.altitude_m,
-                DAY_CURVE_YEAR,
-                month_i,
-                day_i,
-                DAY_CURVE_TZ,
-                DAY_CURVE_STEP_MINUTES,
+                site,
+                year=DAY_CURVE_YEAR,
+                month=month_i,
+                day=day_i,
+                step_minutes=DAY_CURVE_STEP_MINUTES,
             )
         label = f"{month_i}/{day_i}/{DAY_CURVE_YEAR}"
         if sr is not None and ss is not None:
             print(
-                f"Day curve {label}: sunrise {sr.strftime('%Y-%m-%d %H:%M:%S %Z')}, "
-                f"sunset {ss.strftime('%Y-%m-%d %H:%M:%S %Z')} ({len(day_times)} samples)"
+                f"Day curve {label}: sunrise {format_site_local(sr, site, '%Y-%m-%d %H:%M:%S %Z')}, "
+                f"sunset {format_site_local(ss, site, '%Y-%m-%d %H:%M:%S %Z')} ({len(day_times)} samples)"
             )
         else:
             print(f"Day curve {label}: no sunrise/sunset (polar night or missing rise/set).")
@@ -482,7 +445,7 @@ def main() -> None:
                 single_curve_sr_ss = (sr, ss)
 
     if day_series:
-        x_axis_title = f"Local time ({DAY_CURVE_TZ.key})"
+        x_axis_title = f"Site local time ({site.timezone_id})"
         if len(day_series) == 1 and len(day_specs) == 1 and single_curve_sr_ss is not None:
             sr0, ss0 = single_curve_sr_ss
             month_i, day_i = day_specs[0]
@@ -490,20 +453,20 @@ def main() -> None:
             ss_s = ss0.strftime("%H:%M") if ss0 else "?"
             day_title = (
                 f"Delivered & mirror-intercepted power — {month_i}/{day_i}/{DAY_CURVE_YEAR} "
-                f"(sunrise–sunset {sr_s}–{ss_s}, every {DAY_CURVE_STEP_MINUTES} min)"
+                f"({site.timezone_id}; sunrise–sunset {sr_s}–{ss_s}, every {DAY_CURVE_STEP_MINUTES} min)"
             )
         else:
             dates_s = ", ".join(name for name, _, _, _, _ in day_series)
             day_title = (
                 f"Delivered & mirror-intercepted power — {DAY_CURVE_YEAR} ({dates_s}), "
-                f"sunrise–sunset local, every {DAY_CURVE_STEP_MINUTES} min"
+                f"sunrise–sunset {site.timezone_id}, every {DAY_CURVE_STEP_MINUTES} min"
             )
         with timed_step("Build day power Plotly figure"):
             day_fig = build_day_delivered_power_figure(
                 day_series,
                 title=day_title,
                 x_axis_title=(
-                    "Local time of day [h] (wall clock)"
+                    f"Site local time of day [h] ({site.timezone_id})"
                     if len(day_series) > 1
                     else x_axis_title
                 ),

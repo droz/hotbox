@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
 import threading
 import time
 from typing import Any
 
 import numpy as np
 import uvicorn
+from hotbox_shared import SystemConstants, load_system_constants, utc_now
 
 from hotbox_controller.app import ControllerApplication, build_true_geometry_from_layouts
 from hotbox_controller.config import TransportConfig, app_config_from_system
@@ -15,7 +15,6 @@ from hotbox_controller.geometry import MirrorCalibration
 from hotbox_controller.protocol import CommandName, MirrorCommand
 from hotbox_controller.sun import SunService
 from hotbox_controller.transport import SimTransport
-from hotbox_shared import SystemConstants, load_system_constants
 
 from .mirror_node import SimulatedMirrorNode
 
@@ -108,7 +107,7 @@ class SitlHarness:
             for node in self.nodes.values():
                 node.step(dt)
 
-            when = datetime.now(timezone.utc)
+            when = utc_now()
             sun = self.sun.sun_vector(when)
             statuses = {node_id: node.status() for node_id, node in self.nodes.items()}
 

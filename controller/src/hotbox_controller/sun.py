@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 
 import numpy as np
+from hotbox_shared import ensure_utc
 from pvlib.location import Location
 
 from .config import SiteConfig
@@ -38,7 +39,7 @@ class SunService:
         self._cached_vector: SunVector | None = None
 
     def sun_vector(self, when: datetime) -> SunVector:
-        when_utc = when.astimezone(timezone.utc)
+        when_utc = ensure_utc(when)
         if (
             self._cached_vector is not None
             and self._cached_when is not None

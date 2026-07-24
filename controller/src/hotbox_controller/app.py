@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 import numpy as np
+from hotbox_shared import utc_now
 from pydantic import BaseModel
 
 from .calibration import load_calibrations
@@ -120,6 +120,7 @@ class ControllerApplication:
                     latitude_deg=fix.latitude_deg,
                     longitude_deg=fix.longitude_deg,
                     altitude_m=fix.altitude_m,
+                    timezone_id=self.config.site.timezone_id,
                 )
             )
         sun = self.sun.sun_vector(fix.when_utc)
@@ -138,6 +139,7 @@ class ControllerApplication:
                     latitude_deg=fix.latitude_deg,
                     longitude_deg=fix.longitude_deg,
                     altitude_m=fix.altitude_m,
+                    timezone_id=self.config.site.timezone_id,
                 )
             )
         sun = self.sun.sun_vector(fix.when_utc)
@@ -156,7 +158,7 @@ class ControllerApplication:
         )
 
         return {
-            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "timestamp_utc": utc_now().isoformat(),
             "mode": self.mode,
             "gps": fix.as_dict(),
             "sun": {

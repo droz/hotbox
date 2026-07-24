@@ -11,6 +11,7 @@ class SiteConfig:
     latitude_deg: float = 40.7864
     longitude_deg: float = -119.2065
     altitude_m: float = 1190.0
+    timezone_id: str = "America/Los_Angeles"
 
 
 @dataclass(slots=True)
@@ -73,6 +74,7 @@ def app_config_from_system(system: SystemConstants | None = None) -> AppConfig:
             latitude_deg=system.default_site.latitude_deg,
             longitude_deg=system.default_site.longitude_deg,
             altitude_m=system.default_site.altitude_m,
+            timezone_id=system.default_site.timezone_id,
         ),
         oven=OvenConfig(
             absorber_height_m=system.absorber.center_height_m,

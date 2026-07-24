@@ -22,10 +22,47 @@ from hotbox_shared import load_system_constants
 
 system = load_system_constants()
 print(system.default_site.latitude_deg)
+print(system.default_site.timezone_id)
 print(system.absorber.center_height_m)
 print(system.mirror.grid_nx, system.mirror.grid_ny)
 print(system.control.solve_for_mount_offset)
 ```
+
+## Site time and location
+
+Never use the computer's local timezone. Civil-day work and plots use
+`default_site.timezone_id` from `config/system.yaml`. Live time prefers GPS UTC when
+available, otherwise `utc_now()`.
+
+```python
+from hotbox_shared import (
+    SitePose,
+    as_site_local,
+    ensure_utc,
+    format_site_local,
+    load_system_constants,
+    local_times_sunrise_to_sunset,
+    site_local_datetime,
+    utc_now,
+)
+
+site = SitePose.from_constants(load_system_constants().default_site)
+when = site_local_datetime(site, 2026, 9, 7, 14, 0, 0)  # 14:00 at the plant
+times, sunrise, sunset = local_times_sunrise_to_sunset(
+    site, year=2026, month=9, day=7, step_minutes=20
+)
+print(format_site_local(when, site))
+print(ensure_utc(when))  # physics / pvlib
+```
+
+| Symbol | Role |
+|--------|------|
+| `SitePose` | lat/lon/alt + IANA `timezone_id` |
+| `site_local_datetime` | Build aware civil time at the site |
+| `as_site_local` / `format_site_local` | Convert / print in site TZ |
+| `ensure_utc` | Aware → UTC; **raises** on naive (no host-TZ guess) |
+| `utc_now` | Host clock as UTC (fallback when GPS unavailable) |
+| `local_times_sunrise_to_sunset` | Site-local samples from SPA sunrise→sunset |
 
 ## Mirror pointing
 

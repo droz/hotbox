@@ -7,6 +7,8 @@ import threading
 import time
 from typing import Any
 
+from hotbox_shared import utc_now
+
 from .config import GpsConfig, SiteConfig
 
 logger = logging.getLogger(__name__)
@@ -115,7 +117,7 @@ def _parse_nmea_datetime(ddmmyy: str, hhmmss: str) -> datetime:
 
 
 def _parse_nmea_time_only(hhmmss: str) -> datetime:
-    now = datetime.now(timezone.utc)
+    now = utc_now()
     hour = int(hhmmss[0:2])
     minute = int(hhmmss[2:4])
     second = int(float(hhmmss[4:]))
@@ -130,7 +132,7 @@ class GpsService:
         self._config = gps_config or GpsConfig()
         self._lock = threading.Lock()
         self._latest = GpsFix(
-            when_utc=datetime.now(timezone.utc),
+            when_utc=utc_now(),
             latitude_deg=fallback_site.latitude_deg,
             longitude_deg=fallback_site.longitude_deg,
             altitude_m=fallback_site.altitude_m,
@@ -146,9 +148,9 @@ class GpsService:
     def current_fix(self) -> GpsFix:
         with self._lock:
             fix = self._latest
-            if not fix.valid or (datetime.now(timezone.utc) - fix.when_utc).total_seconds() > self._config.stale_after_s:
+            if not fix.valid or (utc_now() - fix.when_utc).total_seconds() > self._config.stale_after_s:
                 return GpsFix(
-                    when_utc=datetime.now(timezone.utc),
+                    when_utc=utc_now(),
                     latitude_deg=self._fallback_site.latitude_deg,
                     longitude_deg=self._fallback_site.longitude_deg,
                     altitude_m=self._fallback_site.altitude_m,

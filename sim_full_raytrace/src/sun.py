@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
 import pvlib
+from hotbox_shared import ensure_utc
 from pvlib.location import Location
 
 from src.geometry import az_el_to_unit, orthonormal_basis_from_direction
@@ -19,7 +20,7 @@ class SunModel:
     altitude_m: float
 
     def ray_direction(self, when_utc: datetime) -> np.ndarray:
-        ts = when_utc.astimezone(timezone.utc)
+        ts = ensure_utc(when_utc)
         solpos = pvlib.solarposition.get_solarposition(
             time=ts,
             latitude=self.latitude_deg,
@@ -37,7 +38,7 @@ class SunModel:
         Direct normal irradiance (W/m²) from pvlib's clear-sky model (Ineichen, via
         ``Location.get_clearsky``), for this site's lat/lon/altitude at ``when_utc``.
         """
-        ts = when_utc.astimezone(timezone.utc)
+        ts = ensure_utc(when_utc)
         idx = pd.DatetimeIndex([ts])
         loc = Location(
             self.latitude_deg,

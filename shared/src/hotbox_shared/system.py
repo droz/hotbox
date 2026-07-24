@@ -11,6 +11,8 @@ class SiteConstants:
     latitude_deg: float
     longitude_deg: float
     altitude_m: float
+    # IANA timezone for civil-day work (plots, sunrise/sunset). Never use the host TZ.
+    timezone_id: str
 
 
 @dataclass(slots=True, frozen=True)
