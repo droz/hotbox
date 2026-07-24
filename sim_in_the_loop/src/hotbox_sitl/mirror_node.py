@@ -76,7 +76,7 @@ class SimulatedMirrorNode:
             return
 
         if self.mode in {"tracking", "parked"}:
-            pwm_az = self._position_pwm(self.azimuth_axis, self.target_azimuth_deg)
+            pwm_az = self._position_pwm(self.azimuth_axis, self.target_azimuth_deg, wrap_360=True)
             pwm_el = self._position_pwm(self.altitude_axis, self.target_elevation_deg)
             self.azimuth_axis.step(pwm_az, dt_s)
             self.altitude_axis.step(pwm_el, dt_s)
@@ -96,8 +96,10 @@ class SimulatedMirrorNode:
             self.mode = "idle"
 
     @staticmethod
-    def _position_pwm(axis: ActuatorModel, target_deg: float) -> float:
+    def _position_pwm(axis: ActuatorModel, target_deg: float, *, wrap_360: bool = False) -> float:
         error = target_deg - axis.state.angle_deg
+        if wrap_360:
+            error = ((error + 180.0) % 360.0) - 180.0
         command = max(-1.0, min(1.0, error / 10.0))
         return command
 

@@ -11,7 +11,7 @@ from datetime import datetime
 
 import numpy as np
 
-from hotbox_shared import bisector_normal_at_mount, solve_tracking
+from hotbox_shared import MountJointLimits, bisector_normal_at_mount, solve_tracking
 
 from src.absorber import SolarAbsorber
 from src.flat_mirror_grid import AltAzFlatMirrorGrid
@@ -28,6 +28,7 @@ def solve_mount_angles_for_grid(
     absorber: SolarAbsorber,
     *,
     solve_for_mount_offset: bool = True,
+    joint_limits: MountJointLimits | None = None,
 ) -> tuple[float, float]:
     """Alt-az angles for center-facet aiming (shared with the live controller)."""
     _ = absorber  # kept for call-site compatibility
@@ -39,6 +40,7 @@ def solve_mount_angles_for_grid(
         pivot_facet_normal_body=grid._pivot_facet_normal_body,
         mount_offset_d_m=float(grid.mount_offset_d_m),
         solve_for_mount_offset=solve_for_mount_offset,
+        joint_limits=joint_limits,
     )
     return angles.azimuth_deg, angles.elevation_deg
 
@@ -51,6 +53,7 @@ def mirror_orientations_for_time(
     absorber: SolarAbsorber,
     *,
     solve_for_mount_offset: bool = True,
+    joint_limits: MountJointLimits | None = None,
 ) -> list[tuple[float, float]]:
     """
     Aim each grid; return display angles from the pivot facet normal in W:
@@ -61,7 +64,12 @@ def mirror_orientations_for_time(
     a = np.asarray(absorber_center, dtype=float).reshape(3)
     for g in mirrors:
         az, el = solve_mount_angles_for_grid(
-            g, when_utc, a, absorber, solve_for_mount_offset=solve_for_mount_offset
+            g,
+            when_utc,
+            a,
+            absorber,
+            solve_for_mount_offset=solve_for_mount_offset,
+            joint_limits=joint_limits,
         )
         g.azimuth_deg, g.elevation_deg = az, el
         out.append((g.physical_mount_azimuth_deg(), g.physical_mount_tilt_deg()))

@@ -66,3 +66,8 @@ control:
   # When true, solve for mount_offset_d_m via least squares after the bisector seed.
   # Set false to use the pivot-bisector seed only (useful for A/B testing).
   solve_for_mount_offset: true
+  # Physical mount travel. Azimuth is relative to oven-facing (0 = aim at absorber at high el).
+  elevation_min_deg: 0.0
+  elevation_max_deg: 90.0
+  azimuth_min_deg: -150.0
+  azimuth_max_deg: 150.0

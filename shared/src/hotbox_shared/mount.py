@@ -2,9 +2,26 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 
 from .vectors import normalize
+
+
+@dataclass(frozen=True, slots=True)
+class MountJointLimits:
+    """Physical joint limits for commanded mount angles.
+
+    Azimuth limits are **relative** to oven-facing: ``0`` is the absolute mount azimuth
+    that aims the mirror toward the absorber at high elevation (see
+    :func:`oven_facing_azimuth_deg`).
+    """
+
+    elevation_min_deg: float = 0.0
+    elevation_max_deg: float = 90.0
+    azimuth_min_deg: float = -150.0
+    azimuth_max_deg: float = 150.0
 
 
 def mount_rotation_matrix(azimuth_deg: float, elevation_deg: float) -> np.ndarray:
@@ -23,13 +40,97 @@ def mount_rotation_matrix(azimuth_deg: float, elevation_deg: float) -> np.ndarra
 
 
 def normalize_mount_az_el(az_deg: float, el_deg: float) -> tuple[float, float]:
-    """Clamp mount angles to ``azimuth in [0, 360)``, ``elevation in [-90, 90]``."""
+    """Wrap azimuth to ``[0, 360)`` and clip elevation to ``[-90, 90]`` (pre-limit normalize)."""
     az = float(az_deg % 360.0)
     el = float(el_deg)
     if not np.isfinite(el) or abs(el) > 720.0:
         el = 45.0
     el = float(np.clip(el, -90.0, 90.0))
     return az, el
+
+
+def wrapped_azimuth_delta_deg(a_deg: float, b_deg: float) -> float:
+    """Signed shortest azimuth difference ``a - b`` in ``(-180, 180]``."""
+    return ((float(a_deg) - float(b_deg) + 180.0) % 360.0) - 180.0
+
+
+def dual_mount_angles(azimuth_deg: float, elevation_deg: float) -> tuple[float, float]:
+    """
+    Optically equivalent alt-az branch: ``(az, el) ↔ (az+180°, −el)``.
+
+    Both map the same body normal to the same world normal under ``R_z(az) R_x(el)``
+    (they differ by a 180° twist about the mirror normal).
+    """
+    return normalize_mount_az_el(float(azimuth_deg) + 180.0, -float(elevation_deg))
+
+
+def oven_facing_azimuth_deg(mount_world: np.ndarray, absorber_world: np.ndarray) -> float:
+    """
+    Absolute mount azimuth [deg] that aims toward the absorber at high elevation.
+
+    At ``elevation = 90°``, ``R_z(az) R_x(90)`` maps body ``+Z`` to horizontal
+    ``(sin(az), -cos(az), 0)``. That direction is aligned with the horizontal
+    ``mount → absorber`` vector.
+    """
+    d = np.asarray(absorber_world, dtype=float).reshape(3) - np.asarray(mount_world, dtype=float).reshape(3)
+    return float(np.rad2deg(np.arctan2(d[0], -d[1]))) % 360.0
+
+
+def relative_azimuth_deg(absolute_azimuth_deg: float, oven_facing_azimuth_deg: float) -> float:
+    """Mount azimuth relative to oven-facing, in ``(-180, 180]``."""
+    return wrapped_azimuth_delta_deg(absolute_azimuth_deg, oven_facing_azimuth_deg)
+
+
+def within_mount_joint_limits(
+    azimuth_deg: float,
+    elevation_deg: float,
+    *,
+    oven_facing_azimuth_deg: float,
+    limits: MountJointLimits,
+    eps_deg: float = 1e-6,
+) -> bool:
+    az, el = normalize_mount_az_el(azimuth_deg, elevation_deg)
+    if el < limits.elevation_min_deg - eps_deg or el > limits.elevation_max_deg + eps_deg:
+        return False
+    rel = relative_azimuth_deg(az, oven_facing_azimuth_deg)
+    return limits.azimuth_min_deg - eps_deg <= rel <= limits.azimuth_max_deg + eps_deg
+
+
+def apply_mount_joint_limits(
+    azimuth_deg: float,
+    elevation_deg: float,
+    *,
+    mount_world: np.ndarray,
+    absorber_world: np.ndarray,
+    limits: MountJointLimits | None = None,
+) -> tuple[float, float]:
+    """
+    Choose ``(az, el)`` or its dual so the pose lies in the joint limits when possible.
+
+    Prefer the in-limit candidate with elevation in range and smallest ``|relative az|``.
+    If neither dual is valid, clamp elevation and relative azimuth into the box.
+    """
+    lim = limits or MountJointLimits()
+    oven_az = oven_facing_azimuth_deg(mount_world, absorber_world)
+    az0, el0 = normalize_mount_az_el(azimuth_deg, elevation_deg)
+    candidates = [(az0, el0), dual_mount_angles(az0, el0)]
+    valid = [
+        c
+        for c in candidates
+        if within_mount_joint_limits(c[0], c[1], oven_facing_azimuth_deg=oven_az, limits=lim)
+    ]
+    if valid:
+        def score(c: tuple[float, float]) -> tuple[float, float]:
+            # Prefer higher elevation (reject near-horizon duals), then smaller |rel az|.
+            return (-c[1], abs(relative_azimuth_deg(c[0], oven_az)))
+
+        return min(valid, key=score)
+
+    # Neither dual fits: clamp into the box (keep absolute az near oven-facing + clamped rel).
+    el = float(np.clip(el0, lim.elevation_min_deg, lim.elevation_max_deg))
+    rel = float(np.clip(relative_azimuth_deg(az0, oven_az), lim.azimuth_min_deg, lim.azimuth_max_deg))
+    az = (oven_az + rel) % 360.0
+    return normalize_mount_az_el(az, el)
 
 
 def pivot_facet_normal_body(
@@ -58,8 +159,8 @@ def mount_az_el_align_body_normal_to_world(
     """
     Solve ``(azimuth_deg, elevation_deg)`` so ``R_mount(az, el) @ n_B ≈ n_W``.
 
-    Closed-form inverse kinematics for ``R = R_z(az) @ R_x(el)``; no grid search in the
-    typical case.
+    Closed-form inverse kinematics for ``R = R_z(az) @ R_x(el)``. Callers should pass the
+    result through :func:`apply_mount_joint_limits` to resolve the dual-branch ambiguity.
     """
     nb = normalize(body_normal)
     nw = normalize(target_normal_world)

@@ -97,6 +97,21 @@ class ControlConstants:
     # When true, aiming solves for mount_offset so the center facet reflects onto the
     # absorber (least squares after the bisector seed). Set false to skip (testing).
     solve_for_mount_offset: bool = True
+    # Physical joint limits. Azimuth is relative to oven-facing (0 = aim at absorber at high el).
+    elevation_min_deg: float = 0.0
+    elevation_max_deg: float = 90.0
+    azimuth_min_deg: float = -150.0
+    azimuth_max_deg: float = 150.0
+
+    def mount_joint_limits(self) -> "MountJointLimits":
+        from .mount import MountJointLimits
+
+        return MountJointLimits(
+            elevation_min_deg=self.elevation_min_deg,
+            elevation_max_deg=self.elevation_max_deg,
+            azimuth_min_deg=self.azimuth_min_deg,
+            azimuth_max_deg=self.azimuth_max_deg,
+        )
 
 
 @dataclass(slots=True, frozen=True)

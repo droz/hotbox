@@ -219,7 +219,9 @@ def test_solve_tracking_below_horizon_returns_horizontal_stow() -> None:
 
 def test_horizontal_stow_angles_aligns_pivot_to_zenith() -> None:
     pivot = np.array([0.0, 0.0, 1.0], dtype=float)
-    angles = horizontal_stow_angles(pivot)
+    mount = np.array([0.0, 2.5, 1.0], dtype=float)
+    target = np.array([0.0, 0.0, 1.0], dtype=float)
+    angles = horizontal_stow_angles(pivot, mount_world=mount, target_world=target)
     assert angles.night_stow is True
     got = normalize(mount_rotation_matrix(angles.azimuth_deg, angles.elevation_deg) @ pivot)
     np.testing.assert_allclose(got, np.array([0.0, 0.0, 1.0]), atol=1e-12)
@@ -232,3 +234,85 @@ def test_sun_elevation_from_incoming() -> None:
     down = normalize(np.array([0.0, -0.5, 0.5], dtype=float))
     assert sun_elevation_deg(down) < 0.0
     assert not sun_is_above_horizon(down)
+
+
+def test_apply_mount_joint_limits_prefers_in_range_dual() -> None:
+    from hotbox_shared import (
+        MountJointLimits,
+        apply_mount_joint_limits,
+        dual_mount_angles,
+        oven_facing_azimuth_deg,
+        relative_azimuth_deg,
+        within_mount_joint_limits,
+    )
+
+    mount = np.array([0.0, 2.5, 1.0], dtype=float)
+    absorber = np.array([0.0, 0.0, 1.0], dtype=float)
+    limits = MountJointLimits()
+    oven_az = oven_facing_azimuth_deg(mount, absorber)
+    # Primary has negative elevation (outside 0..90); dual should be chosen.
+    az, el = 30.0, -40.0
+    dual_az, dual_el = dual_mount_angles(az, el)
+    assert dual_el > 0.0
+    got_az, got_el = apply_mount_joint_limits(
+        az, el, mount_world=mount, absorber_world=absorber, limits=limits
+    )
+    assert within_mount_joint_limits(
+        got_az, got_el, oven_facing_azimuth_deg=oven_az, limits=limits
+    )
+    assert abs(got_el - dual_el) < 1e-9
+    assert abs(relative_azimuth_deg(got_az, oven_az)) <= limits.azimuth_max_deg + 1e-6
+
+
+def test_solve_tracking_respects_joint_limits() -> None:
+    """Sequential sun steps stay inside el∈[0,90] and |rel az|≤150 without continuity memory."""
+    from hotbox_shared import (
+        MountJointLimits,
+        oven_facing_azimuth_deg,
+        relative_azimuth_deg,
+        within_mount_joint_limits,
+    )
+
+    mount = np.array([0.0, 2.5, 1.0], dtype=float)
+    target = np.array([0.0, 0.0, 1.0], dtype=float)
+    pivot = pivot_facet_normal_body(grid_nx=3, grid_ny=5, pitch_m=0.26035, radius_of_curvature_m=5.5)
+    limits = MountJointLimits()
+    oven_az = oven_facing_azimuth_deg(mount, target)
+    elev = 45.0
+    prev: tuple[float, float] | None = None
+    for az_sun in np.linspace(160.0, 200.0, 21):
+        el = np.deg2rad(elev)
+        az = np.deg2rad(float(az_sun))
+        toward_sun = np.array([np.cos(el) * np.sin(az), np.cos(el) * np.cos(az), np.sin(el)], dtype=float)
+        incoming = -toward_sun
+        angles = solve_tracking(
+            sun_direction_toward_scene=incoming,
+            mount_world=mount,
+            target_world=target,
+            pivot_facet_normal_body=pivot,
+            mount_offset_d_m=0.1,
+            solve_for_mount_offset=True,
+            joint_limits=limits,
+        )
+        assert within_mount_joint_limits(
+            angles.azimuth_deg,
+            angles.elevation_deg,
+            oven_facing_azimuth_deg=oven_az,
+            limits=limits,
+        )
+        assert 0.0 <= angles.elevation_deg <= 90.0
+        assert abs(relative_azimuth_deg(angles.azimuth_deg, oven_az)) <= 150.0 + 1e-6
+        if prev is not None:
+            daz = abs(((angles.azimuth_deg - prev[0] + 180.0) % 360.0) - 180.0)
+            # Limits (not continuity memory) prevent ~180° dual flips.
+            assert daz < 90.0, f"az jumped {daz}° from {prev} to {(angles.azimuth_deg, angles.elevation_deg)}"
+        prev = (angles.azimuth_deg, angles.elevation_deg)
+
+
+def test_system_yaml_loads_joint_limits() -> None:
+    system = load_system_constants()
+    lim = system.control.mount_joint_limits()
+    assert lim.elevation_min_deg == 0.0
+    assert lim.elevation_max_deg == 90.0
+    assert lim.azimuth_min_deg == -150.0
+    assert lim.azimuth_max_deg == 150.0

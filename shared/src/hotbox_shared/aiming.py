@@ -14,6 +14,8 @@ Algorithm
    Controlled by ``control.solve_for_mount_offset`` in ``config/system.yaml``.
 3. **Night stow**: if the sun is at or below the horizon, skip the solve and return
    :func:`horizontal_stow_angles` (pivot facet normal → world +Z, mirror face horizontal).
+4. **Joint limits**: every command is mapped into physical mount limits relative to the
+   oven-facing azimuth (see :class:`~hotbox_shared.mount.MountJointLimits`).
 
 Frames (right-handed, meters):
 
@@ -30,6 +32,8 @@ import numpy as np
 from scipy.optimize import least_squares
 
 from .mount import (
+    MountJointLimits,
+    apply_mount_joint_limits,
     heading_and_tilt_from_normal,
     mount_az_el_align_body_normal_to_world,
     mount_rotation_matrix,
@@ -92,17 +96,50 @@ def sun_is_above_horizon(sun_direction_toward_scene: np.ndarray) -> bool:
     return sun_elevation_deg(sun_direction_toward_scene) > 0.0
 
 
-def horizontal_stow_angles(pivot_facet_normal_body: np.ndarray) -> MountAngles:
+def _limited_angles(
+    azimuth_deg: float,
+    elevation_deg: float,
+    *,
+    mount_world: np.ndarray,
+    target_world: np.ndarray,
+    joint_limits: MountJointLimits | None,
+    night_stow: bool = False,
+) -> MountAngles:
+    az, el = apply_mount_joint_limits(
+        azimuth_deg,
+        elevation_deg,
+        mount_world=mount_world,
+        absorber_world=target_world,
+        limits=joint_limits,
+    )
+    return MountAngles(azimuth_deg=az, elevation_deg=el, night_stow=night_stow)
+
+
+def horizontal_stow_angles(
+    pivot_facet_normal_body: np.ndarray,
+    *,
+    mount_world: np.ndarray,
+    target_world: np.ndarray,
+    joint_limits: MountJointLimits | None = None,
+) -> MountAngles:
     """
     Night / wind stow: aim the pivot facet normal at world +Z (mirror face horizontal).
 
-    Minimizes projected area for wind loading when the sun is down.
+    Minimizes projected area for wind loading when the sun is down. Dual-branch choice
+    and clipping use :func:`apply_mount_joint_limits`.
     """
     az, el = mount_az_el_align_body_normal_to_world(
         pivot_facet_normal_body,
         np.array([0.0, 0.0, 1.0], dtype=float),
     )
-    return MountAngles(azimuth_deg=az, elevation_deg=el, night_stow=True)
+    return _limited_angles(
+        az,
+        el,
+        mount_world=mount_world,
+        target_world=target_world,
+        joint_limits=joint_limits,
+        night_stow=True,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,6 +250,7 @@ def solve_bisector_tracking(
     mount_world: np.ndarray,
     target_world: np.ndarray,
     pivot_facet_normal_body: np.ndarray,
+    joint_limits: MountJointLimits | None = None,
 ) -> MountAngles:
     """
     Closed-form bisector seed: flat heliostat at the **pivot** (ignores mount offset).
@@ -222,7 +260,13 @@ def solve_bisector_tracking(
     n_bisector = bisector_normal_at_mount(sun_direction_toward_scene, mount_world, target_world)
     pivot = normalize(pivot_facet_normal_body)
     azimuth_deg, elevation_deg = mount_az_el_align_body_normal_to_world(pivot, n_bisector)
-    return MountAngles(azimuth_deg=azimuth_deg, elevation_deg=elevation_deg)
+    return _limited_angles(
+        azimuth_deg,
+        elevation_deg,
+        mount_world=mount_world,
+        target_world=target_world,
+        joint_limits=joint_limits,
+    )
 
 
 def refine_tracking_for_mount_offset(
@@ -233,12 +277,13 @@ def refine_tracking_for_mount_offset(
     pivot_facet_normal_body: np.ndarray,
     mount_offset_d_m: float,
     initial: MountAngles,
+    joint_limits: MountJointLimits | None = None,
 ) -> MountAngles:
     """
     Nudge ``initial`` mount angles so the center-facet reflected ray aims at ``target_world``.
 
     Uses ``scipy.optimize.least_squares`` on the 3D ray–target miss vector from
-    :meth:`CenterRay.miss_vector_to_point`.
+    :meth:`CenterRay.miss_vector_to_point`. Joint limits are applied after the optimizer.
     """
     if abs(float(mount_offset_d_m)) < 1e-12:
         return initial
@@ -267,7 +312,13 @@ def refine_tracking_for_mount_offset(
         method="lm",
     )
     az, el = normalize_mount_az_el(float(result.x[0]), float(result.x[1]))
-    return MountAngles(azimuth_deg=az, elevation_deg=el)
+    return _limited_angles(
+        az,
+        el,
+        mount_world=mount_world,
+        target_world=target_world,
+        joint_limits=joint_limits,
+    )
 
 
 def solve_tracking(
@@ -278,6 +329,7 @@ def solve_tracking(
     pivot_facet_normal_body: np.ndarray,
     mount_offset_d_m: float = 0.0,
     solve_for_mount_offset: bool = True,
+    joint_limits: MountJointLimits | None = None,
 ) -> MountAngles:
     """
     Compute mount angles that aim the center-facet reflected ray at ``target_world``.
@@ -294,20 +346,27 @@ def solve_tracking(
         pivot_facet_normal_body: Unit normal of the center facet in mount body frame at (0, 0).
         mount_offset_d_m: Pivot-to-facet offset along +Z body [m].
         solve_for_mount_offset: If true (and offset ≠ 0), refine the bisector seed with least squares.
+        joint_limits: Physical travel limits. ``None`` uses default :class:`MountJointLimits`.
 
     Returns:
-        ``MountAngles`` with azimuth in ``[0, 360)`` and elevation in ``[-90, 90]``.
+        ``MountAngles`` with azimuth/elevation inside the joint limits.
         ``night_stow`` is True when the sun is down.
     """
     pivot = normalize(pivot_facet_normal_body)
     if not sun_is_above_horizon(sun_direction_toward_scene):
-        return horizontal_stow_angles(pivot)
+        return horizontal_stow_angles(
+            pivot,
+            mount_world=mount_world,
+            target_world=target_world,
+            joint_limits=joint_limits,
+        )
 
     seed = solve_bisector_tracking(
         sun_direction_toward_scene=sun_direction_toward_scene,
         mount_world=mount_world,
         target_world=target_world,
         pivot_facet_normal_body=pivot,
+        joint_limits=joint_limits,
     )
     if not solve_for_mount_offset:
         return seed
@@ -318,6 +377,7 @@ def solve_tracking(
         pivot_facet_normal_body=pivot,
         mount_offset_d_m=mount_offset_d_m,
         initial=seed,
+        joint_limits=joint_limits,
     )
 
 
@@ -328,6 +388,7 @@ def solve_tracking_for_grid(
     target_world: np.ndarray,
     grid: MirrorGridSpec,
     solve_for_mount_offset: bool = True,
+    joint_limits: MountJointLimits | None = None,
 ) -> MountAngles:
     """Convenience wrapper that derives the pivot facet normal and offset from ``grid``."""
     return solve_tracking(
@@ -337,6 +398,7 @@ def solve_tracking_for_grid(
         pivot_facet_normal_body=grid.pivot_normal_body(),
         mount_offset_d_m=grid.mount_offset_d_m,
         solve_for_mount_offset=solve_for_mount_offset,
+        joint_limits=joint_limits,
     )
 
 
@@ -346,6 +408,7 @@ def solve_bisector_tracking_for_grid(
     mount_world: np.ndarray,
     target_world: np.ndarray,
     grid: MirrorGridSpec,
+    joint_limits: MountJointLimits | None = None,
 ) -> MountAngles:
     """Bisector-only convenience wrapper (no mount-offset refine)."""
     return solve_bisector_tracking(
@@ -353,4 +416,5 @@ def solve_bisector_tracking_for_grid(
         mount_world=mount_world,
         target_world=target_world,
         pivot_facet_normal_body=grid.pivot_normal_body(),
+        joint_limits=joint_limits,
     )

@@ -80,11 +80,13 @@ class ControllerApplication:
     def set_true_geometry(self, geometry: dict[str, Any] | None) -> None:
         self._true_geometry = geometry
 
-    def _tracking_kwargs(self) -> dict[str, float | int | bool]:
+    def _tracking_kwargs(self) -> dict[str, float | int | bool | object]:
         mirror = self.config.mirror
         solve_for_mount_offset = True
+        joint_limits = None
         if self.config.system is not None:
             solve_for_mount_offset = bool(self.config.system.control.solve_for_mount_offset)
+            joint_limits = self.config.system.control.mount_joint_limits()
         return {
             "grid_nx": mirror.grid_nx,
             "grid_ny": mirror.grid_ny,
@@ -92,6 +94,7 @@ class ControllerApplication:
             "radius_of_curvature_m": mirror.radius_of_curvature_m,
             "mount_offset_d_m": mirror.mount_offset_d_m,
             "solve_for_mount_offset": solve_for_mount_offset,
+            "joint_limits": joint_limits,
         }
 
     def _tracking_targets(

@@ -130,6 +130,7 @@ def simulate_delivered_power_over_times(
     sim_verbose: bool = False,
     bypass_mirror_occlusion: bool = False,
     solve_for_mount_offset: bool = True,
+    joint_limits=None,
 ) -> tuple[list[datetime], list[float], list[float], list[list[tuple[float, float]]]]:
     """For each time: total delivered power, total power hitting mirrors, orientations [deg]."""
     delivered_w: list[float] = []
@@ -160,6 +161,7 @@ def simulate_delivered_power_over_times(
             mirrors=sim.mirrors,
             absorber=sim.absorber,
             solve_for_mount_offset=solve_for_mount_offset,
+            joint_limits=joint_limits,
         )
         t_after_mount = time.perf_counter()
         result = sim.run(when, verbose=sim_verbose, bypass_mirror_occlusion=bypass_mirror_occlusion)
@@ -280,6 +282,7 @@ def main() -> None:
         system = load_system_constants()
         site = SitePose.from_constants(system.default_site)
         solve_for_mount_offset = bool(system.control.solve_for_mount_offset)
+        joint_limits = system.control.mount_joint_limits()
         print(
             f"[hotbox] site lat={site.latitude_deg}, lon={site.longitude_deg}, "
             f"alt={site.altitude_m} m; tz={site.timezone_id}; "
@@ -320,6 +323,7 @@ def main() -> None:
             mirrors=sim.mirrors,
             absorber=sim.absorber,
             solve_for_mount_offset=solve_for_mount_offset,
+            joint_limits=joint_limits,
         )
 
     with timed_step("Raytrace snapshot (scene time)"):
@@ -381,6 +385,7 @@ def main() -> None:
                 mirrors=sim.mirrors,
                 absorber=sim.absorber,
                 solve_for_mount_offset=solve_for_mount_offset,
+                joint_limits=joint_limits,
             )
             r_spot = sim.run(
                 t_spot,
@@ -439,6 +444,7 @@ def main() -> None:
                 sim_verbose=SHOW_MIRROR_TIMING,
                 bypass_mirror_occlusion=bypass_occ,
                 solve_for_mount_offset=solve_for_mount_offset,
+                joint_limits=joint_limits,
             )
             day_series.append((label, day_times, day_delivered, day_intercepted, day_orients))
             if len(day_specs) == 1:
