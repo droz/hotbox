@@ -368,7 +368,10 @@
         });
       }
 
+      let refreshInFlight = false;
       async function refreshState() {
+        if (refreshInFlight) return;
+        refreshInFlight = true;
         try {
           const response = await fetch("/api/state");
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -386,10 +389,13 @@
           if (typeof window.hotboxOnState === "function") window.hotboxOnState(state);
         } catch (err) {
           document.getElementById("state").textContent = `Failed to load /api/state: ${err}`;
+        } finally {
+          refreshInFlight = false;
         }
       }
 
-      setInterval(refreshState, 1000);
+      // 20 Hz UI poll (SITL control loop is also ~20 Hz). Skip ticks while a fetch is in flight.
+      setInterval(refreshState, 50);
       refreshState();
     </script>
 
