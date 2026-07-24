@@ -12,6 +12,8 @@ Algorithm
    :func:`evaluate_center_ray` as the forward model and ``scipy.optimize.least_squares``
    to nudge ``(az, el)`` so the **center-facet** reflected ray aims at the target.
    Controlled by ``control.solve_for_mount_offset`` in ``config/system.yaml``.
+3. **Night stow**: if the sun is at or below the horizon, skip the solve and return
+   :func:`horizontal_stow_angles` (pivot facet normal → world +Z, mirror face horizontal).
 
 Frames (right-handed, meters):
 
@@ -62,6 +64,8 @@ class MountAngles:
 
     azimuth_deg: float
     elevation_deg: float
+    night_stow: bool = False
+    """True when the sun is below the horizon and angles are the horizontal stow pose."""
 
     def pivot_normal_world(self, pivot_normal_body: np.ndarray) -> np.ndarray:
         """Pivot facet reflective normal in world frame at these mount angles."""
@@ -70,6 +74,35 @@ class MountAngles:
     def display_heading_and_tilt(self, pivot_normal_body: np.ndarray) -> tuple[float, float]:
         """Physical azimuth [deg] and tilt from horizontal [deg] of the pivot facet normal."""
         return heading_and_tilt_from_normal(self.pivot_normal_world(pivot_normal_body))
+
+
+def sun_elevation_deg(sun_direction_toward_scene: np.ndarray) -> float:
+    """
+    Geometric sun elevation [deg] from an incoming unit ray (sun → plant).
+
+    Positive = above the horizon. Uses ``arcsin((-incoming)_z)`` in the ENU world frame.
+    """
+    incoming = normalize(sun_direction_toward_scene)
+    toward_sun_z = float(-incoming[2])
+    return float(np.rad2deg(np.arcsin(np.clip(toward_sun_z, -1.0, 1.0))))
+
+
+def sun_is_above_horizon(sun_direction_toward_scene: np.ndarray) -> bool:
+    """True iff the geometric sun elevation is strictly above the horizon."""
+    return sun_elevation_deg(sun_direction_toward_scene) > 0.0
+
+
+def horizontal_stow_angles(pivot_facet_normal_body: np.ndarray) -> MountAngles:
+    """
+    Night / wind stow: aim the pivot facet normal at world +Z (mirror face horizontal).
+
+    Minimizes projected area for wind loading when the sun is down.
+    """
+    az, el = mount_az_el_align_body_normal_to_world(
+        pivot_facet_normal_body,
+        np.array([0.0, 0.0, 1.0], dtype=float),
+    )
+    return MountAngles(azimuth_deg=az, elevation_deg=el, night_stow=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -251,6 +284,9 @@ def solve_tracking(
 
     This is the primary API used by both the controller and raytrace simulation.
 
+    When the sun is at or below the horizon, returns :func:`horizontal_stow_angles`
+    (pivot facet normal → world +Z) instead of attempting a reflection solve.
+
     Args:
         sun_direction_toward_scene: Unit vector from the sun toward the plant.
         mount_world: Mount pivot position in world coordinates [m].
@@ -261,12 +297,17 @@ def solve_tracking(
 
     Returns:
         ``MountAngles`` with azimuth in ``[0, 360)`` and elevation in ``[-90, 90]``.
+        ``night_stow`` is True when the sun is down.
     """
+    pivot = normalize(pivot_facet_normal_body)
+    if not sun_is_above_horizon(sun_direction_toward_scene):
+        return horizontal_stow_angles(pivot)
+
     seed = solve_bisector_tracking(
         sun_direction_toward_scene=sun_direction_toward_scene,
         mount_world=mount_world,
         target_world=target_world,
-        pivot_facet_normal_body=pivot_facet_normal_body,
+        pivot_facet_normal_body=pivot,
     )
     if not solve_for_mount_offset:
         return seed
@@ -274,7 +315,7 @@ def solve_tracking(
         sun_direction_toward_scene=sun_direction_toward_scene,
         mount_world=mount_world,
         target_world=target_world,
-        pivot_facet_normal_body=pivot_facet_normal_body,
+        pivot_facet_normal_body=pivot,
         mount_offset_d_m=mount_offset_d_m,
         initial=seed,
     )

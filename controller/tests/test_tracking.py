@@ -29,6 +29,24 @@ def test_track_absorber_aligns_pivot_facet_normal_to_bisector() -> None:
     bisector = mirror_normal_for_reflection(incoming, outgoing)
     got = normalize(mount_rotation_matrix(target.azimuth_deg, target.elevation_deg) @ pivot)
     np.testing.assert_allclose(got, bisector, atol=1e-6)
+    assert target.mode == "tracking"
+
+
+def test_track_absorber_below_horizon_parks_horizontal() -> None:
+    sun = SunVector(
+        azimuth_deg=180.0,
+        elevation_deg=-20.0,
+        world_vector=normalize(
+            np.array([0.0, -np.cos(np.deg2rad(20.0)), -np.sin(np.deg2rad(20.0))], dtype=float)
+        ),
+    )
+    # world_vector points toward sun; below horizon ⇒ negative Z
+    assert sun.world_vector[2] < 0.0
+    target = track_absorber(sun, np.array([0.0, 2.5, 1.0]), np.array([0.0, 0.0, 1.0]))
+    assert target.mode == "parked"
+    pivot = pivot_facet_normal_body(grid_nx=3, grid_ny=5, pitch_m=0.26035, radius_of_curvature_m=5.5)
+    got = normalize(mount_rotation_matrix(target.azimuth_deg, target.elevation_deg) @ pivot)
+    np.testing.assert_allclose(got, np.array([0.0, 0.0, 1.0]), atol=1e-6)
 
 
 def test_build_mirror_scene_entry_incoming_ray_points_toward_facet() -> None:
@@ -56,5 +74,7 @@ def test_build_mirror_scene_entry_incoming_ray_points_toward_facet() -> None:
 
     normal = np.asarray(mirror["normal"], dtype=float)
     reflected = reflect_ray(sun_toward_scene, normal)
-    reflected_seg = normalize(np.asarray(mirror["reflected"]["end"], dtype=float) - np.asarray(mirror["reflected"]["start"], dtype=float))
+    reflected_seg = normalize(
+        np.asarray(mirror["reflected"]["end"], dtype=float) - np.asarray(mirror["reflected"]["start"], dtype=float)
+    )
     np.testing.assert_allclose(reflected_seg, reflected, atol=1e-6)

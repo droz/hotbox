@@ -9,6 +9,7 @@ from hotbox_shared import (
     bisector_normal,
     bisector_normal_at_mount,
     evaluate_center_ray,
+    horizontal_stow_angles,
     load_system_constants,
     mount_rotation_matrix,
     normalize,
@@ -17,6 +18,8 @@ from hotbox_shared import (
     solve_bisector_tracking_for_grid,
     solve_tracking,
     solve_tracking_for_grid,
+    sun_elevation_deg,
+    sun_is_above_horizon,
 )
 
 
@@ -191,3 +194,41 @@ def test_solve_tracking_for_grid_respects_refine_flag() -> None:
 def test_system_yaml_loads_solve_for_mount_offset() -> None:
     system = load_system_constants()
     assert system.control.solve_for_mount_offset is True
+
+
+def test_solve_tracking_below_horizon_returns_horizontal_stow() -> None:
+    # Sun below horizon: world vector toward sun has negative Z → incoming has positive Z.
+    sun_toward_scene = normalize(np.array([0.2, -0.3, 0.9], dtype=float))
+    assert not sun_is_above_horizon(sun_toward_scene)
+    mount = np.array([0.0, 2.5, 1.0], dtype=float)
+    target = np.array([0.0, 0.0, 1.0], dtype=float)
+    pivot = pivot_facet_normal_body(grid_nx=3, grid_ny=5, pitch_m=0.26035, radius_of_curvature_m=5.5)
+
+    angles = solve_tracking(
+        sun_direction_toward_scene=sun_toward_scene,
+        mount_world=mount,
+        target_world=target,
+        pivot_facet_normal_body=pivot,
+        mount_offset_d_m=0.1,
+        solve_for_mount_offset=True,
+    )
+    assert angles.night_stow is True
+    got = normalize(mount_rotation_matrix(angles.azimuth_deg, angles.elevation_deg) @ pivot)
+    np.testing.assert_allclose(got, np.array([0.0, 0.0, 1.0]), atol=1e-6)
+
+
+def test_horizontal_stow_angles_aligns_pivot_to_zenith() -> None:
+    pivot = np.array([0.0, 0.0, 1.0], dtype=float)
+    angles = horizontal_stow_angles(pivot)
+    assert angles.night_stow is True
+    got = normalize(mount_rotation_matrix(angles.azimuth_deg, angles.elevation_deg) @ pivot)
+    np.testing.assert_allclose(got, np.array([0.0, 0.0, 1.0]), atol=1e-12)
+
+
+def test_sun_elevation_from_incoming() -> None:
+    up = normalize(np.array([0.0, -np.sqrt(0.5), -np.sqrt(0.5)], dtype=float))
+    assert abs(sun_elevation_deg(up) - 45.0) < 1e-9
+    assert sun_is_above_horizon(up)
+    down = normalize(np.array([0.0, -0.5, 0.5], dtype=float))
+    assert sun_elevation_deg(down) < 0.0
+    assert not sun_is_above_horizon(down)

@@ -43,7 +43,8 @@ def track_absorber(
         grid=grid,
         solve_for_mount_offset=solve_for_mount_offset,
     )
-    return TrackingTarget(azimuth_deg=angles.azimuth_deg, elevation_deg=angles.elevation_deg, mode="tracking")
+    mode = "parked" if angles.night_stow else "tracking"
+    return TrackingTarget(azimuth_deg=angles.azimuth_deg, elevation_deg=angles.elevation_deg, mode=mode)
 
 
 def safe_park(config: OvenConfig) -> TrackingTarget:

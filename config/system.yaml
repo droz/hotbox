@@ -7,13 +7,13 @@ default_site:
   latitude_deg: 45.5885
   longitude_deg: 5.0904
   altitude_m: 380.0
-#  timezone_id: Europe/Paris
+  timezone_id: Europe/Paris
 #  # Berkeley, California
 #  latitude_deg: 37.8716
 #  longitude_deg: -122.2585
 #  altitude_m: 186.0
-  timezone_id: America/Los_Angeles
-  # Gerlach, Nevada
+#  timezone_id: America/Los_Angeles
+#  # Gerlach, Nevada
 #  latitude_deg: 40.6518
 #  longitude_deg: -119.3562
 #  altitude_m: 1200.0

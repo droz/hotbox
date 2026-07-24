@@ -6,12 +6,15 @@ from .aiming import (
     MountAngles,
     bisector_normal_at_mount,
     evaluate_center_ray,
+    horizontal_stow_angles,
     pivot_facet_center_world,
     refine_tracking_for_mount_offset,
     solve_bisector_tracking,
     solve_bisector_tracking_for_grid,
     solve_tracking,
     solve_tracking_for_grid,
+    sun_elevation_deg,
+    sun_is_above_horizon,
 )
 from .load import default_system_yaml_path, load_system_constants
 from .mount import (
@@ -65,6 +68,7 @@ __all__ = [
     "facet_normal_world",
     "format_site_local",
     "heading_and_tilt_from_normal",
+    "horizontal_stow_angles",
     "hours_since_site_midnight",
     "load_system_constants",
     "local_times_sunrise_to_sunset",
@@ -82,5 +86,7 @@ __all__ = [
     "solve_bisector_tracking_for_grid",
     "solve_tracking",
     "solve_tracking_for_grid",
+    "sun_elevation_deg",
+    "sun_is_above_horizon",
     "utc_now",
 ]
