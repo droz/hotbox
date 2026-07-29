@@ -16,6 +16,7 @@ from hotbox_controller.protocol import CommandName, MirrorCommand
 from hotbox_controller.sun import SunService
 from hotbox_controller.transport import SimTransport
 
+from .firmware_axis import FirmwareMirrorNode
 from .mirror_node import SimulatedMirrorNode
 
 
@@ -61,8 +62,22 @@ class SitlHarness:
         port: int = 8000,
         dt_s: float = 0.05,
         system: SystemConstants | None = None,
+        firmware_cil_node_id: int | None = None,
     ) -> None:
+        """Create the SITL harness.
+
+        Parameters
+        ----------
+        firmware_cil_node_id:
+            If set, that node is simulated using the native firmware CIL shared
+            library (real C++ control code) instead of the pure-Python
+            ``SimulatedMirrorNode``.  All other nodes use the Python model.
+            Requires the library to have been built first::
+
+                cd firmware/native && make
+        """
         self.system = system or load_system_constants()
+        self.firmware_cil_node_id = firmware_cil_node_id
         if node_ids is None:
             node_ids = tuple(mount.node_id for mount in self.system.fleet.mounts)
         self.host = host
@@ -72,10 +87,12 @@ class SitlHarness:
         self._thread: threading.Thread | None = None
         self._lock = threading.RLock()
         self._latest: dict[str, Any] = {}
-        self.nodes = {
-            node_id: SimulatedMirrorNode.from_constants(node_id, self.system.actuator)
-            for node_id in node_ids
-        }
+        self.nodes: dict[int, SimulatedMirrorNode | FirmwareMirrorNode] = {}
+        for node_id in node_ids:
+            if node_id == firmware_cil_node_id:
+                self.nodes[node_id] = FirmwareMirrorNode.from_constants(node_id, self.system.actuator)
+            else:
+                self.nodes[node_id] = SimulatedMirrorNode.from_constants(node_id, self.system.actuator)
         self.true_layouts = {
             node_id: layout
             for node_id, layout in _layouts_from_system(self.system).items()
@@ -158,6 +175,10 @@ class SitlHarness:
         print("Hot-Box sim-in-the-loop running")
         print(f"Open the UI at http://{self.host}:{self.port}/")
         print(f"Plant constants from config/system.yaml ({self.system.fleet.assembly_count} mirrors)")
+        if self.firmware_cil_node_id is None:
+            print("Control path: pure-Python simulator on all nodes")
+        else:
+            print(f"Control path: compiled firmware CIL on node {self.firmware_cil_node_id}, Python simulator on others")
         print("Target geometry (blue) and true simulator geometry (yellow) are overlaid.")
         print("Use Home / Park / Auto / Jog in the UI to interact with the simulated mirrors.")
         try:

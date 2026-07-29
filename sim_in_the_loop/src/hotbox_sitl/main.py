@@ -16,9 +16,25 @@ def main() -> None:
         default=None,
         help="If set, run a headless batch for this many seconds instead of the live UI",
     )
+    parser.add_argument(
+        "--firmware-cil-node",
+        type=int,
+        default=None,
+        metavar="NODE_ID",
+        help=(
+            "Run this node_id using the native firmware CIL shared library "
+            "(real C++ PID) instead of the Python plant model. "
+            "Build with: cd firmware/native && make"
+        ),
+    )
     args = parser.parse_args()
 
-    harness = SitlHarness(host=args.host, port=args.port, dt_s=args.dt)
+    harness = SitlHarness(
+        host=args.host,
+        port=args.port,
+        dt_s=args.dt,
+        firmware_cil_node_id=args.firmware_cil_node,
+    )
     if args.batch_seconds is not None:
         harness.run(seconds=args.batch_seconds, dt_s=args.dt)
         return
