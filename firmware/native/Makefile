@@ -8,7 +8,7 @@
 # OR in firmware/.pio/build/native_cil/ (PlatformIO output).
 
 CXX      ?= g++
-CXXFLAGS  = -std=c++17 -O0 -fPIC -g \
+CXXFLAGS  = -std=c++17 -O3 -DNDEBUG -fPIC \
             -I include \
             -I ../include \
             -D HOTBOX_NODE_ID=0 \

@@ -1,7 +1,6 @@
 #include "axis.h"
 
 #include <ESP32Encoder.h>
-#include <PID_v1.h>
 #include <cstring>
 
 namespace hotbox {
@@ -10,20 +9,17 @@ namespace {
 ESP32Encoder g_az_encoder;
 ESP32Encoder g_el_encoder;
 
-double g_az_input = 0.0;
-double g_az_output = 0.0;
-double g_az_setpoint = 0.0;
-PID g_az_pid(&g_az_input, &g_az_output, &g_az_setpoint, kPidKp, kPidKi, kPidKd, DIRECT);
-
-double g_el_input = 0.0;
-double g_el_output = 0.0;
-double g_el_setpoint = 0.0;
-PID g_el_pid(&g_el_input, &g_el_output, &g_el_setpoint, kPidKp, kPidKi, kPidKd, DIRECT);
-
 float clampf(float value, float min_value, float max_value) {
   if (value < min_value) return min_value;
   if (value > max_value) return max_value;
   return value;
+}
+
+float wrapped_error_deg(float target_deg, float position_deg) {
+  float error = target_deg - position_deg;
+  while (error > 180.0f) error -= 360.0f;
+  while (error <= -180.0f) error += 360.0f;
+  return error;
 }
 
 }  // namespace
@@ -126,7 +122,7 @@ void BrushedAxis::update(float dt_s) {
       return;
     }
     command_velocity_deg_s_ = kHomingVelocityDegS;
-    driveMotor(0.2f);
+    driveMotor(0.15f);
     return;
   }
 
@@ -142,20 +138,13 @@ void BrushedAxis::update(float dt_s) {
   }
 
   if (mode_ == AxisMode::Tracking) {
-    double pid_output = 0.0;
+    float error_deg = target_deg_ - position_deg_;
     if (enc_a_ == kHorizEncA) {
-      g_az_setpoint = target_deg_;
-      g_az_input = position_deg_;
-      g_az_pid.Compute();
-      pid_output = g_az_output;
-    } else {
-      g_el_setpoint = target_deg_;
-      g_el_input = position_deg_;
-      g_el_pid.Compute();
-      pid_output = g_el_output;
+      error_deg = wrapped_error_deg(target_deg_, position_deg_);
     }
-    driveMotor(static_cast<float>(pid_output) / 255.0f);
-    command_velocity_deg_s_ = static_cast<float>(pid_output) / 255.0f * kMaxVelocityDegS;
+    const float pwm_command = clampf(error_deg / 10.0f, -1.0f, 1.0f);
+    driveMotor(pwm_command);
+    command_velocity_deg_s_ = pwm_command * kMaxVelocityDegS;
     if (fabs(command_velocity_deg_s_) > 1.0f && fabs(velocity_deg_s_) < kStallVelocityThreshDegS) {
       stall_timer_s_ += dt_s;
     } else {
@@ -177,10 +166,6 @@ MirrorMount::MirrorMount()
 void MirrorMount::begin() {
   azimuth_.begin();
   elevation_.begin();
-  g_az_pid.SetMode(AUTOMATIC);
-  g_az_pid.SetOutputLimits(-255.0, 255.0);
-  g_el_pid.SetMode(AUTOMATIC);
-  g_el_pid.SetOutputLimits(-255.0, 255.0);
 }
 
 void MirrorMount::home() {

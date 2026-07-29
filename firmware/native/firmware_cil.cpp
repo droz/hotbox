@@ -93,6 +93,31 @@ void hotbox_cil_update(float dt_s) {
     g_mount.update(dt_s);
 }
 
+// Batched fast path for the Python harness: inject encoder/hall, advance one
+// firmware tick, and return the signed PWM duty for both axes. This avoids the
+// per-step ctypes overhead of six separate calls.
+void hotbox_cil_step(
+    long az_ticks,
+    long el_ticks,
+    int az_hall,
+    int el_hall,
+    float dt_s,
+    float* pwm_az,
+    float* pwm_el
+) {
+    g_encoder_counts[0] = az_ticks;
+    g_encoder_counts[1] = el_ticks;
+    g_hal_digital_in[hotbox::kHorizHall] = az_hall ? 1 : 0;
+    g_hal_digital_in[hotbox::kVertHall] = el_hall ? 1 : 0;
+    g_mount.update(dt_s);
+    if (pwm_az != nullptr) {
+        *pwm_az = _read_signed_pwm(hotbox::kHorizMotorP, hotbox::kHorizMotorM);
+    }
+    if (pwm_el != nullptr) {
+        *pwm_el = _read_signed_pwm(hotbox::kVertMotorP, hotbox::kVertMotorM);
+    }
+}
+
 // ── Read outputs ──────────────────────────────────────────────────────────────
 
 // PWM fraction [-1.0, 1.0] last written by driveMotor() for each axis.

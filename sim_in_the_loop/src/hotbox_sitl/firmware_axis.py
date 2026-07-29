@@ -9,7 +9,7 @@ interfaces:
 
 Building the library
 --------------------
-    cd firmware && pio run -e native_cil
+    cd firmware/native && make
 
 The output lands in ``firmware/.pio/build/native_cil/``.  This module searches
 for it automatically; override with the ``HOTBOX_CIL_LIB`` environment variable.
@@ -21,6 +21,7 @@ so callers can gracefully fall back to the pure-Python SITL.
 from __future__ import annotations
 
 import ctypes
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -134,6 +135,17 @@ def load_cil_library(path: Path | str | None = None) -> ctypes.CDLL:
     lib.hotbox_cil_update.argtypes = [ctypes.c_float]
     lib.hotbox_cil_update.restype = None
 
+    lib.hotbox_cil_step.argtypes = [
+        ctypes.c_long,
+        ctypes.c_long,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_float,
+        ctypes.POINTER(ctypes.c_float),
+        ctypes.POINTER(ctypes.c_float),
+    ]
+    lib.hotbox_cil_step.restype = None
+
     lib.hotbox_cil_pwm_az.restype = ctypes.c_float
     lib.hotbox_cil_pwm_el.restype = ctypes.c_float
 
@@ -172,12 +184,14 @@ class FirmwareMirrorNode:
         ticks_per_degree: float = 35.56,
         max_velocity_deg_s: float = 30.0,
         velocity_time_constant_s: float = 0.2,
+        control_period_s: float = 0.02,
         lib_path: Path | str | None = None,
     ) -> None:
         self.node_id = node_id
         self.ticks_per_degree = ticks_per_degree
         self.max_velocity_deg_s = max_velocity_deg_s
         self.velocity_time_constant_s = velocity_time_constant_s
+        self.control_period_s = control_period_s
 
         self._lib = load_cil_library(lib_path)
         self._lib.hotbox_cil_reset()
@@ -198,6 +212,7 @@ class FirmwareMirrorNode:
             ticks_per_degree=ac.ticks_per_degree,
             max_velocity_deg_s=ac.max_velocity_deg_s,
             velocity_time_constant_s=ac.velocity_time_constant_s,
+            control_period_s=ac.control_period_s,
             lib_path=lib_path,
         )
 
@@ -224,6 +239,24 @@ class FirmwareMirrorNode:
         self._el_vel_deg_s += (target_el - self._el_vel_deg_s) * alpha
         self._az_angle_deg += self._az_vel_deg_s * dt_s
         self._el_angle_deg += self._el_vel_deg_s * dt_s
+
+    def _substep_once(self, dt_s: float) -> None:
+        az_ticks = int(round(self._az_angle_deg * self.ticks_per_degree))
+        el_ticks = int(round(self._el_angle_deg * self.ticks_per_degree))
+        az_hall = int(abs(self._az_angle_deg - self._az_hall_deg) <= 1.0)
+        el_hall = int(abs(self._el_angle_deg - self._el_hall_deg) <= 1.0)
+        pwm_az = ctypes.c_float()
+        pwm_el = ctypes.c_float()
+        self._lib.hotbox_cil_step(
+            az_ticks,
+            el_ticks,
+            az_hall,
+            el_hall,
+            dt_s,
+            ctypes.byref(pwm_az),
+            ctypes.byref(pwm_el),
+        )
+        self._apply_pwm_to_plant(pwm_az.value, pwm_el.value, dt_s)
 
     # ── SimulatedMirrorNode interface ─────────────────────────────────────────
 
@@ -268,9 +301,10 @@ class FirmwareMirrorNode:
         )
 
     def step(self, dt_s: float) -> None:
-        """One simulation tick: inject encoder/hall → run firmware PID → apply PWM to plant."""
-        self._inject_plant_state()
-        self._lib.hotbox_cil_update(dt_s)
-        pwm_az = self._lib.hotbox_cil_pwm_az()
-        pwm_el = self._lib.hotbox_cil_pwm_el()
-        self._apply_pwm_to_plant(pwm_az, pwm_el, dt_s)
+        """Advance the plant while running firmware at its own control period."""
+        if dt_s <= 0.0:
+            return
+        substeps = max(1, int(math.ceil(dt_s / self.control_period_s)))
+        sub_dt = dt_s / substeps
+        for _ in range(substeps):
+            self._substep_once(sub_dt)

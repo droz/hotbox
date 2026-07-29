@@ -12,9 +12,35 @@ public:
     PID(double* input, double* output, double* setpoint,
         double kp, double ki, double kd, int direction)
         : input_(input), output_(output), setpoint_(setpoint),
-          kp_(kp), ki_(ki), kd_(kd), direction_(direction) {}
+          disp_kp_(kp), disp_ki_(ki), disp_kd_(kd), direction_(direction) {
+        SetTunings(kp, ki, kd);
+    }
 
     void SetMode(int mode) { mode_ = mode; }
+
+    void SetTunings(double kp, double ki, double kd) {
+        if (kp < 0.0 || ki < 0.0 || kd < 0.0) return;
+        disp_kp_ = kp;
+        disp_ki_ = ki;
+        disp_kd_ = kd;
+        const double sample_time_s = sample_time_ms_ / 1000.0;
+        kp_ = kp;
+        ki_ = ki * sample_time_s;
+        kd_ = kd / sample_time_s;
+        if (direction_ == REVERSE) {
+            kp_ = -kp_;
+            ki_ = -ki_;
+            kd_ = -kd_;
+        }
+    }
+
+    void SetSampleTime(int sample_time_ms) {
+        if (sample_time_ms <= 0) return;
+        const double ratio = static_cast<double>(sample_time_ms) / static_cast<double>(sample_time_ms_);
+        ki_ *= ratio;
+        kd_ /= ratio;
+        sample_time_ms_ = sample_time_ms;
+    }
 
     void SetOutputLimits(double min_out, double max_out) {
         out_min_ = min_out;
@@ -47,9 +73,11 @@ private:
     double* input_;
     double* output_;
     double* setpoint_;
-    double kp_, ki_, kd_;
+    double kp_ = 0.0, ki_ = 0.0, kd_ = 0.0;
+    double disp_kp_ = 0.0, disp_ki_ = 0.0, disp_kd_ = 0.0;
     int direction_;
     int mode_ = MANUAL;
+    int sample_time_ms_ = 100;
     double out_min_ = -255.0, out_max_ = 255.0;
     double i_term_ = 0.0;
     double last_input_ = 0.0;
