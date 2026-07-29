@@ -13,12 +13,12 @@ ESP32Encoder g_el_encoder;
 double g_az_input = 0.0;
 double g_az_output = 0.0;
 double g_az_setpoint = 0.0;
-PID g_az_pid(&g_az_input, &g_az_output, &g_az_setpoint, 1.2, 0.05, 0.01, DIRECT);
+PID g_az_pid(&g_az_input, &g_az_output, &g_az_setpoint, kPidKp, kPidKi, kPidKd, DIRECT);
 
 double g_el_input = 0.0;
 double g_el_output = 0.0;
 double g_el_setpoint = 0.0;
-PID g_el_pid(&g_el_input, &g_el_output, &g_el_setpoint, 1.2, 0.05, 0.01, DIRECT);
+PID g_el_pid(&g_el_input, &g_el_output, &g_el_setpoint, kPidKp, kPidKi, kPidKd, DIRECT);
 
 float clampf(float value, float min_value, float max_value) {
   if (value < min_value) return min_value;
@@ -156,12 +156,12 @@ void BrushedAxis::update(float dt_s) {
     }
     driveMotor(static_cast<float>(pid_output) / 255.0f);
     command_velocity_deg_s_ = static_cast<float>(pid_output) / 255.0f * kMaxVelocityDegS;
-    if (fabs(command_velocity_deg_s_) > 1.0f && fabs(velocity_deg_s_) < 0.05f) {
+    if (fabs(command_velocity_deg_s_) > 1.0f && fabs(velocity_deg_s_) < kStallVelocityThreshDegS) {
       stall_timer_s_ += dt_s;
     } else {
       stall_timer_s_ = 0.0f;
     }
-    if (stall_timer_s_ > 1.0f) {
+    if (stall_timer_s_ > kStallTimeoutS) {
       setFault("stalled");
     }
     return;

@@ -72,7 +72,10 @@ class SitlHarness:
         self._thread: threading.Thread | None = None
         self._lock = threading.RLock()
         self._latest: dict[str, Any] = {}
-        self.nodes = {node_id: SimulatedMirrorNode(node_id=node_id) for node_id in node_ids}
+        self.nodes = {
+            node_id: SimulatedMirrorNode.from_constants(node_id, self.system.actuator)
+            for node_id in node_ids
+        }
         self.true_layouts = {
             node_id: layout
             for node_id, layout in _layouts_from_system(self.system).items()

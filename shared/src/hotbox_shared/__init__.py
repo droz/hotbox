@@ -44,6 +44,7 @@ from .site_time import (
 )
 from .system import (
     AbsorberConstants,
+    ActuatorConstants,
     ControlConstants,
     FleetConstants,
     MirrorConstants,
@@ -55,6 +56,7 @@ from .vectors import bisector_normal, normalize, reflect_ray
 
 __all__ = [
     "AbsorberConstants",
+    "ActuatorConstants",
     "CenterRay",
     "ControlConstants",
     "FleetConstants",

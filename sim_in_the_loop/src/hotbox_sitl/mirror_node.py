@@ -20,6 +20,14 @@ class SimulatedMirrorNode:
     jog_az_rate_deg_s: float = 0.0
     jog_el_rate_deg_s: float = 0.0
 
+    @classmethod
+    def from_constants(cls, node_id: int, ac: "hotbox_shared.ActuatorConstants") -> "SimulatedMirrorNode":  # type: ignore[name-defined]
+        return cls(
+            node_id=node_id,
+            azimuth_axis=ActuatorModel.from_constants(ac),
+            altitude_axis=ActuatorModel.from_constants(ac),
+        )
+
     def handle_command(self, command: MirrorCommand) -> None:
         if command.node_id != self.node_id:
             return
@@ -100,9 +108,13 @@ class SimulatedMirrorNode:
         error = target_deg - axis.state.angle_deg
         if wrap_360:
             error = ((error + 180.0) % 360.0) - 180.0
-        command = max(-1.0, min(1.0, error / 10.0))
-        return command
+        # Proportional position controller; gain chosen so 10° error → full PWM.
+        return max(-1.0, min(1.0, error / 10.0))
 
     @staticmethod
     def _axis_stalled(axis: ActuatorModel) -> bool:
-        return abs(axis.state.velocity_deg_s) < 0.01 and abs(axis.last_pwm) > 0.8 and axis.stall_timer_s > 1.0
+        return (
+            abs(axis.state.velocity_deg_s) < axis.stall_velocity_threshold_deg_s
+            and abs(axis.last_pwm) > 0.8
+            and axis.stall_timer_s > axis.stall_timeout_s
+        )

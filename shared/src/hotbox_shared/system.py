@@ -118,12 +118,78 @@ class ControlConstants:
 
 
 @dataclass(slots=True, frozen=True)
+class ActuatorConstants:
+    """Mechanical and control constants for one brushed-DC alt-az axis pair.
+
+    These values are shared across firmware, SITL, and (via the generated header)
+    the on-board microcontroller.  They describe the *output* shaft (mount axis)
+    unless noted otherwise.
+
+    Encoder note
+    ------------
+    The encoder sits on the motor shaft *before* the gearbox.  The relationship is:
+
+        ticks_per_degree = (encoder_ppr * 4) * gear_ratio / 360
+
+    All three values are stored so the gear ratio is explicit and auditable.
+    """
+
+    # --- Encoder / gearbox ---
+    encoder_ppr: int = 64
+    """Encoder pulses per revolution of the *motor* shaft (single-channel edges)."""
+    gear_ratio: float = 50.0
+    """Output shaft turns per motor shaft turn (> 1 means speed reduction)."""
+
+    @property
+    def ticks_per_degree(self) -> float:
+        """Quadrature encoder ticks per degree of output (mount) shaft rotation.
+
+        Derived from encoder_ppr × 4 (quadrature edges) × gear_ratio / 360.
+        """
+        return self.encoder_ppr * 4.0 * self.gear_ratio / 360.0
+
+    # --- Velocity limits ---
+    max_velocity_deg_s: float = 30.0
+    """Maximum commanded output-shaft angular velocity [°/s]."""
+    max_accel_deg_s2: float = 120.0
+    """Maximum commanded output-shaft angular acceleration [°/s²] (firmware ramp limiter)."""
+
+    # --- Homing ---
+    homing_velocity_deg_s: float = 5.0
+    """Slow creep speed used during hall-sensor homing [°/s]."""
+
+    # --- PID (position loop, output shaft degrees) ---
+    pid_kp: float = 1.2
+    """Proportional gain (applied in encoder-tick space, output ±255 PWM units)."""
+    pid_ki: float = 0.05
+    """Integral gain."""
+    pid_kd: float = 0.01
+    """Derivative gain."""
+
+    # --- SITL physics model ---
+    velocity_time_constant_s: float = 0.2
+    """First-order lag time constant for motor velocity response in the SITL model [s].
+    Approximates motor electrical + mechanical inertia without a full torque model."""
+
+    # --- Stall detection ---
+    stall_velocity_threshold_deg_s: float = 0.05
+    """Mirror is considered stalled when |velocity| < this while |command| is large [°/s]."""
+    stall_timeout_s: float = 1.0
+    """Time after which a stalled axis triggers a fault [s]."""
+
+    # --- Control loop ---
+    control_period_s: float = 0.02
+    """Firmware control-loop period [s] (50 Hz)."""
+
+
+@dataclass(slots=True, frozen=True)
 class SystemConstants:
     default_site: SiteConstants
     absorber: AbsorberConstants
     mirror: MirrorConstants
     fleet: FleetConstants
     control: ControlConstants
+    actuator: ActuatorConstants = ActuatorConstants()
 
     def mount_world(self, node_id: int) -> np.ndarray:
         return self.fleet.mount_by_id(node_id).mount_world(

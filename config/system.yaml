@@ -75,3 +75,35 @@ control:
   elevation_max_deg: 90.0
   azimuth_min_deg: -150.0
   azimuth_max_deg: 150.0
+
+actuator:
+  # ── Encoder / gearbox ────────────────────────────────────────────────────────
+  # The encoder is mounted on the motor shaft BEFORE the gearbox.
+  # Relationship:  ticks_per_degree = (encoder_ppr × 4) × gear_ratio / 360
+  encoder_ppr: 64          # Pulses per revolution of the motor shaft (single-channel edges)
+  gear_ratio: 50.0         # Output (mount) shaft turns per motor shaft turn
+  # ticks_per_degree is derived: encoder_ppr × 4 (quadrature) × gear_ratio / 360
+
+  # ── Velocity limits ───────────────────────────────────────────────────────────
+  max_velocity_deg_s: 30.0    # Maximum output-shaft speed [°/s]
+  max_accel_deg_s2: 120.0     # Maximum output-shaft acceleration [°/s²] (firmware ramp limiter)
+
+  # ── Homing ───────────────────────────────────────────────────────────────────
+  homing_velocity_deg_s: 5.0  # Creep speed toward hall sensor during homing [°/s]
+
+  # ── PID (position loop, works in output-shaft ° with ±255 PWM output) ────────
+  pid_kp: 1.2
+  pid_ki: 0.05
+  pid_kd: 0.01
+
+  # ── SITL physics ─────────────────────────────────────────────────────────────
+  # First-order lag approximating motor electrical + mechanical inertia.
+  # velocity_time_constant_s = J_total / (Kt * Ke / R + b)  (rough lumped model)
+  velocity_time_constant_s: 0.2  # [s]
+
+  # ── Stall detection ──────────────────────────────────────────────────────────
+  stall_velocity_threshold_deg_s: 0.05  # |ω| < this while |cmd| is large → stalling [°/s]
+  stall_timeout_s: 1.0                  # Time before fault is raised [s]
+
+  # ── Control loop ─────────────────────────────────────────────────────────────
+  control_period_s: 0.02  # Firmware ISR / control loop period (50 Hz) [s]

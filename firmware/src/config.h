@@ -1,9 +1,11 @@
 #pragma once
 
 #include <Arduino.h>
+#include "hotbox_geometry.h"
 
 namespace hotbox {
 
+// ── Pin assignments ──────────────────────────────────────────────────────────
 constexpr int kCanTxPin = D10;
 constexpr int kCanRxPin = D9;
 
@@ -23,10 +25,17 @@ constexpr int kHorizHall = D7;
 #define HOTBOX_NODE_ID 0
 #endif
 
-constexpr float kControlPeriodS = 0.02f;
-constexpr float kMaxVelocityDegS = 30.0f;
-constexpr float kMaxAccelDegS2 = 120.0f;
-constexpr float kHomingVelocityDegS = 5.0f;
-constexpr float kTicksPerDegree = 8.0f;
+// ── Actuator constants (generated from config/system.yaml) ───────────────────
+// Regenerate with: uv run hotbox-gen-firmware-geometry
+constexpr float kControlPeriodS         = HOTBOX_CONTROL_PERIOD_S;
+constexpr float kMaxVelocityDegS        = HOTBOX_MAX_VELOCITY_DEG_S;
+constexpr float kMaxAccelDegS2          = HOTBOX_MAX_ACCEL_DEG_S2;
+constexpr float kHomingVelocityDegS     = HOTBOX_HOMING_VELOCITY_DEG_S;
+constexpr float kTicksPerDegree         = HOTBOX_TICKS_PER_DEGREE;
+constexpr float kPidKp                  = HOTBOX_PID_KP;
+constexpr float kPidKi                  = HOTBOX_PID_KI;
+constexpr float kPidKd                  = HOTBOX_PID_KD;
+constexpr float kStallVelocityThreshDegS = HOTBOX_STALL_VELOCITY_THRESHOLD_DEG_S;
+constexpr float kStallTimeoutS          = HOTBOX_STALL_TIMEOUT_S;
 
 }  // namespace hotbox

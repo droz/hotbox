@@ -31,6 +31,20 @@ def render_firmware_header(system: SystemConstants) -> str:
         f"#define HOTBOX_SAFE_PARK_ELEVATION_DEG ({system.control.safe_park_elevation_deg:.6f}f)",
         f"#define HOTBOX_IDLE_AIM_HEIGHT_ABOVE_ABSORBER_M ({system.control.idle_aim_height_above_absorber_m:.6f}f)",
         "",
+        "// Actuator constants (from config/system.yaml actuator section)",
+        f"#define HOTBOX_ENCODER_PPR ({system.actuator.encoder_ppr}u)",
+        f"#define HOTBOX_GEAR_RATIO ({system.actuator.gear_ratio:.6f}f)",
+        f"#define HOTBOX_TICKS_PER_DEGREE ({system.actuator.ticks_per_degree:.6f}f)",
+        f"#define HOTBOX_MAX_VELOCITY_DEG_S ({system.actuator.max_velocity_deg_s:.6f}f)",
+        f"#define HOTBOX_MAX_ACCEL_DEG_S2 ({system.actuator.max_accel_deg_s2:.6f}f)",
+        f"#define HOTBOX_HOMING_VELOCITY_DEG_S ({system.actuator.homing_velocity_deg_s:.6f}f)",
+        f"#define HOTBOX_PID_KP ({system.actuator.pid_kp:.6f}f)",
+        f"#define HOTBOX_PID_KI ({system.actuator.pid_ki:.6f}f)",
+        f"#define HOTBOX_PID_KD ({system.actuator.pid_kd:.6f}f)",
+        f"#define HOTBOX_STALL_VELOCITY_THRESHOLD_DEG_S ({system.actuator.stall_velocity_threshold_deg_s:.6f}f)",
+        f"#define HOTBOX_STALL_TIMEOUT_S ({system.actuator.stall_timeout_s:.6f}f)",
+        f"#define HOTBOX_CONTROL_PERIOD_S ({system.actuator.control_period_s:.6f}f)",
+        "",
     ]
     return "\n".join(lines)
 
