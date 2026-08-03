@@ -313,6 +313,25 @@ def test_solve_tracking_respects_joint_limits() -> None:
         prev = (angles.azimuth_deg, angles.elevation_deg)
 
 
+def test_limited_azimuth_error_prefers_valid_travel_window() -> None:
+    from hotbox_shared.mount import limited_azimuth_error_deg
+
+    facing = 0.0
+    # From the -150° stop to +149°: must go the long way through 0°, not -61° through the back.
+    err = limited_azimuth_error_deg(-150.0, -150.0, oven_facing_azimuth_deg=facing)
+    assert abs(err) < 1e-9
+    err = limited_azimuth_error_deg(149.0, -150.0, oven_facing_azimuth_deg=facing)
+    assert err > 0.0
+    assert abs(err - 299.0) < 1e-6
+    # Opposite direction.
+    err = limited_azimuth_error_deg(-150.0, 149.0, oven_facing_azimuth_deg=facing)
+    assert err < 0.0
+    assert abs(err + 299.0) < 1e-6
+    # Short move inside the window stays short.
+    err = limited_azimuth_error_deg(-40.0, -50.0, oven_facing_azimuth_deg=facing)
+    assert abs(err - 10.0) < 1e-9
+
+
 def test_system_yaml_loads_joint_limits() -> None:
     system = load_system_constants()
     lim = system.control.mount_joint_limits()

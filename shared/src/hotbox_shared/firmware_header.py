@@ -30,6 +30,23 @@ def render_firmware_header(system: SystemConstants) -> str:
         f"#define HOTBOX_SAFE_PARK_AZIMUTH_DEG ({system.control.safe_park_azimuth_deg:.6f}f)",
         f"#define HOTBOX_SAFE_PARK_ELEVATION_DEG ({system.control.safe_park_elevation_deg:.6f}f)",
         f"#define HOTBOX_IDLE_AIM_HEIGHT_ABOVE_ABSORBER_M ({system.control.idle_aim_height_above_absorber_m:.6f}f)",
+        f"#define HOTBOX_ELEVATION_MIN_DEG ({system.control.elevation_min_deg:.6f}f)",
+        f"#define HOTBOX_ELEVATION_MAX_DEG ({system.control.elevation_max_deg:.6f}f)",
+        f"#define HOTBOX_AZIMUTH_MIN_DEG ({system.control.azimuth_min_deg:.6f}f)",
+        f"#define HOTBOX_AZIMUTH_MAX_DEG ({system.control.azimuth_max_deg:.6f}f)",
+        "",
+        "// Oven-facing absolute azimuth [deg] per node (joint az limits are relative to this).",
+    ]
+    from .mount import oven_facing_azimuth_deg
+
+    absorber = system.absorber.center_world
+    for mount in system.fleet.mounts:
+        facing = oven_facing_azimuth_deg(system.mount_world(mount.node_id), absorber)
+        lines.append(
+            f"#define HOTBOX_OVEN_FACING_AZIMUTH_DEG_NODE_{int(mount.node_id)} ({facing:.6f}f)"
+        )
+    lines.extend(
+        [
         "",
         "// Actuator constants (from config/system.yaml actuator section)",
         f"#define HOTBOX_ENCODER_PPR ({system.actuator.encoder_ppr}u)",
@@ -45,7 +62,8 @@ def render_firmware_header(system: SystemConstants) -> str:
         f"#define HOTBOX_STALL_TIMEOUT_S ({system.actuator.stall_timeout_s:.6f}f)",
         f"#define HOTBOX_CONTROL_PERIOD_S ({system.actuator.control_period_s:.6f}f)",
         "",
-    ]
+        ]
+    )
     return "\n".join(lines)
 
 

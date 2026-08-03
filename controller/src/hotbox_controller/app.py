@@ -9,7 +9,13 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 import numpy as np
-from hotbox_shared import utc_now
+from hotbox_shared import (
+    MountJointLimits,
+    apply_mount_joint_limits,
+    clamp_to_mount_joint_limits,
+    oven_facing_azimuth_deg,
+    utc_now,
+)
 from pydantic import BaseModel
 
 from .calibration import load_calibrations
@@ -253,6 +259,48 @@ class ControllerApplication:
         if normalized in {"track", "raw"} and previous == "jog":
             self._halt_jog_rates(node_id)
 
+    def _joint_limits(self) -> MountJointLimits:
+        if self.config.system is not None:
+            return self.config.system.control.mount_joint_limits()
+        return MountJointLimits()
+
+    def _oven_facing_deg(self, node_id: int) -> float:
+        return oven_facing_azimuth_deg(self._mirror_world_for_node(node_id), self.absorber_world)
+
+    def _clamp_target(
+        self,
+        node_id: int,
+        target: TrackingTarget,
+        *,
+        allow_dual: bool = True,
+    ) -> TrackingTarget:
+        """Enforce physical joint limits before any ``set_target`` leaves the host."""
+        limits = self._joint_limits()
+        mount = self._mirror_world_for_node(node_id)
+        if allow_dual:
+            az, el = apply_mount_joint_limits(
+                target.azimuth_deg,
+                target.elevation_deg,
+                mount_world=mount,
+                absorber_world=self.absorber_world,
+                limits=limits,
+            )
+        else:
+            az, el = clamp_to_mount_joint_limits(
+                target.azimuth_deg,
+                target.elevation_deg,
+                oven_facing_azimuth_deg=self._oven_facing_deg(node_id),
+                limits=limits,
+            )
+        return TrackingTarget(azimuth_deg=az, elevation_deg=el, mode=target.mode)
+
+    def _apply_targets(self, targets: dict[int, TrackingTarget], *, allow_dual: bool = True) -> None:
+        clamped = {
+            int(node_id): self._clamp_target(int(node_id), target, allow_dual=allow_dual)
+            for node_id, target in targets.items()
+        }
+        self.fleet.apply_targets(clamped)
+
     def _halt_jog_rates(self, node_id: int) -> None:
         """Zero host jog rates without changing supervisor mode or releasing the hold pose."""
         node_id = int(node_id)
@@ -271,8 +319,9 @@ class ControllerApplication:
         self._jog_pose[node_id] = (az, el)
         self._jog_rates[node_id] = (0.0, 0.0)
         self._jog_last_mono[node_id] = time.monotonic()
-        self.fleet.apply_targets(
-            {node_id: TrackingTarget(azimuth_deg=az, elevation_deg=el, mode="tracking")}
+        self._apply_targets(
+            {node_id: TrackingTarget(azimuth_deg=az, elevation_deg=el, mode="tracking")},
+            allow_dual=False,
         )
 
     def _advance_jog(self, node_id: int, *, status: Any | None = None) -> None:
@@ -297,10 +346,14 @@ class ControllerApplication:
             pose = (float(status.azimuth_deg), float(status.elevation_deg))
         az = pose[0] + az_rate * dt
         el = pose[1] + el_rate * dt
-        self._jog_pose[node_id] = (az, el)
-        self.fleet.apply_targets(
-            {node_id: TrackingTarget(azimuth_deg=az, elevation_deg=el, mode="tracking")}
+        # No dual flip while jogging — clamp into the box so axes stop at the stops.
+        clamped = self._clamp_target(
+            node_id,
+            TrackingTarget(azimuth_deg=az, elevation_deg=el, mode="tracking"),
+            allow_dual=False,
         )
+        self._jog_pose[node_id] = (clamped.azimuth_deg, clamped.elevation_deg)
+        self._apply_targets({node_id: clamped}, allow_dual=False)
 
     def _set_node_mode(self, node_id: int, mode: str, *, apply_immediate: bool) -> None:
         previous = self._node_modes.get(node_id)
@@ -309,7 +362,7 @@ class ControllerApplication:
             return
         if mode == "park":
             self._halt_jog_rates(node_id)
-            self.fleet.apply_targets({node_id: safe_park(self.config.oven)})
+            self._apply_targets({node_id: safe_park(self.config.oven)})
         elif mode == "jog" and previous != "jog":
             self._seed_jog_hold(node_id)
         elif mode in {"track", "raw"}:
@@ -317,7 +370,7 @@ class ControllerApplication:
 
     def _apply_park_all(self) -> None:
         target = safe_park(self.config.oven)
-        self.fleet.apply_targets({node_id: target for node_id in self.fleet.nodes()})
+        self._apply_targets({node_id: target for node_id in self.fleet.nodes()})
 
     def _track_aim_point(self) -> np.ndarray:
         """Absorber center when heat is demanded; otherwise the idle dump above it."""
@@ -407,7 +460,7 @@ class ControllerApplication:
             if desired is None:
                 self._advance_jog(node_id, status=statuses[node_id])
                 continue
-            self.fleet.apply_targets({node_id: desired})
+            self._apply_targets({node_id: desired})
 
     def current_snapshot(self) -> dict[str, Any]:
         fix = self.gps.current_fix()
@@ -479,7 +532,7 @@ class ControllerApplication:
 
     def set_manual_target(self, request: TargetRequest) -> None:
         self.set_mirror_mode(request.node_id, "jog")
-        self.fleet.apply_targets(
+        self._apply_targets(
             {
                 request.node_id: TrackingTarget(
                     azimuth_deg=request.azimuth_deg,
@@ -542,9 +595,15 @@ class ControllerApplication:
 
         payload: dict[str, Any] = {}
         if command_name == CommandName.SET_TARGET.value:
+            raw_target = TrackingTarget(
+                azimuth_deg=float(request.azimuth_deg if request.azimuth_deg is not None else 0.0),
+                elevation_deg=float(request.elevation_deg if request.elevation_deg is not None else 0.0),
+                mode="tracking",
+            )
+            clamped = self._clamp_target(node_id, raw_target, allow_dual=True)
             payload = {
-                "azimuth_deg": float(request.azimuth_deg if request.azimuth_deg is not None else 0.0),
-                "elevation_deg": float(request.elevation_deg if request.elevation_deg is not None else 0.0),
+                "azimuth_deg": clamped.azimuth_deg,
+                "elevation_deg": clamped.elevation_deg,
             }
 
         command = MirrorCommand(node_id=node_id, command=CommandName(command_name), payload=payload)

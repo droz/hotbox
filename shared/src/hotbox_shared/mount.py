@@ -81,6 +81,23 @@ def relative_azimuth_deg(absolute_azimuth_deg: float, oven_facing_azimuth_deg: f
     return wrapped_azimuth_delta_deg(absolute_azimuth_deg, oven_facing_azimuth_deg)
 
 
+def limited_azimuth_error_deg(
+    target_azimuth_deg: float,
+    position_azimuth_deg: float,
+    *,
+    oven_facing_azimuth_deg: float,
+) -> float:
+    """Signed azimuth error that stays inside the joint travel window.
+
+    Unlike a shortest-path wrap to ``(-180, 180]``, this subtracts relative
+    azimuths so motion from ``-150°`` to ``+149°`` goes through ``0°`` instead of
+    the forbidden back side near ``±180°``.
+    """
+    target_rel = relative_azimuth_deg(target_azimuth_deg, oven_facing_azimuth_deg)
+    position_rel = relative_azimuth_deg(position_azimuth_deg, oven_facing_azimuth_deg)
+    return float(target_rel - position_rel)
+
+
 def within_mount_joint_limits(
     azimuth_deg: float,
     elevation_deg: float,
@@ -126,10 +143,30 @@ def apply_mount_joint_limits(
 
         return min(valid, key=score)
 
-    # Neither dual fits: clamp into the box (keep absolute az near oven-facing + clamped rel).
+    return clamp_to_mount_joint_limits(
+        az0, el0, oven_facing_azimuth_deg=oven_az, limits=lim
+    )
+
+
+def clamp_to_mount_joint_limits(
+    azimuth_deg: float,
+    elevation_deg: float,
+    *,
+    oven_facing_azimuth_deg: float,
+    limits: MountJointLimits | None = None,
+) -> tuple[float, float]:
+    """Clip elevation and relative azimuth into the joint-limit box (no dual flip)."""
+    lim = limits or MountJointLimits()
+    az0, el0 = normalize_mount_az_el(azimuth_deg, elevation_deg)
     el = float(np.clip(el0, lim.elevation_min_deg, lim.elevation_max_deg))
-    rel = float(np.clip(relative_azimuth_deg(az0, oven_az), lim.azimuth_min_deg, lim.azimuth_max_deg))
-    az = (oven_az + rel) % 360.0
+    rel = float(
+        np.clip(
+            relative_azimuth_deg(az0, oven_facing_azimuth_deg),
+            lim.azimuth_min_deg,
+            lim.azimuth_max_deg,
+        )
+    )
+    az = (float(oven_facing_azimuth_deg) + rel) % 360.0
     return normalize_mount_az_el(az, el)
 
 

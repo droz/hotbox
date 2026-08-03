@@ -23,13 +23,21 @@ class SimulatedMirrorNode:
     fault: str | None = None
     target_azimuth_deg: float = 0.0
     target_elevation_deg: float = 0.0
+    oven_facing_azimuth_deg: float = 0.0
 
     @classmethod
-    def from_constants(cls, node_id: int, ac: "hotbox_shared.ActuatorConstants") -> "SimulatedMirrorNode":  # type: ignore[name-defined]
+    def from_constants(
+        cls,
+        node_id: int,
+        ac: "hotbox_shared.ActuatorConstants",  # type: ignore[name-defined]
+        *,
+        oven_facing_azimuth_deg: float = 0.0,
+    ) -> "SimulatedMirrorNode":
         return cls(
             node_id=node_id,
             azimuth_axis=ActuatorModel.from_constants(ac),
             altitude_axis=ActuatorModel.from_constants(ac),
+            oven_facing_azimuth_deg=float(oven_facing_azimuth_deg),
         )
 
     def handle_command(self, command: MirrorCommand) -> None:
@@ -74,7 +82,7 @@ class SimulatedMirrorNode:
             return
 
         if self.mode == "position":
-            pwm_az = self._position_pwm(self.azimuth_axis, self.target_azimuth_deg, wrap_360=True)
+            pwm_az = self._azimuth_pwm(self.target_azimuth_deg)
             pwm_el = self._position_pwm(self.altitude_axis, self.target_elevation_deg)
             self.azimuth_axis.step(pwm_az, dt_s)
             self.altitude_axis.step(pwm_el, dt_s)
@@ -93,11 +101,19 @@ class SimulatedMirrorNode:
             self.homed = True
             self.mode = "idle"
 
+    def _azimuth_pwm(self, target_deg: float) -> float:
+        from hotbox_shared import limited_azimuth_error_deg
+
+        error = limited_azimuth_error_deg(
+            target_deg,
+            self.azimuth_axis.state.angle_deg,
+            oven_facing_azimuth_deg=self.oven_facing_azimuth_deg,
+        )
+        return max(-1.0, min(1.0, error / 10.0))
+
     @staticmethod
-    def _position_pwm(axis: ActuatorModel, target_deg: float, *, wrap_360: bool = False) -> float:
+    def _position_pwm(axis: ActuatorModel, target_deg: float) -> float:
         error = target_deg - axis.state.angle_deg
-        if wrap_360:
-            error = ((error + 180.0) % 360.0) - 180.0
         # Proportional position controller; gain chosen so 10° error → full PWM.
         return max(-1.0, min(1.0, error / 10.0))
 

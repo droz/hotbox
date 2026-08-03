@@ -20,6 +20,15 @@
 #define HOTBOX_SAFE_PARK_AZIMUTH_DEG (0.000000f)
 #define HOTBOX_SAFE_PARK_ELEVATION_DEG (0.000000f)
 #define HOTBOX_IDLE_AIM_HEIGHT_ABOVE_ABSORBER_M (2.000000f)
+#define HOTBOX_ELEVATION_MIN_DEG (0.000000f)
+#define HOTBOX_ELEVATION_MAX_DEG (90.000000f)
+#define HOTBOX_AZIMUTH_MIN_DEG (-150.000000f)
+#define HOTBOX_AZIMUTH_MAX_DEG (150.000000f)
+
+// Oven-facing absolute azimuth [deg] per node (joint az limits are relative to this).
+#define HOTBOX_OVEN_FACING_AZIMUTH_DEG_NODE_0 (360.000000f)
+#define HOTBOX_OVEN_FACING_AZIMUTH_DEG_NODE_1 (330.000000f)
+#define HOTBOX_OVEN_FACING_AZIMUTH_DEG_NODE_2 (30.000000f)
 
 // Actuator constants (from config/system.yaml actuator section)
 #define HOTBOX_ENCODER_PPR (64u)

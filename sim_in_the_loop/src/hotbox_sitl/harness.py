@@ -16,6 +16,7 @@ from hotbox_controller.protocol import CommandName, MirrorCommand
 from hotbox_controller.sun import SunService
 from hotbox_controller.transport import SimTransport
 
+from hotbox_shared import oven_facing_azimuth_deg
 from .firmware_axis import FirmwareMirrorNode
 from .mirror_node import SimulatedMirrorNode
 
@@ -92,7 +93,14 @@ class SitlHarness:
             if node_id == firmware_cil_node_id:
                 self.nodes[node_id] = FirmwareMirrorNode.from_constants(node_id, self.system.actuator)
             else:
-                self.nodes[node_id] = SimulatedMirrorNode.from_constants(node_id, self.system.actuator)
+                facing = oven_facing_azimuth_deg(
+                    self.system.mount_world(node_id), self.system.absorber.center_world
+                )
+                self.nodes[node_id] = SimulatedMirrorNode.from_constants(
+                    node_id,
+                    self.system.actuator,
+                    oven_facing_azimuth_deg=facing,
+                )
         self.true_layouts = {
             node_id: layout
             for node_id, layout in _layouts_from_system(self.system).items()

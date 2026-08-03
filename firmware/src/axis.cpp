@@ -15,11 +15,33 @@ float clampf(float value, float min_value, float max_value) {
   return value;
 }
 
-float wrapped_error_deg(float target_deg, float position_deg) {
-  float error = target_deg - position_deg;
-  while (error > 180.0f) error -= 360.0f;
-  while (error <= -180.0f) error += 360.0f;
-  return error;
+float wrap360(float deg) {
+  while (deg < 0.0f) deg += 360.0f;
+  while (deg >= 360.0f) deg -= 360.0f;
+  return deg;
+}
+
+float wrap180(float deg) {
+  while (deg > 180.0f) deg -= 360.0f;
+  while (deg <= -180.0f) deg += 360.0f;
+  return deg;
+}
+
+void clamp_joint_targets(float* azimuth_deg, float* elevation_deg) {
+  *elevation_deg = clampf(*elevation_deg, kElevationMinDeg, kElevationMaxDeg);
+  const float rel = wrap180(*azimuth_deg - kOvenFacingAzimuthDeg);
+  const float rel_clamped = clampf(rel, kAzimuthMinDeg, kAzimuthMaxDeg);
+  // Keep continuous oven+rel (may be outside [0,360)) so the servo can travel
+  // through 0° inside the valid window instead of the forbidden back side.
+  *azimuth_deg = kOvenFacingAzimuthDeg + rel_clamped;
+}
+
+// Azimuth error that stays inside the joint travel window (no shortest-path wrap
+// through ±180° relative to oven-facing).
+float limited_azimuth_error_deg(float target_deg, float position_deg) {
+  const float target_rel = wrap180(target_deg - kOvenFacingAzimuthDeg);
+  const float position_rel = wrap180(position_deg - kOvenFacingAzimuthDeg);
+  return target_rel - position_rel;
 }
 
 }  // namespace
@@ -128,7 +150,7 @@ void BrushedAxis::update(float dt_s) {
   if (mode_ == AxisMode::Position) {
     float error_deg = target_deg_ - position_deg_;
     if (enc_a_ == kHorizEncA) {
-      error_deg = wrapped_error_deg(target_deg_, position_deg_);
+      error_deg = limited_azimuth_error_deg(target_deg_, position_deg_);
     }
     const float pwm_command = clampf(error_deg / 10.0f, -1.0f, 1.0f);
     driveMotor(pwm_command);
@@ -169,6 +191,7 @@ void MirrorMount::stop() {
 }
 
 void MirrorMount::setTarget(float azimuth_deg, float elevation_deg) {
+  clamp_joint_targets(&azimuth_deg, &elevation_deg);
   azimuth_.setTargetDeg(azimuth_deg);
   elevation_.setTargetDeg(elevation_deg);
   refreshModeText();

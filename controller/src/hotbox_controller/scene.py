@@ -174,12 +174,12 @@ def build_mirror_scene_entry(
     )
     facet = center_ray.facet_center_world
     normal = center_ray.normal_world
-    reflected = center_ray.reflected_direction
+    # Front face is lit only when sunlight arrives against the reflective normal.
+    front_illuminated = float(np.dot(normal, sun_toward_scene)) < -1e-9
     absorber = np.asarray(absorber_world, dtype=float).reshape(3)
-    miss_m = center_ray.miss_m(absorber)
+    miss_m = center_ray.miss_m(absorber) if front_illuminated else None
     sun_start = facet - sun_toward_scene * upstream_distance_m
-    reflected_end = facet + reflected * float(np.linalg.norm(absorber - facet))
-    return {
+    entry: dict[str, Any] = {
         "node_id": node_id,
         "mount": mount.tolist(),
         "facet_center": facet.tolist(),
@@ -190,11 +190,20 @@ def build_mirror_scene_entry(
         "facets": facets,
         "grid_nx": grid_nx,
         "grid_ny": grid_ny,
-        "incoming": {"start": sun_start.tolist(), "end": facet.tolist()},
-        "reflected": {"start": facet.tolist(), "end": reflected_end.tolist()},
-        "to_absorber": {"start": facet.tolist(), "end": absorber.tolist()},
+        "front_illuminated": front_illuminated,
         "miss_m": miss_m,
+        "to_absorber": {"start": facet.tolist(), "end": absorber.tolist()},
     }
+    if front_illuminated:
+        reflected = center_ray.reflected_direction
+        reflected_end = facet + reflected * float(np.linalg.norm(absorber - facet))
+        entry["incoming"] = {"start": sun_start.tolist(), "end": facet.tolist()}
+        entry["reflected"] = {"start": facet.tolist(), "end": reflected_end.tolist()}
+    else:
+        # Back of the mirror is not reflective — omit optical rays.
+        entry["incoming"] = None
+        entry["reflected"] = None
+    return entry
 
 
 def _mirror_params_from_system(system: Any | None) -> dict[str, float | int]:

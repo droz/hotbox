@@ -80,3 +80,30 @@ def test_build_mirror_scene_entry_incoming_ray_points_toward_facet() -> None:
         np.asarray(mirror["reflected"]["end"], dtype=float) - np.asarray(mirror["reflected"]["start"], dtype=float)
     )
     np.testing.assert_allclose(reflected_seg, reflected, atol=1e-6)
+    assert mirror["front_illuminated"] is True
+
+
+def test_build_mirror_scene_entry_omits_rays_when_back_facing() -> None:
+    sun = SunVector(
+        azimuth_deg=180.0,
+        elevation_deg=45.0,
+        world_vector=np.array([0.0, -np.sqrt(0.5), np.sqrt(0.5)], dtype=float),
+    )
+    mount = np.array([0.0, 2.5, 1.0], dtype=float)
+    # elevation -90° maps body +Z → world +Y, facing away from a sun in -Y/+Z.
+    mirror = build_mirror_scene_entry(
+        node_id=0,
+        mount_world=mount,
+        azimuth_deg=0.0,
+        elevation_deg=-90.0,
+        mirror_offset_d_m=0.2,
+        sun=sun,
+        absorber_world=np.array([0.0, 0.0, 1.0]),
+    )
+    normal = np.asarray(mirror["normal"], dtype=float)
+    sun_toward_scene = -normalize(sun.world_vector)
+    assert float(np.dot(normal, sun_toward_scene)) > 0.0
+    assert mirror["front_illuminated"] is False
+    assert mirror["incoming"] is None
+    assert mirror["reflected"] is None
+    assert mirror["miss_m"] is None

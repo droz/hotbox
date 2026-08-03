@@ -206,7 +206,46 @@ def test_protocol_traffic_is_recorded() -> None:
     assert any(e["direction"] == "rx" for e in traffic)
 
 
-def test_raw_mode_stops_automatic_wire_traffic() -> None:
+def test_protocol_set_target_is_joint_limited() -> None:
+    from hotbox_controller.app import ProtocolCommandRequest
+    from hotbox_shared import within_mount_joint_limits
+
+    app, transport = _app()
+    app.send_protocol_command(
+        ProtocolCommandRequest(
+            command="set_target",
+            node_id=0,
+            azimuth_deg=350.0,
+            elevation_deg=-20.0,
+        )
+    )
+    cmd = transport.sent[-1]
+    assert cmd.command == CommandName.SET_TARGET
+    az = float(cmd.payload["azimuth_deg"])
+    el = float(cmd.payload["elevation_deg"])
+    limits = app._joint_limits()
+    oven = app._oven_facing_deg(0)
+    assert within_mount_joint_limits(az, el, oven_facing_azimuth_deg=oven, limits=limits)
+    assert el >= limits.elevation_min_deg - 1e-6
+    assert el <= limits.elevation_max_deg + 1e-6
+
+
+def test_jog_stops_at_joint_limits() -> None:
+    from hotbox_controller.app import JogRequest
+    import time
+
+    app, transport = _app()
+    # Seed near the elevation floor and jog further down.
+    app._jog_pose[0] = (app._oven_facing_deg(0), 0.5)
+    app._node_modes[0] = "jog"
+    app._jog_rates[0] = (0.0, -20.0)
+    app._jog_last_mono[0] = time.monotonic() - 0.1
+    transport.sent.clear()
+    app.control_tick()
+    moved = [c for c in transport.sent if c.command == CommandName.SET_TARGET and c.node_id == 0]
+    assert moved
+    assert float(moved[-1].payload["elevation_deg"]) >= app._joint_limits().elevation_min_deg - 1e-6
+    assert app._jog_pose[0][1] >= app._joint_limits().elevation_min_deg - 1e-6
     from hotbox_controller.app import ProtocolCommandRequest
 
     app, transport = _app()

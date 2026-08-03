@@ -87,7 +87,60 @@
         min-height: 0;
         display: flex;
         flex-direction: column;
-        gap: var(--gap);
+        gap: 0.45rem;
+      }
+      .sidebar-tabs {
+        flex: 0 0 auto;
+        display: flex;
+        gap: 0.25rem;
+        overflow-x: auto;
+        overflow-y: hidden;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: thin;
+        padding: 0.1rem 0.05rem 0.15rem;
+      }
+      .sidebar-tabs [role="tab"] {
+        flex: 0 0 auto;
+        min-width: 3.25rem;
+        padding: 0.38rem 0.7rem;
+        border-radius: 8px 8px 0 0;
+        border: 1px solid #2a3540;
+        border-bottom: none;
+        background: #141b22;
+        color: var(--muted);
+        font-size: 0.78rem;
+        font-weight: 600;
+        white-space: nowrap;
+      }
+      .sidebar-tabs [role="tab"][aria-selected="true"] {
+        background: color-mix(in srgb, var(--panel) 92%, black);
+        color: var(--text);
+        border-color: #3a4a58;
+        box-shadow: inset 0 -2px 0 var(--accent);
+      }
+      .sidebar-tabs [role="tab"] .tab-note {
+        display: block;
+        font-size: 0.62rem;
+        font-weight: 500;
+        color: var(--muted);
+        margin-top: 0.05rem;
+      }
+      .sidebar-panels {
+        flex: 1 1 auto;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .sidebar-panel {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: auto;
+        display: none;
+        flex-direction: column;
+        gap: 0.45rem;
+      }
+      .sidebar-panel.active {
+        display: flex;
       }
       .scene-wrap {
         flex: 1 1 auto;
@@ -112,17 +165,31 @@
         font-size: 0.78rem;
         color: var(--muted);
       }
-      .sidebar-top {
-        flex: 0 0 auto;
-      }
-      .mirror-scroll {
-        flex: 1 1 auto;
-        min-height: 0;
-        overflow: auto;
+      .fleet-status {
         display: flex;
-        flex-direction: column;
-        gap: 0.55rem;
-        padding-right: 0.15rem;
+        flex-wrap: wrap;
+        gap: 0.3rem 0.55rem;
+        margin-bottom: 0.45rem;
+        font-size: 0.75rem;
+      }
+      .fleet-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.65rem;
+        margin-bottom: 0.45rem;
+      }
+      .fleet-row .label {
+        font-size: 0.8rem;
+        font-weight: 600;
+        min-width: 0;
+      }
+      .fleet-row .hint {
+        display: block;
+        font-size: 0.68rem;
+        font-weight: 400;
+        color: var(--muted);
+        line-height: 1.25;
       }
       .panel {
         background: color-mix(in srgb, var(--panel) 92%, black);
@@ -130,10 +197,14 @@
         border-radius: 12px;
         padding: 0.7rem;
       }
+      .sidebar-panel.panel {
+        border-radius: 0 12px 12px 12px;
+      }
       .controls {
         display: flex;
         flex-wrap: wrap;
         gap: 0.4rem;
+        margin-top: 0.35rem;
       }
       .mode-switch {
         display: grid;
@@ -155,54 +226,10 @@
         box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 50%, transparent);
       }
       .mode-hint {
-        margin: 0.45rem 0 0.55rem;
-        font-size: 0.75rem;
-        color: var(--muted);
-        line-height: 1.35;
-      }
-      .demand-row {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 0.75rem;
-        margin-bottom: 0.65rem;
-        padding: 0.55rem 0.65rem;
-        border-radius: 10px;
-        border: 1px solid #2a3540;
-        background: #141b22;
-      }
-      .demand-row .label {
-        display: flex;
-        flex-direction: column;
-        gap: 0.15rem;
-        min-width: 0;
-      }
-      .demand-row .label strong {
-        font-size: 0.85rem;
-      }
-      .demand-row .label span {
+        margin: 0.35rem 0 0;
         font-size: 0.72rem;
         color: var(--muted);
         line-height: 1.3;
-      }
-      .protocol-log-tools {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 0.55rem 0.85rem;
-        margin: 0.35rem 0 0.25rem;
-        font-size: 0.72rem;
-        color: var(--muted);
-      }
-      .protocol-log-tools label {
-        display: inline-flex;
-        align-items: center;
-        gap: 0.35rem;
-        cursor: pointer;
-        user-select: none;
-      }
-      .protocol-log-tools input {
-        accent-color: var(--accent);
       }
       .toggle {
         position: relative;
@@ -234,8 +261,8 @@
         transform: translateX(1.15rem);
       }
       .field-label {
-        margin: 0 0 0.3rem;
-        font-size: 0.72rem;
+        margin: 0 0 0.25rem;
+        font-size: 0.68rem;
         text-transform: uppercase;
         letter-spacing: 0.04em;
         color: var(--muted);
@@ -350,30 +377,51 @@
       .pill.bad { background: #5a1f1f; }
       #scene-status { margin: 0; }
       .mirror-card {
-        flex: 0 0 auto;
-        padding: 0.6rem;
+        flex: 1 1 auto;
+        min-height: 0;
+        padding: 0.65rem;
+        overflow: auto;
       }
       .mirror-card-head {
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 0.5rem;
-        margin-bottom: 0.4rem;
+        margin-bottom: 0.3rem;
       }
       .mirror-card h3 {
         margin: 0;
-        font-size: 0.95rem;
+        font-size: 0.9rem;
       }
-      .mirror-meta {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 0.2rem 0.5rem;
-        font-size: 0.75rem;
-        margin-bottom: 0.45rem;
+      .mirror-stats {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 0.15rem 0.65rem;
+        margin: 0 0 0.4rem;
+        padding: 0.3rem 0.4rem;
+        border-radius: 8px;
+        background: #141b22;
+        border: 1px solid #2a3540;
+        font-size: 0.72rem;
         color: var(--muted);
+        font-variant-numeric: tabular-nums;
+        line-height: 1.25;
       }
-      .mirror-meta .span2 { grid-column: 1 / -1; }
-      .mirror-meta strong { color: var(--text); font-weight: 600; }
+      .mirror-stats .stat {
+        white-space: nowrap;
+      }
+      .mirror-stats .stat strong {
+        color: var(--text);
+        font-weight: 600;
+      }
+      .mirror-stats .stat.fault-on {
+        color: #ffb4a8;
+      }
+      .mirror-stats .stat .tgt {
+        color: var(--muted);
+        font-weight: 500;
+      }
       details.raw {
         margin-top: 0.5rem;
         color: var(--muted);
@@ -399,6 +447,11 @@
         grid-template-columns: 6.5rem minmax(0, 1fr);
         gap: 0.35rem;
         align-items: center;
+      }
+      /* Author display:grid overrides UA [hidden]; force hide. */
+      .protocol-row[hidden],
+      .proto-field[hidden] {
+        display: none !important;
       }
       .protocol-row label {
         font-size: 0.68rem;
@@ -447,8 +500,34 @@
       .protocol-result.error {
         color: #ffb4a8;
       }
+      .protocol-log-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        margin: 0.35rem 0 0.2rem;
+      }
+      .protocol-log-head .section-label {
+        margin: 0;
+      }
+      .protocol-log-head label {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+        margin: 0;
+        font-size: 0.65rem;
+        color: var(--muted);
+        cursor: pointer;
+        user-select: none;
+        white-space: nowrap;
+      }
+      .protocol-log-head input {
+        margin: 0;
+        width: auto;
+        accent-color: var(--accent);
+      }
       .protocol-log {
-        margin: 0.35rem 0 0;
+        margin: 0;
         max-height: 9rem;
         overflow: auto;
         font-size: 0.62rem;
@@ -470,35 +549,47 @@
         color: var(--muted);
       }
 
-      /* Phone / narrow: controls first, shorter 3D below; page can scroll */
+      /* Phone / narrow: controls first, shorter 3D below */
       @media (max-width: 900px) {
         body { height: auto; min-height: 100dvh; }
         main.app {
           flex-direction: column;
+          min-height: 0;
         }
         .panel-splitter { display: none; }
         .sidebar {
           order: 1;
           width: auto;
           max-width: none;
-          flex: 0 0 auto;
+          flex: 1 1 52dvh;
+          min-height: 18rem;
+          max-height: 58dvh;
         }
         .viewport {
           order: 2;
+          flex: 0 0 auto;
           min-height: 28vh;
         }
         .scene-wrap { min-height: 26vh; }
-        .mirror-scroll {
-          max-height: none;
-          overflow: visible;
+        .sidebar-tabs [role="tab"] {
+          flex: 1 0 auto;
+          text-align: center;
         }
       }
 
       @media (max-width: 520px) {
         header { padding: 0.5rem 0.75rem 0.25rem; }
         main.app { padding: 0 0.75rem 0.75rem; }
-        .mirror-meta { grid-template-columns: 1fr; }
         .jog-stick { width: 8rem; height: 8rem; }
+        .mode-switch,
+        .mode-switch.compact {
+          grid-template-columns: repeat(2, 1fr);
+        }
+        .mirror-stats {
+          gap: 0.1rem 0.5rem;
+          font-size: 0.68rem;
+          padding: 0.25rem 0.35rem;
+        }
       }
     </style>
     <script type="importmap">
@@ -536,39 +627,44 @@
         tabindex="0"
       ></div>
       <aside class="sidebar" id="sidebar">
-        <section class="panel sidebar-top">
-          <div class="status-row">
-            <div>Fleet <span class="pill" id="mode-pill">…</span></div>
-            <div>GPS <span class="pill" id="gps-pill">…</span></div>
-            <div>Sun <span class="pill" id="sun-pill">…</span></div>
-          </div>
-
-          <div class="demand-row">
-            <div class="label">
-              <strong>Oven heat demand</strong>
-              <span id="demand-hint">Simulated relay: when off, Track mirrors divert above the absorber.</span>
+        <div class="sidebar-tabs" role="tablist" aria-label="Sidebar panels" id="sidebar-tabs">
+          <button type="button" role="tab" id="tab-fleet" data-tab="fleet" aria-controls="panel-fleet" aria-selected="true">
+            Fleet
+          </button>
+        </div>
+        <div class="sidebar-panels">
+          <section class="panel sidebar-panel active" id="panel-fleet" role="tabpanel" aria-labelledby="tab-fleet">
+            <div class="fleet-status">
+              <div>Fleet <span class="pill" id="mode-pill">…</span></div>
+              <div>GPS <span class="pill" id="gps-pill">…</span></div>
+              <div>Sun <span class="pill" id="sun-pill">…</span></div>
             </div>
-            <button type="button" class="toggle" id="btn-heat-demand" aria-pressed="false" title="Toggle oven heat demand"></button>
-          </div>
 
-          <p class="field-label">All mirrors</p>
-          <div class="mode-switch" role="group" aria-label="Fleet mode">
-            <button type="button" id="btn-mode-track" data-mode="track">Track</button>
-            <button type="button" id="btn-mode-park" data-mode="park">Park</button>
-            <button type="button" id="btn-mode-jog" data-mode="jog">Jog</button>
-            <button type="button" id="btn-mode-raw" data-mode="raw">Raw</button>
-          </div>
-          <p class="mode-hint" id="mode-hint">Track aims at the absorber when the oven wants heat. Park holds the safe pose. Jog unlocks the pads. Raw is protocol-only.</p>
-          <div class="controls">
-            <button id="btn-home-all" class="tiny">Home all</button>
-          </div>
-          <details class="raw">
-            <summary>Raw controller state</summary>
-            <pre id="state">loading...</pre>
-          </details>
-        </section>
-        <p class="section-label">Mirrors</p>
-        <div id="mirror-grid" class="mirror-scroll"></div>
+            <div class="fleet-row">
+              <div class="label">
+                Heat demand
+                <span class="hint" id="demand-hint">When off, Track mirrors divert above the absorber.</span>
+              </div>
+              <button type="button" class="toggle" id="btn-heat-demand" aria-pressed="false" title="Toggle oven heat demand"></button>
+            </div>
+
+            <p class="field-label">Mode (all mirrors)</p>
+            <div class="mode-switch" role="group" aria-label="Fleet mode">
+              <button type="button" id="btn-mode-track" data-mode="track">Track</button>
+              <button type="button" id="btn-mode-park" data-mode="park">Park</button>
+              <button type="button" id="btn-mode-jog" data-mode="jog">Jog</button>
+              <button type="button" id="btn-mode-raw" data-mode="raw">Raw</button>
+            </div>
+            <p class="mode-hint" id="mode-hint">Track aims at the absorber when heat is on. Park is face-up. Jog unlocks pads. Raw is protocol-only.</p>
+            <div class="controls">
+              <button id="btn-home-all" class="tiny">Home all</button>
+            </div>
+            <details class="raw">
+              <summary>Raw controller state</summary>
+              <pre id="state">loading...</pre>
+            </details>
+          </section>
+        </div>
       </aside>
     </main>
 
@@ -703,7 +799,7 @@
 
       function updateFleetModeUi(mode) {
         const current = normalizeMode(mode);
-        setActiveModeButtons(document.querySelector(".sidebar-top .mode-switch"), current);
+        setActiveModeButtons(document.querySelector("#panel-fleet .mode-switch"), current);
         const pill = document.getElementById("mode-pill");
         pill.textContent = current;
         pill.className = `pill ${
@@ -717,8 +813,8 @@
         btn.classList.toggle("on", !!enabled);
         btn.setAttribute("aria-pressed", enabled ? "true" : "false");
         document.getElementById("demand-hint").textContent = enabled
-          ? "Oven wants power → Track mirrors aim at the absorber."
-          : "Oven idle → Track mirrors divert to a spot above the absorber.";
+          ? "Track mirrors aim at the absorber."
+          : "Track mirrors divert above the absorber.";
       }
 
       async function setFleetMode(mode) {
@@ -781,7 +877,10 @@
         const command = commandSelect.value;
         card.querySelectorAll(".proto-field").forEach((row) => {
           const fields = (row.getAttribute("data-fields") || "").split(/\s+/).filter(Boolean);
-          row.hidden = !fields.includes(command);
+          const show = fields.includes(command);
+          row.hidden = !show;
+          if (show) row.style.removeProperty("display");
+          else row.style.display = "none";
         });
         const result = card.querySelector('[data-field="proto-result"]');
         if (!result) return;
@@ -1044,26 +1143,65 @@
         return controller;
       }
 
+      const SIDEBAR_TAB_KEY = "hotbox.sidebarTab";
+      let activeSidebarTab = localStorage.getItem(SIDEBAR_TAB_KEY) || "fleet";
+
+      function selectSidebarTab(tabId) {
+        activeSidebarTab = String(tabId);
+        localStorage.setItem(SIDEBAR_TAB_KEY, activeSidebarTab);
+        document.querySelectorAll("#sidebar-tabs [role='tab']").forEach((tab) => {
+          const selected = tab.getAttribute("data-tab") === activeSidebarTab;
+          tab.setAttribute("aria-selected", selected ? "true" : "false");
+        });
+        document.querySelectorAll(".sidebar-panel").forEach((panel) => {
+          panel.classList.toggle("active", panel.id === `panel-${activeSidebarTab}`);
+        });
+        const activeTab = document.querySelector(`#sidebar-tabs [data-tab="${activeSidebarTab}"]`);
+        if (activeTab && typeof activeTab.scrollIntoView === "function") {
+          activeTab.scrollIntoView({ inline: "nearest", block: "nearest", behavior: "smooth" });
+        }
+      }
+
+      function ensureMirrorTab(nodeId) {
+        const tabs = document.getElementById("sidebar-tabs");
+        let tab = document.getElementById(`tab-mirror-${nodeId}`);
+        if (tab) return tab;
+        tab = document.createElement("button");
+        tab.type = "button";
+        tab.role = "tab";
+        tab.id = `tab-mirror-${nodeId}`;
+        tab.setAttribute("data-tab", `mirror-${nodeId}`);
+        tab.setAttribute("aria-controls", `panel-mirror-${nodeId}`);
+        tab.setAttribute("aria-selected", "false");
+        tab.innerHTML = `M${nodeId}<span class="tab-note" data-field="tab-note">…</span>`;
+        tab.addEventListener("click", () => selectSidebarTab(`mirror-${nodeId}`));
+        tabs.appendChild(tab);
+        return tab;
+      }
+
+      document.getElementById("tab-fleet").addEventListener("click", () => selectSidebarTab("fleet"));
+
       function ensureMirrorCard(nodeId) {
-        const grid = document.getElementById("mirror-grid");
-        let card = document.getElementById(`mirror-card-${nodeId}`);
+        ensureMirrorTab(nodeId);
+        const panels = document.querySelector(".sidebar-panels");
+        let card = document.getElementById(`panel-mirror-${nodeId}`);
         if (card) return card;
-        card = document.createElement("div");
-        card.className = "panel mirror-card";
-        card.id = `mirror-card-${nodeId}`;
+        card = document.createElement("section");
+        card.className = "panel sidebar-panel mirror-card";
+        card.id = `panel-mirror-${nodeId}`;
+        card.dataset.mirrorId = String(nodeId);
+        card.setAttribute("role", "tabpanel");
+        card.setAttribute("aria-labelledby", `tab-mirror-${nodeId}`);
         card.innerHTML = `
           <div class="mirror-card-head">
             <h3>Mirror ${nodeId}</h3>
             <span class="pill" data-field="status-pill">…</span>
           </div>
-          <div class="mirror-meta">
-            <div>Homed <strong data-field="homed">…</strong></div>
-            <div>Axes <strong data-field="mode">…</strong></div>
-            <div>Az <strong data-field="az">…</strong></div>
-            <div>El <strong data-field="el">…</strong></div>
-            <div class="span2">Target <strong data-field="target">…</strong></div>
-            <div>Miss <strong data-field="miss">…</strong></div>
-            <div>Fault <strong data-field="fault">none</strong></div>
+          <div class="mirror-stats" data-field="mirror-stats">
+            <span class="stat">az <strong data-field="az">…</strong></span>
+            <span class="stat">el <strong data-field="el">…</strong></span>
+            <span class="stat">miss <strong data-field="miss">…</strong></span>
+            <span class="stat" data-field="fault-wrap" hidden>fault <strong data-field="fault">none</strong></span>
           </div>
           <div class="mirror-actions">
             <div class="mode-switch compact" role="group" aria-label="Mirror ${nodeId} mode">
@@ -1104,11 +1242,11 @@
                     <option value="clear_error">clear_error</option>
                   </select>
                 </div>
-                <div class="protocol-row proto-field" data-fields="set_target">
+                <div class="protocol-row proto-field" data-fields="set_target" hidden>
                   <label>Azimuth °</label>
                   <input data-field="proto-az" type="number" step="0.1" value="0" />
                 </div>
-                <div class="protocol-row proto-field" data-fields="set_target">
+                <div class="protocol-row proto-field" data-fields="set_target" hidden>
                   <label>Elevation °</label>
                   <input data-field="proto-el" type="number" step="0.1" value="0" />
                 </div>
@@ -1119,10 +1257,11 @@
                   <p class="section-label" style="margin:0.35rem 0 0.2rem">Result</p>
                   <div class="protocol-result empty" data-field="proto-result">Send a command to see the result.</div>
                 </div>
-                <div class="protocol-log-tools">
-                  <label>
+                <div class="protocol-log-head">
+                  <p class="section-label">Log</p>
+                  <label title="Hide get_status traffic">
                     <input type="checkbox" data-field="proto-hide-status" />
-                    Hide get_status in log
+                    hide status
                   </label>
                 </div>
                 <div class="protocol-log" data-field="proto-log">No traffic yet.</div>
@@ -1147,7 +1286,9 @@
         });
         bindJogStick(card, String(nodeId));
         bindProtocolConsole(card, String(nodeId));
-        grid.appendChild(card);
+        panels.appendChild(card);
+        // Keep previously selected tab if still valid; otherwise stay on fleet.
+        selectSidebarTab(activeSidebarTab);
         return card;
       }
 
@@ -1169,21 +1310,47 @@
             ? "fault"
             : (status.homed ? `${mirrorMode}${demandNote}` : "not homed");
           statusPill.className = `pill ${pillClass(status.homed, status.fault, status.mode)}`;
-          card.querySelector('[data-field="homed"]').textContent = status.homed ? "yes" : "no";
-          card.querySelector('[data-field="mode"]').textContent = status.mode ?? "—";
-          card.querySelector('[data-field="fault"]').textContent = status.fault ?? "none";
-          card.querySelector('[data-field="az"]').textContent = `${Number(status.azimuth_deg).toFixed(2)}°`;
-          card.querySelector('[data-field="el"]').textContent = `${Number(status.elevation_deg).toFixed(2)}°`;
-          card.querySelector('[data-field="target"]').textContent = target
-            ? `${Number(target.azimuth_deg).toFixed(2)}° / ${Number(target.elevation_deg).toFixed(2)}° (${target.mode})`
-            : "—";
+          const tabNote = document.querySelector(`#tab-mirror-${id} [data-field="tab-note"]`);
+          if (tabNote) {
+            tabNote.textContent = status.fault
+              ? "fault"
+              : (status.homed ? mirrorMode : "home?");
+          }
+          const azNow = Number(status.azimuth_deg).toFixed(1);
+          const elNow = Number(status.elevation_deg).toFixed(1);
+          if (target) {
+            card.querySelector('[data-field="az"]').innerHTML =
+              `${azNow}° <span class="tgt">→ ${Number(target.azimuth_deg).toFixed(1)}°</span>`;
+            card.querySelector('[data-field="el"]').innerHTML =
+              `${elNow}° <span class="tgt">→ ${Number(target.elevation_deg).toFixed(1)}°</span>`;
+          } else {
+            card.querySelector('[data-field="az"]').textContent = `${azNow}°`;
+            card.querySelector('[data-field="el"]').textContent = `${elNow}°`;
+          }
           const miss = missById[id];
           card.querySelector('[data-field="miss"]').textContent =
-            miss === undefined || miss === null ? "—" : Number(miss).toFixed(3);
+            miss === undefined || miss === null ? "—" : `${Number(miss).toFixed(3)} m`;
+          const faultWrap = card.querySelector('[data-field="fault-wrap"]');
+          const faultEl = card.querySelector('[data-field="fault"]');
+          if (status.fault) {
+            faultWrap.hidden = false;
+            faultWrap.classList.add("fault-on");
+            faultEl.textContent = status.fault;
+          } else {
+            faultWrap.hidden = true;
+            faultWrap.classList.remove("fault-on");
+            faultEl.textContent = "none";
+          }
           setActiveModeButtons(card.querySelector(".mode-switch"), mirrorMode);
           bindJogStick(card, id).setVisible(mirrorMode === "jog");
           updateProtocolTraffic(card, id, traffic);
         });
+        // Restore tab once mirrors exist; avoid re-selecting every poll tick.
+        if (!document.getElementById(`panel-${activeSidebarTab}`)) {
+          selectSidebarTab("fleet");
+        } else if (!document.querySelector(`.sidebar-panel.active`)) {
+          selectSidebarTab(activeSidebarTab);
+        }
       }
 
       let refreshInFlight = false;
@@ -1396,8 +1563,12 @@
           mirror.facets.forEach((facet) => addFacet(group, facet, color));
         }
 
-        addRay(group, mirror.incoming.start, mirror.incoming.end, color, 0.55);
-        addRay(group, mirror.reflected.start, mirror.reflected.end, color, 1.0);
+        if (mirror.incoming?.start && mirror.incoming?.end) {
+          addRay(group, mirror.incoming.start, mirror.incoming.end, color, 0.55);
+        }
+        if (mirror.reflected?.start && mirror.reflected?.end) {
+          addRay(group, mirror.reflected.start, mirror.reflected.end, color, 1.0);
+        }
       }
 
       function renderOven(oven) {

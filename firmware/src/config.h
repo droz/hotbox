@@ -38,4 +38,20 @@ constexpr float kPidKd                  = HOTBOX_PID_KD;
 constexpr float kStallVelocityThreshDegS = HOTBOX_STALL_VELOCITY_THRESHOLD_DEG_S;
 constexpr float kStallTimeoutS          = HOTBOX_STALL_TIMEOUT_S;
 
+// Joint limits (from config/system.yaml). Azimuth limits are relative to oven-facing.
+constexpr float kElevationMinDeg = HOTBOX_ELEVATION_MIN_DEG;
+constexpr float kElevationMaxDeg = HOTBOX_ELEVATION_MAX_DEG;
+constexpr float kAzimuthMinDeg = HOTBOX_AZIMUTH_MIN_DEG;
+constexpr float kAzimuthMaxDeg = HOTBOX_AZIMUTH_MAX_DEG;
+
+#if HOTBOX_NODE_ID == 0
+constexpr float kOvenFacingAzimuthDeg = HOTBOX_OVEN_FACING_AZIMUTH_DEG_NODE_0;
+#elif HOTBOX_NODE_ID == 1
+constexpr float kOvenFacingAzimuthDeg = HOTBOX_OVEN_FACING_AZIMUTH_DEG_NODE_1;
+#elif HOTBOX_NODE_ID == 2
+constexpr float kOvenFacingAzimuthDeg = HOTBOX_OVEN_FACING_AZIMUTH_DEG_NODE_2;
+#else
+constexpr float kOvenFacingAzimuthDeg = 0.0f;
+#endif
+
 }  // namespace hotbox

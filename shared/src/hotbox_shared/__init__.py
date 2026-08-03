@@ -20,6 +20,7 @@ from .load import default_system_yaml_path, load_system_constants
 from .mount import (
     MountJointLimits,
     apply_mount_joint_limits,
+    clamp_to_mount_joint_limits,
     dual_mount_angles,
     facet_normal_world,
     heading_and_tilt_from_normal,
@@ -30,6 +31,7 @@ from .mount import (
     pivot_facet_normal_body,
     relative_azimuth_deg,
     within_mount_joint_limits,
+    limited_azimuth_error_deg,
 )
 from .site_time import (
     SitePose,
@@ -72,6 +74,7 @@ __all__ = [
     "as_site_local",
     "bisector_normal",
     "bisector_normal_at_mount",
+    "clamp_to_mount_joint_limits",
     "default_system_yaml_path",
     "dual_mount_angles",
     "ensure_utc",
@@ -81,6 +84,7 @@ __all__ = [
     "heading_and_tilt_from_normal",
     "horizontal_stow_angles",
     "hours_since_site_midnight",
+    "limited_azimuth_error_deg",
     "load_system_constants",
     "local_times_sunrise_to_sunset",
     "mount_az_el_align_body_normal_to_world",
