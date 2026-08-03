@@ -58,7 +58,6 @@ class MirrorFleet:
                     payload={
                         "azimuth_deg": target.azimuth_deg,
                         "elevation_deg": target.elevation_deg,
-                        "mode": target.mode,
                     },
                 )
             )

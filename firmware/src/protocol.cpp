@@ -67,24 +67,8 @@ void ProtocolHandler::handleLine(const String& line) {
     if (el_index >= 0) {
       el = line.substring(el_index + 16).toFloat();
     }
-    const char* mode_text = line.indexOf("\"tracking\"") >= 0 ? "tracking" : "parked";
-    mount_->setTarget(az, el, mode_text);
+    mount_->setTarget(az, el);
     emitAck("set_target", true);
-    return;
-  }
-  if (line.indexOf("\"command\":\"jog\"") >= 0) {
-    int az_index = line.indexOf("\"azimuth_rate_deg_s\":");
-    int el_index = line.indexOf("\"elevation_rate_deg_s\":");
-    float az_rate = 0.0f;
-    float el_rate = 0.0f;
-    if (az_index >= 0) {
-      az_rate = line.substring(az_index + 21).toFloat();
-    }
-    if (el_index >= 0) {
-      el_rate = line.substring(el_index + 23).toFloat();
-    }
-    mount_->jog(az_rate, el_rate);
-    emitAck("jog", true);
     return;
   }
   emitAck("unknown", false);

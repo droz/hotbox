@@ -19,5 +19,6 @@ The firmware implements:
 
 - brushed-axis control with `ESP32Encoder` + `PID_v1`
 - hall-sensor homing
-- acceleration-limited tracking and jog modes
+- position servo (`set_target`); host integrates jog rates into targets
+- status modes: `idle` | `homing` | `position` | `fault`
 - the same JSON command protocol used over USB serial

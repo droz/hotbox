@@ -54,13 +54,7 @@ void BrushedAxis::startHoming() {
 
 void BrushedAxis::setTargetDeg(float target_deg) {
   target_deg_ = target_deg;
-  mode_ = AxisMode::Tracking;
-  clearFault();
-}
-
-void BrushedAxis::setJogRateDegS(float rate_deg_s) {
-  jog_rate_deg_s_ = clampf(rate_deg_s, -kMaxVelocityDegS, kMaxVelocityDegS);
-  mode_ = AxisMode::Jog;
+  mode_ = AxisMode::Position;
   clearFault();
 }
 
@@ -131,13 +125,7 @@ void BrushedAxis::update(float dt_s) {
     return;
   }
 
-  if (mode_ == AxisMode::Jog) {
-    command_velocity_deg_s_ = jog_rate_deg_s_;
-    driveMotor(command_velocity_deg_s_ / kMaxVelocityDegS);
-    return;
-  }
-
-  if (mode_ == AxisMode::Tracking) {
+  if (mode_ == AxisMode::Position) {
     float error_deg = target_deg_ - position_deg_;
     if (enc_a_ == kHorizEncA) {
       error_deg = wrapped_error_deg(target_deg_, position_deg_);
@@ -169,43 +157,45 @@ void MirrorMount::begin() {
 }
 
 void MirrorMount::home() {
-  mode_text_ = "homing";
   azimuth_.startHoming();
   elevation_.startHoming();
+  refreshModeText();
 }
 
 void MirrorMount::stop() {
-  mode_text_ = "idle";
   azimuth_.stop();
   elevation_.stop();
+  refreshModeText();
 }
 
-void MirrorMount::setTarget(float azimuth_deg, float elevation_deg, const char* mode_text) {
-  mode_text_ = mode_text;
+void MirrorMount::setTarget(float azimuth_deg, float elevation_deg) {
   azimuth_.setTargetDeg(azimuth_deg);
   elevation_.setTargetDeg(elevation_deg);
-}
-
-void MirrorMount::jog(float azimuth_rate_deg_s, float elevation_rate_deg_s) {
-  mode_text_ = "jog";
-  azimuth_.setJogRateDegS(azimuth_rate_deg_s);
-  elevation_.setJogRateDegS(elevation_rate_deg_s);
+  refreshModeText();
 }
 
 void MirrorMount::clearError() {
-  mode_text_ = "idle";
   azimuth_.clearFault();
   elevation_.clearFault();
   azimuth_.stop();
   elevation_.stop();
+  refreshModeText();
 }
 
 void MirrorMount::update(float dt_s) {
   azimuth_.update(dt_s);
   elevation_.update(dt_s);
+  refreshModeText();
+}
+
+void MirrorMount::refreshModeText() {
   if (azimuth_.mode() == AxisMode::Fault || elevation_.mode() == AxisMode::Fault) {
     mode_text_ = "fault";
-  } else if (strcmp(mode_text_, "homing") == 0 && isHomed()) {
+  } else if (azimuth_.mode() == AxisMode::Homing || elevation_.mode() == AxisMode::Homing) {
+    mode_text_ = "homing";
+  } else if (azimuth_.mode() == AxisMode::Position || elevation_.mode() == AxisMode::Position) {
+    mode_text_ = "position";
+  } else {
     mode_text_ = "idle";
   }
 }

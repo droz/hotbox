@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from pathlib import Path
+import time
 from typing import Any
 
 from fastapi import FastAPI
@@ -23,6 +24,8 @@ from .transport import LoggingMirrorTransport, MirrorTransport, ProtocolTrafficL
 
 
 class JogRequest(BaseModel):
+    """Host-side jog stick rates. Integrated into ``set_target``; not a wire command."""
+
     node_id: int
     azimuth_rate_deg_s: float = 0.0
     elevation_rate_deg_s: float = 0.0
@@ -40,7 +43,7 @@ class NodeRequest(BaseModel):
 
 
 class ModeRequest(BaseModel):
-    """Supervisor mode: track | park | jog (``manual`` / ``auto`` accepted as aliases)."""
+    """Supervisor mode: track | park | jog | raw (``manual`` / ``auto`` accepted as aliases)."""
 
     mode: str
 
@@ -56,17 +59,13 @@ class HeatDemandRequest(BaseModel):
     enabled: bool
 
 
-class RawModeRequest(BaseModel):
-    """When enabled, the controller issues no automatic wire traffic."""
-
-    enabled: bool
-
-
 class ProtocolCommandRequest(BaseModel):
     """Low-level wire command for mirror controllers (bypasses supervisor helpers).
 
-    Commands: home, stop, set_target, jog, get_status, clear_error, set_mode, discover.
+    Commands: home, stop, set_target, get_status, clear_error, discover.
     ``discover`` rediscovers the fleet and ignores ``node_id``.
+    Put the mirror in supervisor ``raw`` mode so Track/Park/Jog do not overwrite
+    wire commands. Jog stick rates are a host API only (integrated into ``set_target``).
     """
 
     command: str
@@ -75,13 +74,10 @@ class ProtocolCommandRequest(BaseModel):
     azimuth_deg: float | None = None
     elevation_deg: float | None = None
     mode: str | None = None
-    # jog
-    azimuth_rate_deg_s: float | None = None
-    elevation_rate_deg_s: float | None = None
 
 
 # Canonical modes. ``auto`` → track, ``manual`` → jog.
-SUPERVISOR_MODES = frozenset({"track", "park", "jog"})
+SUPERVISOR_MODES = frozenset({"track", "park", "jog", "raw"})
 
 # Wire-protocol commands exposed by the low-level console (plus transport discover).
 PROTOCOL_COMMANDS = frozenset(
@@ -89,10 +85,8 @@ PROTOCOL_COMMANDS = frozenset(
         CommandName.HOME.value,
         CommandName.STOP.value,
         CommandName.SET_TARGET.value,
-        CommandName.JOG.value,
         CommandName.GET_STATUS.value,
         CommandName.CLEAR_ERROR.value,
-        CommandName.SET_MODE.value,
         CommandName.DISCOVER.value,
     }
 )
@@ -123,10 +117,12 @@ class ControllerApplication:
         self._true_geometry: dict[str, Any] | None = None
         # Simulated oven heat-demand relay. When False, Track mirrors park (product behavior).
         self.heat_demand = True
-        # Raw mode: no automatic set_target / status polls — only user-initiated sends.
-        self.raw_mode = False
-        # Per-mirror supervisor mode (track|park|jog). Fleet switcher sets all of these.
+        # Per-mirror supervisor mode (track|park|jog|raw). Fleet switcher sets all of these.
         self._node_modes: dict[int, str] = {}
+        # Host-side jog: rates (°/s) integrated into position targets (no wire jog command).
+        self._jog_rates: dict[int, tuple[float, float]] = {}
+        self._jog_pose: dict[int, tuple[float, float]] = {}
+        self._jog_last_mono: dict[int, float] = {}
         self.fastapi = self._build_fastapi()
 
     def node_mode(self, node_id: int) -> str:
@@ -169,13 +165,17 @@ class ControllerApplication:
         """Simulate the oven heat-demand relay (True = oven wants power)."""
         self.heat_demand = bool(enabled)
 
-    def set_raw_mode(self, enabled: bool) -> None:
-        """Disable automatic wire traffic so only explicit user commands are sent."""
-        self.raw_mode = bool(enabled)
-
-    def _cached_statuses(self) -> dict[int, Any]:
-        """Last known mirror statuses without issuing get_status on the wire."""
-        return {node_id: node.status for node_id, node in self.fleet.nodes().items()}
+    def _poll_statuses(self) -> dict[int, Any]:
+        """Poll non-raw mirrors; reuse cache for raw (no automatic get_status)."""
+        out: dict[int, Any] = {}
+        for node_id, node in self.fleet.nodes().items():
+            if self.node_mode(node_id) == "raw":
+                out[node_id] = node.status
+            else:
+                status = self.transport.poll_status(node_id)
+                node.status = status
+                out[node_id] = status
+        return out
 
     def _tracking_kwargs(self) -> dict[str, float | int | bool | object]:
         mirror = self.config.mirror
@@ -224,39 +224,82 @@ class ControllerApplication:
         if key == "manual":
             return "jog"
         if key not in SUPERVISOR_MODES:
-            raise ValueError(f"unsupported supervisor mode: {mode!r} (want track|park|jog)")
+            raise ValueError(f"unsupported supervisor mode: {mode!r} (want track|park|jog|raw)")
         return key
 
     def set_mode(self, mode: str) -> None:
-        """Set Track/Park/Jog on every discovered mirror."""
+        """Set Track/Park/Jog/Raw on every discovered mirror."""
         normalized = self.normalize_supervisor_mode(mode)
         previous = {int(node_id): self.node_mode(node_id) for node_id in self.fleet.nodes()}
         for node_id in self.fleet.nodes():
             self._set_node_mode(int(node_id), normalized, apply_immediate=False)
         if normalized == "park":
             self._apply_park_all()
-        elif normalized == "track":
+        elif normalized == "jog":
+            for node_id, prev in previous.items():
+                if prev != "jog":
+                    self._seed_jog_hold(node_id)
+        elif normalized in {"track", "raw"}:
             for node_id, prev in previous.items():
                 if prev == "jog":
                     self._halt_jog_rates(node_id)
 
     def set_mirror_mode(self, node_id: int, mode: str) -> None:
-        """Set Track/Park/Jog for one mirror."""
+        """Set Track/Park/Jog/Raw for one mirror."""
         node_id = int(node_id)
         previous = self.node_mode(node_id)
         normalized = self.normalize_supervisor_mode(mode)
         self._set_node_mode(node_id, normalized, apply_immediate=True)
-        if normalized == "track" and previous == "jog":
+        if normalized in {"track", "raw"} and previous == "jog":
             self._halt_jog_rates(node_id)
 
     def _halt_jog_rates(self, node_id: int) -> None:
-        """Zero jog rates without changing supervisor mode."""
-        self.transport.send(
-            MirrorCommand(
-                node_id=int(node_id),
-                command=CommandName.JOG,
-                payload={"azimuth_rate_deg_s": 0.0, "elevation_rate_deg_s": 0.0},
-            )
+        """Zero host jog rates without changing supervisor mode or releasing the hold pose."""
+        node_id = int(node_id)
+        self._jog_rates[node_id] = (0.0, 0.0)
+        self._jog_last_mono[node_id] = time.monotonic()
+
+    def _seed_jog_hold(self, node_id: int) -> None:
+        """Capture current pose and command the firmware to hold it (position servo)."""
+        node_id = int(node_id)
+        node = self.fleet.nodes().get(node_id)
+        if node is None:
+            return
+        status = node.status
+        az = float(status.azimuth_deg)
+        el = float(status.elevation_deg)
+        self._jog_pose[node_id] = (az, el)
+        self._jog_rates[node_id] = (0.0, 0.0)
+        self._jog_last_mono[node_id] = time.monotonic()
+        self.fleet.apply_targets(
+            {node_id: TrackingTarget(azimuth_deg=az, elevation_deg=el, mode="tracking")}
+        )
+
+    def _advance_jog(self, node_id: int, *, status: Any | None = None) -> None:
+        """Integrate jog rates into a position target and send ``set_target`` if moving."""
+        node_id = int(node_id)
+        if self.node_mode(node_id) != "jog":
+            return
+        az_rate, el_rate = self._jog_rates.get(node_id, (0.0, 0.0))
+        now = time.monotonic()
+        last = self._jog_last_mono.get(node_id, now)
+        dt = min(max(now - last, 0.0), 0.25)
+        self._jog_last_mono[node_id] = now
+        if abs(az_rate) < 1e-9 and abs(el_rate) < 1e-9:
+            return
+        pose = self._jog_pose.get(node_id)
+        if pose is None:
+            if status is None:
+                node = self.fleet.nodes().get(node_id)
+                status = None if node is None else node.status
+            if status is None:
+                return
+            pose = (float(status.azimuth_deg), float(status.elevation_deg))
+        az = pose[0] + az_rate * dt
+        el = pose[1] + el_rate * dt
+        self._jog_pose[node_id] = (az, el)
+        self.fleet.apply_targets(
+            {node_id: TrackingTarget(azimuth_deg=az, elevation_deg=el, mode="tracking")}
         )
 
     def _set_node_mode(self, node_id: int, mode: str, *, apply_immediate: bool) -> None:
@@ -265,9 +308,12 @@ class ControllerApplication:
         if not apply_immediate:
             return
         if mode == "park":
+            self._halt_jog_rates(node_id)
             self.fleet.apply_targets({node_id: safe_park(self.config.oven)})
         elif mode == "jog" and previous != "jog":
-            self.fleet.stop(node_id)
+            self._seed_jog_hold(node_id)
+        elif mode in {"track", "raw"}:
+            self._halt_jog_rates(node_id)
 
     def _apply_park_all(self) -> None:
         target = safe_park(self.config.oven)
@@ -291,13 +337,14 @@ class ControllerApplication:
         tracking: dict[int, TrackingTarget],
     ) -> TrackingTarget | None:
         """
-        Closed-loop command for one mirror, or None when Jog (operator owns the axes).
+        Closed-loop command for one mirror, or None when Jog/Raw (operator owns the axes).
 
         Track + heat demand → aim at absorber. Track without demand → aim above absorber.
         Park → face-up stow (az/el from config, default 0°/0°).
+        Raw → no automatic commands (protocol console only).
         """
         mode = self.node_mode(node_id)
-        if mode == "jog":
+        if mode in {"jog", "raw"}:
             return None
         if mode == "park":
             return safe_park(self.config.oven)
@@ -315,16 +362,27 @@ class ControllerApplication:
                 node_id, sun=sun, statuses=statuses, tracking=tracking
             )
             if desired is None:
-                # Jog: keep last computed tracking pose for scene preview only.
-                out[node_id] = tracking[node_id]
+                # Jog/Raw: show hold pose or last tracking estimate for scene preview.
+                pose = self._jog_pose.get(int(node_id))
+                if pose is not None and self.node_mode(node_id) == "jog":
+                    out[node_id] = TrackingTarget(
+                        azimuth_deg=pose[0], elevation_deg=pose[1], mode="tracking"
+                    )
+                else:
+                    status = statuses.get(node_id)
+                    if status is not None:
+                        out[node_id] = TrackingTarget(
+                            azimuth_deg=float(status.azimuth_deg),
+                            elevation_deg=float(status.elevation_deg),
+                            mode="tracking",
+                        )
+                    else:
+                        out[node_id] = tracking[node_id]
             else:
                 out[node_id] = desired
         return out
 
     def control_tick(self) -> None:
-        if self.raw_mode:
-            # Raw mode: do not poll or command mirrors from the closed-loop tick.
-            return
         fix = self.gps.current_fix()
         if fix.valid:
             self.sun = SunService(
@@ -336,15 +394,18 @@ class ControllerApplication:
                 )
             )
         sun = self.sun.sun_vector(fix.when_utc)
-        statuses = self.fleet.poll()
+        statuses = self._poll_statuses()
         tracking = self._tracking_targets(sun, statuses, target_world=self._track_aim_point())
         for node_id in self.fleet.nodes():
+            if self.node_mode(node_id) == "raw":
+                continue
             if not statuses[node_id].homed:
                 continue
             desired = self._desired_target_for_node(
                 node_id, sun=sun, statuses=statuses, tracking=tracking
             )
             if desired is None:
+                self._advance_jog(node_id, status=statuses[node_id])
                 continue
             self.fleet.apply_targets({node_id: desired})
 
@@ -360,8 +421,7 @@ class ControllerApplication:
                 )
             )
         sun = self.sun.sun_vector(fix.when_utc)
-        # In raw mode, reuse cached status so /api/state does not flood get_status.
-        statuses = self._cached_statuses() if self.raw_mode else self.fleet.poll()
+        statuses = self._poll_statuses()
         targets = self._command_targets(sun, statuses)
         mirror_modes = {str(node_id): self.node_mode(node_id) for node_id in self.fleet.nodes()}
 
@@ -380,7 +440,6 @@ class ControllerApplication:
             "timestamp_utc": utc_now().isoformat(),
             "mode": self.mode,
             "heat_demand": self.heat_demand,
-            "raw_mode": self.raw_mode,
             "mirror_modes": mirror_modes,
             "gps": fix.as_dict(),
             "sun": {
@@ -431,30 +490,27 @@ class ControllerApplication:
         )
 
     def jog(self, request: JogRequest) -> None:
+        """Update host-side jog rates; nonzero rates enter Jog and stream ``set_target``."""
+        node_id = int(request.node_id)
         az = float(request.azimuth_rate_deg_s)
         el = float(request.elevation_rate_deg_s)
         # Only enter Jog mode when commanding motion. A zero-rate "stop" must not
         # override a concurrent Track/Park mode change (UI races on stick release).
         if abs(az) > 1e-9 or abs(el) > 1e-9:
-            self._node_modes[int(request.node_id)] = "jog"
-        self.transport.send(
-            MirrorCommand(
-                node_id=request.node_id,
-                command=CommandName.JOG,
-                payload={
-                    "azimuth_rate_deg_s": az,
-                    "elevation_rate_deg_s": el,
-                },
-            )
-        )
+            previous = self.node_mode(node_id)
+            self._node_modes[node_id] = "jog"
+            if previous != "jog" or node_id not in self._jog_pose:
+                self._seed_jog_hold(node_id)
+        self._jog_rates[node_id] = (az, el)
+        if self.node_mode(node_id) == "jog":
+            self._advance_jog(node_id)
 
     def send_protocol_command(self, request: ProtocolCommandRequest) -> dict[str, Any]:
         """Send a raw protocol command to a mirror (or rediscover the fleet).
 
         This bypasses supervisor helpers such as Track/Park mode transitions. Useful
-        for exercising the wire protocol from the UI. Enable ``raw_mode`` to stop the
-        control loop / state poll from issuing automatic wire traffic; otherwise
-        Track/Park may overwrite ``set_target`` on the next ``control_tick``.
+        for exercising the wire protocol from the UI. Put the mirror in ``raw`` mode
+        so the control loop does not overwrite ``set_target`` or auto-poll status.
         """
         command_name = str(request.command).strip().lower()
         if command_name not in PROTOCOL_COMMANDS:
@@ -489,19 +545,7 @@ class ControllerApplication:
             payload = {
                 "azimuth_deg": float(request.azimuth_deg if request.azimuth_deg is not None else 0.0),
                 "elevation_deg": float(request.elevation_deg if request.elevation_deg is not None else 0.0),
-                "mode": str(request.mode or "tracking"),
             }
-        elif command_name == CommandName.JOG.value:
-            payload = {
-                "azimuth_rate_deg_s": float(
-                    request.azimuth_rate_deg_s if request.azimuth_rate_deg_s is not None else 0.0
-                ),
-                "elevation_rate_deg_s": float(
-                    request.elevation_rate_deg_s if request.elevation_rate_deg_s is not None else 0.0
-                ),
-            }
-        elif command_name == CommandName.SET_MODE.value:
-            payload = {"mode": str(request.mode or "idle")}
 
         command = MirrorCommand(node_id=node_id, command=CommandName(command_name), payload=payload)
         if command_name == CommandName.GET_STATUS.value:
@@ -594,11 +638,6 @@ class ControllerApplication:
         def api_heat_demand(request: HeatDemandRequest) -> dict[str, Any]:
             self.set_heat_demand(request.enabled)
             return {"status": "ok", "heat_demand": self.heat_demand}
-
-        @app.post("/api/raw_mode")
-        def api_raw_mode(request: RawModeRequest) -> dict[str, Any]:
-            self.set_raw_mode(request.enabled)
-            return {"status": "ok", "raw_mode": self.raw_mode}
 
         @app.post("/api/auto")
         def auto() -> dict[str, Any]:

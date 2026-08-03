@@ -39,9 +39,11 @@ def test_fleet_and_mirror_modes() -> None:
     app.set_mode("jog")
     assert app.mode == "jog"
     assert app.node_mode(1) == "jog"
+    # Entering jog seeds a hold pose via set_target (no wire jog command).
+    assert any(c.command == CommandName.SET_TARGET for c in transport.sent)
     before = len(transport.sent)
     app.control_tick()
-    # Jog mirrors receive no closed-loop SET_TARGET.
+    # Jog with zero rates: no additional closed-loop SET_TARGET from track/park.
     assert not any(c.command == CommandName.SET_TARGET for c in transport.sent[before:])
 
     app.set_mirror_mode(0, "park")
@@ -64,7 +66,6 @@ def test_heat_demand_diverts_above_absorber() -> None:
     diverted = [c for c in transport.sent if c.command == CommandName.SET_TARGET]
     assert diverted
     divert_pose = (diverted[0].payload["azimuth_deg"], diverted[0].payload["elevation_deg"])
-    divert_mode = diverted[0].payload.get("mode")
 
     transport.sent.clear()
     app.set_heat_demand(True)
@@ -72,16 +73,18 @@ def test_heat_demand_diverts_above_absorber() -> None:
     on_absorber = [c for c in transport.sent if c.command == CommandName.SET_TARGET]
     assert on_absorber
     absorber_pose = (on_absorber[0].payload["azimuth_deg"], on_absorber[0].payload["elevation_deg"])
-    absorber_mode = on_absorber[0].payload.get("mode")
 
-    if absorber_mode == "parked":
-        # Sun below horizon: both paths face-up stow.
-        assert divert_mode == "parked"
+    app.set_heat_demand(False)
+    divert_target = app.current_snapshot()["targets"]["0"]
+    app.set_heat_demand(True)
+    absorber_target = app.current_snapshot()["targets"]["0"]
+    if absorber_target["mode"] == "parked":
+        assert divert_target["mode"] == "parked"
         assert divert_pose == (0.0, 0.0)
         assert absorber_pose == (0.0, 0.0)
     else:
-        assert divert_mode == "tracking"
-        assert absorber_mode == "tracking"
+        assert divert_target["mode"] == "tracking"
+        assert absorber_target["mode"] == "tracking"
         assert divert_pose != absorber_pose
 
 
@@ -93,7 +96,8 @@ def test_park_is_face_up_identity() -> None:
     assert parks
     assert all(c.payload.get("azimuth_deg") == 0.0 for c in parks)
     assert all(c.payload.get("elevation_deg") == 0.0 for c in parks)
-    assert all(c.payload.get("mode") == "parked" for c in parks)
+    assert "mode" not in parks[0].payload
+    assert all(t["mode"] == "parked" for t in app.current_snapshot()["targets"].values())
 
 
 def test_zero_rate_jog_does_not_override_track_mode() -> None:
@@ -112,6 +116,24 @@ def test_zero_rate_jog_does_not_override_track_mode() -> None:
 
     app.jog(JogRequest(node_id=0, azimuth_rate_deg_s=2.0, elevation_rate_deg_s=0.0))
     assert app.node_mode(0) == "jog"
+
+
+def test_jog_integrates_into_set_target() -> None:
+    from hotbox_controller.app import JogRequest
+    import time
+
+    app, transport = _app()
+    transport.sent.clear()
+    app.jog(JogRequest(node_id=0, azimuth_rate_deg_s=10.0, elevation_rate_deg_s=0.0))
+    assert app.node_mode(0) == "jog"
+    # Seed hold + possible first integrate (dt may be ~0).
+    assert any(c.command == CommandName.SET_TARGET for c in transport.sent)
+    time.sleep(0.05)
+    transport.sent.clear()
+    app.control_tick()
+    moved = [c for c in transport.sent if c.command == CommandName.SET_TARGET and c.node_id == 0]
+    assert moved
+    assert moved[-1].payload["azimuth_deg"] != 10.0  # left the seed pose (status was 10°)
 
 
 def test_set_mode_rejects_unknown() -> None:
@@ -140,19 +162,12 @@ def test_send_protocol_command_raw_wire() -> None:
             node_id=1,
             azimuth_deg=12.5,
             elevation_deg=34.0,
-            mode="parked",
         )
     )
     assert target["payload"]["azimuth_deg"] == 12.5
     assert target["payload"]["elevation_deg"] == 34.0
-    assert target["payload"]["mode"] == "parked"
+    assert "mode" not in target["payload"]
     assert transport.sent[-1].command == CommandName.SET_TARGET
-
-    jog = app.send_protocol_command(
-        ProtocolCommandRequest(command="jog", node_id=0, azimuth_rate_deg_s=1.5, elevation_rate_deg_s=-0.5)
-    )
-    assert jog["payload"]["azimuth_rate_deg_s"] == 1.5
-    assert transport.sent[-1].command == CommandName.JOG
 
     status = app.send_protocol_command(ProtocolCommandRequest(command="get_status", node_id=0))
     assert status["mirror_status"]["node_id"] == 0
@@ -161,10 +176,6 @@ def test_send_protocol_command_raw_wire() -> None:
     cleared = app.send_protocol_command(ProtocolCommandRequest(command="clear_error", node_id=0))
     assert cleared["command"] == "clear_error"
     assert transport.sent[-1].command == CommandName.CLEAR_ERROR
-
-    mode = app.send_protocol_command(ProtocolCommandRequest(command="set_mode", node_id=0, mode="idle"))
-    assert mode["payload"]["mode"] == "idle"
-    assert transport.sent[-1].command == CommandName.SET_MODE
 
     discovered = app.send_protocol_command(ProtocolCommandRequest(command="discover"))
     assert {n["node_id"] for n in discovered["nodes"]} == {0, 1}
@@ -175,7 +186,7 @@ def test_send_protocol_command_rejects_unknown() -> None:
 
     app, _transport = _app()
     try:
-        app.send_protocol_command(ProtocolCommandRequest(command="explode", node_id=0))
+        app.send_protocol_command(ProtocolCommandRequest(command="jog", node_id=0))
         assert False, "expected ValueError"
     except ValueError as exc:
         assert "unknown protocol command" in str(exc)
@@ -200,34 +211,46 @@ def test_raw_mode_stops_automatic_wire_traffic() -> None:
 
     app, transport = _app()
     app.set_mode("track")
-    app.set_raw_mode(True)
-    assert app.raw_mode is True
-    assert app.current_snapshot()["raw_mode"] is True
+    app.set_mirror_mode(0, "raw")
+    assert app.node_mode(0) == "raw"
+    assert app.node_mode(1) == "track"
+    assert app.mode == "mixed"
+    assert app.current_snapshot()["mirror_modes"]["0"] == "raw"
 
     transport.sent.clear()
     transport.polls.clear()
     app.control_tick()
-    assert transport.sent == []
-    assert transport.polls == []
+    # Raw node is not polled or commanded; track node still is.
+    assert 0 not in transport.polls
+    assert 1 in transport.polls
+    assert not any(c.node_id == 0 for c in transport.sent)
+    assert any(c.command == CommandName.SET_TARGET and c.node_id == 1 for c in transport.sent)
 
     transport.polls.clear()
-    snap = app.current_snapshot()
-    assert snap["raw_mode"] is True
-    assert transport.polls == []
+    app.current_snapshot()
+    assert 0 not in transport.polls
+    assert 1 in transport.polls
 
-    # Explicit protocol sends still work.
     app.send_protocol_command(
         ProtocolCommandRequest(
             command="set_target",
             node_id=0,
             azimuth_deg=1.0,
             elevation_deg=2.0,
-            mode="tracking",
         )
     )
     assert transport.sent[-1].command == CommandName.SET_TARGET
+    assert transport.sent[-1].node_id == 0
 
-    app.set_raw_mode(False)
+    app.set_mode("raw")
+    assert app.mode == "raw"
+    transport.sent.clear()
+    transport.polls.clear()
+    app.control_tick()
+    assert transport.sent == []
+    assert transport.polls == []
+
+    app.set_mode("track")
     transport.sent.clear()
     transport.polls.clear()
     app.control_tick()

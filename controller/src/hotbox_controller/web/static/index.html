@@ -137,11 +137,12 @@
       }
       .mode-switch {
         display: grid;
-        grid-template-columns: repeat(3, 1fr);
+        grid-template-columns: repeat(4, 1fr);
         gap: 0.3rem;
       }
       .mode-switch.compact {
         margin-bottom: 0.45rem;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
       }
       .mode-switch button {
         font-weight: 600;
@@ -427,6 +428,25 @@
         line-height: 1.35;
         color: var(--muted);
       }
+      .protocol-result {
+        margin-top: 0.35rem;
+        border: 1px solid #2a3540;
+        border-radius: 8px;
+        background: #0f1419;
+        padding: 0.4rem 0.5rem;
+        font-size: 0.7rem;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        white-space: pre-wrap;
+        color: #b8e0a8;
+        max-height: 8rem;
+        overflow: auto;
+      }
+      .protocol-result.empty {
+        color: var(--muted);
+      }
+      .protocol-result.error {
+        color: #ffb4a8;
+      }
       .protocol-log {
         margin: 0.35rem 0 0;
         max-height: 9rem;
@@ -531,21 +551,14 @@
             <button type="button" class="toggle" id="btn-heat-demand" aria-pressed="false" title="Toggle oven heat demand"></button>
           </div>
 
-          <div class="demand-row">
-            <div class="label">
-              <strong>Raw mode</strong>
-              <span id="raw-hint">Off: controller polls status and Track/Park send targets each tick.</span>
-            </div>
-            <button type="button" class="toggle" id="btn-raw-mode" aria-pressed="false" title="Toggle raw protocol mode"></button>
-          </div>
-
           <p class="field-label">All mirrors</p>
           <div class="mode-switch" role="group" aria-label="Fleet mode">
             <button type="button" id="btn-mode-track" data-mode="track">Track</button>
             <button type="button" id="btn-mode-park" data-mode="park">Park</button>
             <button type="button" id="btn-mode-jog" data-mode="jog">Jog</button>
+            <button type="button" id="btn-mode-raw" data-mode="raw">Raw</button>
           </div>
-          <p class="mode-hint" id="mode-hint">Track aims at the absorber when the oven wants heat. Park holds the safe pose. Jog unlocks the pads.</p>
+          <p class="mode-hint" id="mode-hint">Track aims at the absorber when the oven wants heat. Park holds the safe pose. Jog unlocks the pads. Raw is protocol-only.</p>
           <div class="controls">
             <button id="btn-home-all" class="tiny">Home all</button>
           </div>
@@ -670,13 +683,14 @@
         track: "All mirrors aim at the absorber when heat demand is on; when off they divert light above it. Park is face-up (0°, 0°).",
         park: "All mirrors hold face-up stow (azimuth 0°, elevation 0°).",
         jog: "Operator control on every mirror. Use each pad, then switch back to Track or Park.",
+        raw: "Protocol-only: no automatic get_status / set_target. Send wire commands from each mirror’s Protocol section.",
         mixed: "Mirrors are in different modes. Use All mirrors or a card switcher to unify them.",
       };
 
       function normalizeMode(mode) {
         if (mode === "auto") return "track";
         if (mode === "manual") return "jog";
-        if (mode === "track" || mode === "park" || mode === "jog" || mode === "mixed") return mode;
+        if (mode === "track" || mode === "park" || mode === "jog" || mode === "raw" || mode === "mixed") return mode;
         return "jog";
       }
 
@@ -692,7 +706,9 @@
         setActiveModeButtons(document.querySelector(".sidebar-top .mode-switch"), current);
         const pill = document.getElementById("mode-pill");
         pill.textContent = current;
-        pill.className = `pill ${current === "track" ? "ok" : current === "park" ? "warn" : ""}`;
+        pill.className = `pill ${
+          current === "track" ? "ok" : current === "park" || current === "raw" ? "warn" : ""
+        }`;
         document.getElementById("mode-hint").textContent = MODE_HINTS[current] || MODE_HINTS.mixed;
       }
 
@@ -703,15 +719,6 @@
         document.getElementById("demand-hint").textContent = enabled
           ? "Oven wants power → Track mirrors aim at the absorber."
           : "Oven idle → Track mirrors divert to a spot above the absorber.";
-      }
-
-      function updateRawModeUi(enabled) {
-        const btn = document.getElementById("btn-raw-mode");
-        btn.classList.toggle("on", !!enabled);
-        btn.setAttribute("aria-pressed", enabled ? "true" : "false");
-        document.getElementById("raw-hint").textContent = enabled
-          ? "On: no automatic get_status / set_target. Send wire commands via Protocol (or Home / Track / Jog buttons)."
-          : "Off: controller polls status and Track/Park send targets each tick.";
       }
 
       async function setFleetMode(mode) {
@@ -739,12 +746,6 @@
         refreshState();
       }
 
-      async function setRawMode(enabled) {
-        updateRawModeUi(enabled);
-        await post("/api/raw_mode", { enabled: !!enabled });
-        refreshState();
-      }
-
       document.getElementById("btn-home-all").onclick = () =>
         post("/api/home").then(() => refreshState()).catch(console.error);
       document.getElementById("btn-mode-track").onclick = () =>
@@ -753,13 +754,11 @@
         setFleetMode("park").catch(console.error);
       document.getElementById("btn-mode-jog").onclick = () =>
         setFleetMode("jog").catch(console.error);
+      document.getElementById("btn-mode-raw").onclick = () =>
+        setFleetMode("raw").catch(console.error);
       document.getElementById("btn-heat-demand").onclick = () => {
         const next = !document.getElementById("btn-heat-demand").classList.contains("on");
         setHeatDemand(next).catch(console.error);
-      };
-      document.getElementById("btn-raw-mode").onclick = () => {
-        const next = !document.getElementById("btn-raw-mode").classList.contains("on");
-        setRawMode(next).catch(console.error);
       };
 
       const HIDE_STATUS_KEY = "hotbox.hideGetStatus";
@@ -784,13 +783,47 @@
           const fields = (row.getAttribute("data-fields") || "").split(/\s+/).filter(Boolean);
           row.hidden = !fields.includes(command);
         });
-        const modeInput = card.querySelector('[data-field="proto-mode"]');
-        if (!modeInput) return;
-        if (command === "set_mode" && (!modeInput.value || modeInput.value === "tracking")) {
-          modeInput.value = "idle";
-        } else if (command === "set_target" && (!modeInput.value || modeInput.value === "idle")) {
-          modeInput.value = "tracking";
+        const result = card.querySelector('[data-field="proto-result"]');
+        if (!result) return;
+        const stored = card.dataset.protoLastResult;
+        const storedCmd = card.dataset.protoLastCommand;
+        if (stored && storedCmd === command) {
+          result.textContent = stored;
+          result.classList.toggle("error", card.dataset.protoLastError === "1");
+          result.classList.remove("empty");
+        } else if (command === "get_status") {
+          result.textContent = "Send to fetch mirror status.";
+          result.classList.add("empty");
+          result.classList.remove("error");
+        } else if (command === "set_target") {
+          result.textContent = "Set az/el above, then Send.";
+          result.classList.add("empty");
+          result.classList.remove("error");
+        } else {
+          result.textContent = "No arguments — Send to run.";
+          result.classList.add("empty");
+          result.classList.remove("error");
         }
+      }
+
+      function formatProtocolResult(command, response) {
+        if (command === "get_status" && response?.mirror_status) {
+          const s = response.mirror_status;
+          return [
+            `homed: ${s.homed}`,
+            `mode: ${s.mode}`,
+            `az: ${Number(s.azimuth_deg).toFixed(3)}°`,
+            `el: ${Number(s.elevation_deg).toFixed(3)}°`,
+            `fault: ${s.fault ?? "none"}`,
+          ].join("\n");
+        }
+        if (command === "set_target" && response?.payload) {
+          return `ok → az ${Number(response.payload.azimuth_deg).toFixed(3)}° / el ${Number(response.payload.elevation_deg).toFixed(3)}°`;
+        }
+        if (response?.status === "ok") {
+          return `ok · ${command}`;
+        }
+        return JSON.stringify(response, null, 2);
       }
 
       function formatTrafficLine(entry) {
@@ -833,14 +866,13 @@
         if (command === "set_target") {
           body.azimuth_deg = Number(card.querySelector('[data-field="proto-az"]').value);
           body.elevation_deg = Number(card.querySelector('[data-field="proto-el"]').value);
-          body.mode = card.querySelector('[data-field="proto-mode"]').value || "tracking";
-        } else if (command === "jog") {
-          body.azimuth_rate_deg_s = Number(card.querySelector('[data-field="proto-az-rate"]').value);
-          body.elevation_rate_deg_s = Number(card.querySelector('[data-field="proto-el-rate"]').value);
-        } else if (command === "set_mode") {
-          body.mode = card.querySelector('[data-field="proto-mode"]').value || "idle";
         }
-        await post("/api/protocol", body);
+        const response = await post("/api/protocol", body);
+        const text = formatProtocolResult(command, response);
+        card.dataset.protoLastCommand = command;
+        card.dataset.protoLastResult = text;
+        card.dataset.protoLastError = "0";
+        updateProtocolFields(card);
         refreshState();
       }
 
@@ -851,8 +883,10 @@
         commandSelect.addEventListener("change", () => updateProtocolFields(card));
         card.querySelector('[data-field="proto-send"]').addEventListener("click", () => {
           sendProtocolCommand(card, nodeId).catch((err) => {
-            const log = card.querySelector('[data-field="proto-log"]');
-            log.innerHTML = `<div class="tx">error: ${err}</div>` + log.innerHTML;
+            card.dataset.protoLastCommand = card.querySelector('[data-field="proto-command"]').value;
+            card.dataset.protoLastResult = String(err);
+            card.dataset.protoLastError = "1";
+            updateProtocolFields(card);
           });
         });
         const hideBox = card.querySelector('[data-field="proto-hide-status"]');
@@ -869,7 +903,7 @@
       function pillClass(homed, fault, mode) {
         if (fault) return "bad";
         if (!homed) return "warn";
-        if (mode === "tracking" || mode === "idle" || mode === "parked") return "ok";
+        if (mode === "position" || mode === "idle" || mode === "homing") return "ok";
         return "";
       }
 
@@ -1036,6 +1070,7 @@
               <button type="button" class="tiny" data-mode="track">Track</button>
               <button type="button" class="tiny" data-mode="park">Park</button>
               <button type="button" class="tiny" data-mode="jog">Jog</button>
+              <button type="button" class="tiny" data-mode="raw">Raw</button>
             </div>
             <div class="jog-stick-wrap" data-field="jog-wrap" hidden>
               <div class="jog-stick" data-field="jog-stick" role="application" aria-label="Jog stick for mirror ${nodeId}">
@@ -1055,9 +1090,8 @@
             <details class="protocol">
               <summary>Protocol</summary>
               <p class="protocol-hint">
-                Raw wire commands for this mirror. Live TX/RX traffic appears below.
-                Enable <strong>Raw mode</strong> (top panel) to stop automatic polls/targets —
-                otherwise Track/Park may overwrite <code>set_target</code> each tick.
+                Wire commands for this mirror. Use supervisor <strong>Raw</strong> so Track/Park
+                do not overwrite targets or auto-poll status.
               </p>
               <div class="protocol-form">
                 <div class="protocol-row">
@@ -1066,10 +1100,8 @@
                     <option value="home">home</option>
                     <option value="stop">stop</option>
                     <option value="set_target">set_target</option>
-                    <option value="jog">jog</option>
                     <option value="get_status">get_status</option>
                     <option value="clear_error">clear_error</option>
-                    <option value="set_mode">set_mode</option>
                   </select>
                 </div>
                 <div class="protocol-row proto-field" data-fields="set_target">
@@ -1080,25 +1112,17 @@
                   <label>Elevation °</label>
                   <input data-field="proto-el" type="number" step="0.1" value="0" />
                 </div>
-                <div class="protocol-row proto-field" data-fields="set_target set_mode">
-                  <label>Mode</label>
-                  <input data-field="proto-mode" type="text" value="tracking" placeholder="tracking | parked | idle" />
-                </div>
-                <div class="protocol-row proto-field" data-fields="jog">
-                  <label>Az rate °/s</label>
-                  <input data-field="proto-az-rate" type="number" step="0.1" value="0" />
-                </div>
-                <div class="protocol-row proto-field" data-fields="jog">
-                  <label>El rate °/s</label>
-                  <input data-field="proto-el-rate" type="number" step="0.1" value="0" />
-                </div>
                 <div class="protocol-actions">
                   <button type="button" class="tiny" data-field="proto-send">Send</button>
+                </div>
+                <div class="proto-result-wrap">
+                  <p class="section-label" style="margin:0.35rem 0 0.2rem">Result</p>
+                  <div class="protocol-result empty" data-field="proto-result">Send a command to see the result.</div>
                 </div>
                 <div class="protocol-log-tools">
                   <label>
                     <input type="checkbox" data-field="proto-hide-status" />
-                    Hide get_status
+                    Hide get_status in log
                   </label>
                 </div>
                 <div class="protocol-log" data-field="proto-log">No traffic yet.</div>
@@ -1174,7 +1198,6 @@
           document.getElementById("state").textContent = JSON.stringify(state, null, 2);
           updateFleetModeUi(state.mode);
           updateHeatDemandUi(!!state.heat_demand);
-          updateRawModeUi(!!state.raw_mode);
           const gps = state.gps || {};
           document.getElementById("gps-pill").textContent = gps.valid
             ? `${gps.source} · ${Number(gps.latitude_deg).toFixed(4)}, ${Number(gps.longitude_deg).toFixed(4)}`

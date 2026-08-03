@@ -9,6 +9,12 @@ from .actuator import ActuatorModel
 
 @dataclass(slots=True)
 class SimulatedMirrorNode:
+    """Python plant+controller stand-in that mirrors the slim firmware API.
+
+    Wire commands: home, stop, set_target, get_status, clear_error.
+    Status modes: idle | homing | position | fault.
+    """
+
     node_id: int
     azimuth_axis: ActuatorModel = field(default_factory=ActuatorModel)
     altitude_axis: ActuatorModel = field(default_factory=ActuatorModel)
@@ -17,8 +23,6 @@ class SimulatedMirrorNode:
     fault: str | None = None
     target_azimuth_deg: float = 0.0
     target_elevation_deg: float = 0.0
-    jog_az_rate_deg_s: float = 0.0
-    jog_el_rate_deg_s: float = 0.0
 
     @classmethod
     def from_constants(cls, node_id: int, ac: "hotbox_shared.ActuatorConstants") -> "SimulatedMirrorNode":  # type: ignore[name-defined]
@@ -35,26 +39,16 @@ class SimulatedMirrorNode:
             self._start_homing()
         elif command.command == CommandName.STOP:
             self.mode = "idle"
-            self.jog_az_rate_deg_s = 0.0
-            self.jog_el_rate_deg_s = 0.0
         elif command.command == CommandName.SET_TARGET:
             if self.mode == "homing":
                 return
             self.target_azimuth_deg = float(command.payload.get("azimuth_deg", self.target_azimuth_deg))
             self.target_elevation_deg = float(command.payload.get("elevation_deg", self.target_elevation_deg))
-            self.mode = str(command.payload.get("mode", "tracking"))
-            self.fault = None
-        elif command.command == CommandName.JOG:
-            self.jog_az_rate_deg_s = float(command.payload.get("azimuth_rate_deg_s", 0.0))
-            self.jog_el_rate_deg_s = float(command.payload.get("elevation_rate_deg_s", 0.0))
-            self.mode = "jog"
+            self.mode = "position"
             self.fault = None
         elif command.command == CommandName.CLEAR_ERROR:
             self.fault = None
             self.mode = "idle"
-        elif command.command == CommandName.SET_MODE:
-            self.mode = str(command.payload.get("mode", self.mode))
-            self.fault = None
         elif command.command == CommandName.GET_STATUS:
             return
 
@@ -79,14 +73,7 @@ class SimulatedMirrorNode:
             self._step_homing(dt_s)
             return
 
-        if self.mode == "jog":
-            pwm_az = max(-1.0, min(1.0, self.jog_az_rate_deg_s / self.azimuth_axis.max_velocity_deg_s))
-            pwm_el = max(-1.0, min(1.0, self.jog_el_rate_deg_s / self.altitude_axis.max_velocity_deg_s))
-            self.azimuth_axis.step(pwm_az, dt_s)
-            self.altitude_axis.step(pwm_el, dt_s)
-            return
-
-        if self.mode in {"tracking", "parked"}:
+        if self.mode == "position":
             pwm_az = self._position_pwm(self.azimuth_axis, self.target_azimuth_deg, wrap_360=True)
             pwm_el = self._position_pwm(self.altitude_axis, self.target_elevation_deg)
             self.azimuth_axis.step(pwm_az, dt_s)

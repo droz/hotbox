@@ -18,9 +18,9 @@ def test_mirror_command_can_roundtrip() -> None:
 
 
 def test_mirror_status_wire_roundtrip() -> None:
-    status = MirrorStatus(node_id=1, homed=True, azimuth_deg=10.5, elevation_deg=20.25, mode="tracking")
+    status = MirrorStatus(node_id=1, homed=True, azimuth_deg=10.5, elevation_deg=20.25, mode="position")
     restored = MirrorStatus.from_wire(status.to_wire().strip())
     assert restored.node_id == 1
     assert restored.homed is True
     assert abs(restored.azimuth_deg - 10.5) < 1e-9
-    assert restored.mode == "tracking"
+    assert restored.mode == "position"

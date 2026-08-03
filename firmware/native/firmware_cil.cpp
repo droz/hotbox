@@ -77,12 +77,8 @@ void hotbox_cil_set_hall(int axis, int triggered) {
 void hotbox_cil_home(void)  { g_mount.home(); }
 void hotbox_cil_stop(void)  { g_mount.stop(); }
 
-void hotbox_cil_set_target(float azimuth_deg, float elevation_deg, int parked) {
-    g_mount.setTarget(azimuth_deg, elevation_deg, parked ? "parked" : "tracking");
-}
-
-void hotbox_cil_jog(float azimuth_rate_deg_s, float elevation_rate_deg_s) {
-    g_mount.jog(azimuth_rate_deg_s, elevation_rate_deg_s);
+void hotbox_cil_set_target(float azimuth_deg, float elevation_deg) {
+    g_mount.setTarget(azimuth_deg, elevation_deg);
 }
 
 void hotbox_cil_clear_error(void) { g_mount.clearError(); }
@@ -135,7 +131,7 @@ float hotbox_cil_elevation_deg(void) { return g_mount.elevationDeg(); }
 
 int   hotbox_cil_is_homed(void) { return g_mount.isHomed() ? 1 : 0; }
 
-// Mode string: "idle", "homing", "tracking", "parked", "jog", "fault".
+// Mode string: "idle", "homing", "position", "fault".
 const char* hotbox_cil_mode(void) { return g_mount.modeText(); }
 
 // Fault string or NULL.

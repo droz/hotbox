@@ -4,7 +4,9 @@
 
 namespace hotbox {
 
-enum class AxisMode { Idle, Homing, Tracking, Jog, Fault };
+// Minimal axis states. Product modes (track/park/jog) live on the host;
+// firmware only servos a position, homes, idles, or faults.
+enum class AxisMode { Idle, Homing, Position, Fault };
 
 class BrushedAxis {
  public:
@@ -13,7 +15,6 @@ class BrushedAxis {
   void begin();
   void startHoming();
   void setTargetDeg(float target_deg);
-  void setJogRateDegS(float rate_deg_s);
   void stop();
   void clearFault();
   void update(float dt_s);
@@ -38,7 +39,6 @@ class BrushedAxis {
   float position_deg_ = 0.0f;
   float velocity_deg_s_ = 0.0f;
   float target_deg_ = 0.0f;
-  float jog_rate_deg_s_ = 0.0f;
   float command_velocity_deg_s_ = 0.0f;
   float stall_timer_s_ = 0.0f;
   bool homed_ = false;
@@ -53,8 +53,7 @@ class MirrorMount {
   void begin();
   void home();
   void stop();
-  void setTarget(float azimuth_deg, float elevation_deg, const char* mode_text);
-  void jog(float azimuth_rate_deg_s, float elevation_rate_deg_s);
+  void setTarget(float azimuth_deg, float elevation_deg);
   void clearError();
   void update(float dt_s);
 
@@ -65,6 +64,8 @@ class MirrorMount {
   const char* faultText() const;
 
  private:
+  void refreshModeText();
+
   BrushedAxis azimuth_;
   BrushedAxis elevation_;
   const char* mode_text_ = "idle";

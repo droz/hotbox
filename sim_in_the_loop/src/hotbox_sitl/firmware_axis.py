@@ -126,11 +126,8 @@ def load_cil_library(path: Path | str | None = None) -> ctypes.CDLL:
     lib.hotbox_cil_stop.restype = None
     lib.hotbox_cil_clear_error.restype = None
 
-    lib.hotbox_cil_set_target.argtypes = [ctypes.c_float, ctypes.c_float, ctypes.c_int]
+    lib.hotbox_cil_set_target.argtypes = [ctypes.c_float, ctypes.c_float]
     lib.hotbox_cil_set_target.restype = None
-
-    lib.hotbox_cil_jog.argtypes = [ctypes.c_float, ctypes.c_float]
-    lib.hotbox_cil_jog.restype = None
 
     lib.hotbox_cil_update.argtypes = [ctypes.c_float]
     lib.hotbox_cil_update.restype = None
@@ -277,12 +274,7 @@ class FirmwareMirrorNode:
         elif cmd == CommandName.SET_TARGET:
             az = float(command.payload.get("azimuth_deg", 0.0))
             el = float(command.payload.get("elevation_deg", 0.0))
-            parked = int(command.payload.get("mode", "tracking") == "parked")
-            self._lib.hotbox_cil_set_target(az, el, parked)
-        elif cmd == CommandName.JOG:
-            az_rate = float(command.payload.get("azimuth_rate_deg_s", 0.0))
-            el_rate = float(command.payload.get("elevation_rate_deg_s", 0.0))
-            self._lib.hotbox_cil_jog(az_rate, el_rate)
+            self._lib.hotbox_cil_set_target(az, el)
         elif cmd == CommandName.CLEAR_ERROR:
             self._lib.hotbox_cil_clear_error()
 
