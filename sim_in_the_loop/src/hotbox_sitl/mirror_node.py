@@ -52,6 +52,9 @@ class SimulatedMirrorNode:
         elif command.command == CommandName.CLEAR_ERROR:
             self.fault = None
             self.mode = "idle"
+        elif command.command == CommandName.SET_MODE:
+            self.mode = str(command.payload.get("mode", self.mode))
+            self.fault = None
         elif command.command == CommandName.GET_STATUS:
             return
 

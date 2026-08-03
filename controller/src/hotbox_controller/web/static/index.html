@@ -36,17 +36,58 @@
         flex: 1 1 auto;
         min-height: 0;
         padding: 0 1rem 1rem;
-        display: grid;
-        gap: var(--gap);
-        /* Laptop: 3D left, controls+mirrors right — both fill the viewport */
-        grid-template-columns: minmax(0, 1.35fr) minmax(280px, 22rem);
-        grid-template-rows: minmax(0, 1fr);
+        display: flex;
+        flex-direction: row;
+        align-items: stretch;
+        gap: 0;
       }
       .viewport {
+        flex: 1 1 auto;
+        min-width: 0;
         min-height: 0;
         display: flex;
         flex-direction: column;
         gap: 0.45rem;
+      }
+      .panel-splitter {
+        flex: 0 0 8px;
+        margin: 0 0.2rem;
+        border-radius: 999px;
+        background: transparent;
+        cursor: col-resize;
+        position: relative;
+        touch-action: none;
+        user-select: none;
+      }
+      .panel-splitter::before {
+        content: "";
+        position: absolute;
+        top: 12%;
+        bottom: 12%;
+        left: 50%;
+        width: 3px;
+        transform: translateX(-50%);
+        border-radius: 999px;
+        background: #2a3642;
+        transition: background 0.12s ease;
+      }
+      .panel-splitter:hover::before,
+      .panel-splitter.dragging::before {
+        background: var(--accent);
+      }
+      .panel-splitter:focus-visible {
+        outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
+        outline-offset: 1px;
+      }
+      .sidebar {
+        flex: 0 0 var(--sidebar-width, 22rem);
+        width: var(--sidebar-width, 22rem);
+        min-width: 17.5rem;
+        max-width: min(70vw, 48rem);
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        gap: var(--gap);
       }
       .scene-wrap {
         flex: 1 1 auto;
@@ -70,12 +111,6 @@
         align-items: center;
         font-size: 0.78rem;
         color: var(--muted);
-      }
-      .sidebar {
-        min-height: 0;
-        display: flex;
-        flex-direction: column;
-        gap: var(--gap);
       }
       .sidebar-top {
         flex: 0 0 auto;
@@ -148,6 +183,25 @@
         font-size: 0.72rem;
         color: var(--muted);
         line-height: 1.3;
+      }
+      .protocol-log-tools {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.55rem 0.85rem;
+        margin: 0.35rem 0 0.25rem;
+        font-size: 0.72rem;
+        color: var(--muted);
+      }
+      .protocol-log-tools label {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        cursor: pointer;
+        user-select: none;
+      }
+      .protocol-log-tools input {
+        accent-color: var(--accent);
       }
       .toggle {
         position: relative;
@@ -324,6 +378,70 @@
         color: var(--muted);
         font-size: 0.8rem;
       }
+      details.protocol {
+        margin-top: 0.55rem;
+        color: var(--muted);
+        font-size: 0.8rem;
+      }
+      details.protocol > summary {
+        cursor: pointer;
+        color: var(--text);
+        font-weight: 600;
+      }
+      .protocol-form {
+        display: grid;
+        gap: 0.35rem;
+        margin-top: 0.45rem;
+      }
+      .protocol-row {
+        display: grid;
+        grid-template-columns: 6.5rem minmax(0, 1fr);
+        gap: 0.35rem;
+        align-items: center;
+      }
+      .protocol-row label {
+        font-size: 0.68rem;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        color: var(--muted);
+      }
+      .protocol-form input,
+      .protocol-form select {
+        width: 100%;
+        background: #141b22;
+        color: var(--text);
+        border: 1px solid #3a4a58;
+        border-radius: 8px;
+        padding: 0.3rem 0.45rem;
+        font-size: 0.78rem;
+      }
+      .protocol-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.3rem;
+        margin-top: 0.1rem;
+      }
+      .protocol-hint {
+        margin: 0.1rem 0 0;
+        font-size: 0.68rem;
+        line-height: 1.35;
+        color: var(--muted);
+      }
+      .protocol-log {
+        margin: 0.35rem 0 0;
+        max-height: 9rem;
+        overflow: auto;
+        font-size: 0.62rem;
+        line-height: 1.35;
+        white-space: pre-wrap;
+        background: #0f1419;
+        border: 1px solid #2a3540;
+        border-radius: 8px;
+        padding: 0.35rem 0.45rem;
+        font-variant-numeric: tabular-nums;
+      }
+      .protocol-log .tx { color: #9fd0ff; }
+      .protocol-log .rx { color: #b8e0a8; }
       .section-label {
         margin: 0;
         font-size: 0.75rem;
@@ -336,11 +454,19 @@
       @media (max-width: 900px) {
         body { height: auto; min-height: 100dvh; }
         main.app {
-          grid-template-columns: 1fr;
-          grid-template-rows: auto minmax(28vh, 36vh);
+          flex-direction: column;
         }
-        .sidebar { order: 1; min-height: 0; }
-        .viewport { order: 2; min-height: 0; }
+        .panel-splitter { display: none; }
+        .sidebar {
+          order: 1;
+          width: auto;
+          max-width: none;
+          flex: 0 0 auto;
+        }
+        .viewport {
+          order: 2;
+          min-height: 28vh;
+        }
         .scene-wrap { min-height: 26vh; }
         .mirror-scroll {
           max-height: none;
@@ -379,7 +505,17 @@
           <span><span class="swatch true"></span>true (sim)</span>
         </div>
       </section>
-      <aside class="sidebar">
+      <div
+        class="panel-splitter"
+        id="panel-splitter"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize side panel"
+        aria-valuemin="280"
+        aria-valuemax="768"
+        tabindex="0"
+      ></div>
+      <aside class="sidebar" id="sidebar">
         <section class="panel sidebar-top">
           <div class="status-row">
             <div>Fleet <span class="pill" id="mode-pill">…</span></div>
@@ -393,6 +529,14 @@
               <span id="demand-hint">Simulated relay: when off, Track mirrors divert above the absorber.</span>
             </div>
             <button type="button" class="toggle" id="btn-heat-demand" aria-pressed="false" title="Toggle oven heat demand"></button>
+          </div>
+
+          <div class="demand-row">
+            <div class="label">
+              <strong>Raw mode</strong>
+              <span id="raw-hint">Off: controller polls status and Track/Park send targets each tick.</span>
+            </div>
+            <button type="button" class="toggle" id="btn-raw-mode" aria-pressed="false" title="Toggle raw protocol mode"></button>
           </div>
 
           <p class="field-label">All mirrors</p>
@@ -419,13 +563,106 @@
       window.hotboxLatestState = null;
       window.hotboxOnState = null;
 
+      (function bindPanelSplitter() {
+        const app = document.querySelector("main.app");
+        const sidebar = document.getElementById("sidebar");
+        const splitter = document.getElementById("panel-splitter");
+        if (!app || !sidebar || !splitter) return;
+
+        const STORAGE_KEY = "hotbox.sidebarWidthPx";
+        const MIN_SIDEBAR = 280;
+        const MIN_VIEWPORT = 280;
+
+        function clampWidth(px) {
+          const max = Math.min(window.innerWidth * 0.7, 768);
+          const room = Math.max(MIN_SIDEBAR, app.clientWidth - MIN_VIEWPORT - splitter.offsetWidth);
+          return Math.max(MIN_SIDEBAR, Math.min(max, room, px));
+        }
+
+        function applyWidth(px) {
+          const width = clampWidth(px);
+          sidebar.style.setProperty("--sidebar-width", `${width}px`);
+          splitter.setAttribute("aria-valuenow", String(Math.round(width)));
+          return width;
+        }
+
+        const saved = Number(localStorage.getItem(STORAGE_KEY));
+        if (Number.isFinite(saved) && saved > 0) applyWidth(saved);
+        else applyWidth(sidebar.getBoundingClientRect().width || 352);
+
+        let dragging = false;
+        let startX = 0;
+        let startWidth = 0;
+
+        function onPointerMove(event) {
+          if (!dragging) return;
+          // Dragging the splitter left widens the right sidebar.
+          const next = startWidth + (startX - event.clientX);
+          applyWidth(next);
+        }
+
+        function onPointerUp(event) {
+          if (!dragging) return;
+          dragging = false;
+          splitter.classList.remove("dragging");
+          document.body.style.cursor = "";
+          document.body.style.userSelect = "";
+          try {
+            splitter.releasePointerCapture(event.pointerId);
+          } catch (_) {
+            /* ignore */
+          }
+          localStorage.setItem(STORAGE_KEY, String(Math.round(sidebar.getBoundingClientRect().width)));
+        }
+
+        splitter.addEventListener("pointerdown", (event) => {
+          if (window.matchMedia("(max-width: 900px)").matches) return;
+          event.preventDefault();
+          dragging = true;
+          startX = event.clientX;
+          startWidth = sidebar.getBoundingClientRect().width;
+          splitter.classList.add("dragging");
+          document.body.style.cursor = "col-resize";
+          document.body.style.userSelect = "none";
+          splitter.setPointerCapture(event.pointerId);
+        });
+        splitter.addEventListener("pointermove", onPointerMove);
+        splitter.addEventListener("pointerup", onPointerUp);
+        splitter.addEventListener("pointercancel", onPointerUp);
+
+        splitter.addEventListener("keydown", (event) => {
+          const step = event.shiftKey ? 40 : 16;
+          const current = sidebar.getBoundingClientRect().width;
+          if (event.key === "ArrowLeft") {
+            event.preventDefault();
+            localStorage.setItem(STORAGE_KEY, String(applyWidth(current + step)));
+          } else if (event.key === "ArrowRight") {
+            event.preventDefault();
+            localStorage.setItem(STORAGE_KEY, String(applyWidth(current - step)));
+          }
+        });
+
+        window.addEventListener("resize", () => {
+          applyWidth(sidebar.getBoundingClientRect().width);
+        });
+      })();
+
       async function post(path, body = {}) {
         const response = await fetch(path, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
         });
-        if (!response.ok) throw new Error(`${path} failed: ${response.status}`);
+        if (!response.ok) {
+          let detail = `${response.status}`;
+          try {
+            const errBody = await response.json();
+            if (errBody?.detail) detail = typeof errBody.detail === "string" ? errBody.detail : JSON.stringify(errBody.detail);
+          } catch (_) {
+            /* ignore */
+          }
+          throw new Error(`${path} failed: ${detail}`);
+        }
         return response.json().catch(() => ({}));
       }
 
@@ -468,6 +705,15 @@
           : "Oven idle → Track mirrors divert to a spot above the absorber.";
       }
 
+      function updateRawModeUi(enabled) {
+        const btn = document.getElementById("btn-raw-mode");
+        btn.classList.toggle("on", !!enabled);
+        btn.setAttribute("aria-pressed", enabled ? "true" : "false");
+        document.getElementById("raw-hint").textContent = enabled
+          ? "On: no automatic get_status / set_target. Send wire commands via Protocol (or Home / Track / Jog buttons)."
+          : "Off: controller polls status and Track/Park send targets each tick.";
+      }
+
       async function setFleetMode(mode) {
         // Reset sticks without sending /api/jog first — a late zero-rate jog used to
         // race the mode POST and flip mirrors back to Jog.
@@ -493,6 +739,12 @@
         refreshState();
       }
 
+      async function setRawMode(enabled) {
+        updateRawModeUi(enabled);
+        await post("/api/raw_mode", { enabled: !!enabled });
+        refreshState();
+      }
+
       document.getElementById("btn-home-all").onclick = () =>
         post("/api/home").then(() => refreshState()).catch(console.error);
       document.getElementById("btn-mode-track").onclick = () =>
@@ -505,6 +757,114 @@
         const next = !document.getElementById("btn-heat-demand").classList.contains("on");
         setHeatDemand(next).catch(console.error);
       };
+      document.getElementById("btn-raw-mode").onclick = () => {
+        const next = !document.getElementById("btn-raw-mode").classList.contains("on");
+        setRawMode(next).catch(console.error);
+      };
+
+      const HIDE_STATUS_KEY = "hotbox.hideGetStatus";
+      function hideGetStatusEnabled() {
+        return localStorage.getItem(HIDE_STATUS_KEY) === "1";
+      }
+      function setHideGetStatusEnabled(enabled) {
+        localStorage.setItem(HIDE_STATUS_KEY, enabled ? "1" : "0");
+        document.querySelectorAll('[data-field="proto-hide-status"]').forEach((el) => {
+          el.checked = !!enabled;
+        });
+        document.querySelectorAll('[data-field="proto-log"]').forEach((log) => {
+          delete log.dataset.trafficKey;
+        });
+      }
+
+      function updateProtocolFields(card) {
+        const commandSelect = card.querySelector('[data-field="proto-command"]');
+        if (!commandSelect) return;
+        const command = commandSelect.value;
+        card.querySelectorAll(".proto-field").forEach((row) => {
+          const fields = (row.getAttribute("data-fields") || "").split(/\s+/).filter(Boolean);
+          row.hidden = !fields.includes(command);
+        });
+        const modeInput = card.querySelector('[data-field="proto-mode"]');
+        if (!modeInput) return;
+        if (command === "set_mode" && (!modeInput.value || modeInput.value === "tracking")) {
+          modeInput.value = "idle";
+        } else if (command === "set_target" && (!modeInput.value || modeInput.value === "idle")) {
+          modeInput.value = "tracking";
+        }
+      }
+
+      function formatTrafficLine(entry) {
+        const t = String(entry.timestamp_utc || "").slice(11, 23);
+        const arrow = entry.direction === "tx" ? "→" : "←";
+        const payload = entry.payload && Object.keys(entry.payload).length
+          ? " " + JSON.stringify(entry.payload)
+          : "";
+        const cls = entry.direction === "tx" ? "tx" : "rx";
+        return `<div class="${cls}">${t} ${arrow} ${entry.kind}${payload}</div>`;
+      }
+
+      function isStatusTraffic(entry) {
+        const kind = String(entry.kind || "");
+        return kind === "get_status" || kind === "status";
+      }
+
+      function updateProtocolTraffic(card, nodeId, traffic) {
+        const log = card.querySelector('[data-field="proto-log"]');
+        if (!log) return;
+        const hideStatus = hideGetStatusEnabled();
+        let entries = (traffic || []).filter((e) => String(e.node_id) === String(nodeId));
+        if (hideStatus) entries = entries.filter((e) => !isStatusTraffic(e));
+        const last = entries.slice(-60);
+        const nextKey = last.length
+          ? `${hideStatus ? "h" : "a"}:${last[0].seq}:${last[last.length - 1].seq}:${last.length}`
+          : `${hideStatus ? "h" : "a"}:empty`;
+        if (log.dataset.trafficKey === nextKey) return;
+        log.dataset.trafficKey = nextKey;
+        const stickBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 8;
+        log.innerHTML = last.length
+          ? last.map(formatTrafficLine).join("")
+          : `<div class="rx">No traffic yet for node ${nodeId}${hideStatus ? " (get_status hidden)" : ""}.</div>`;
+        if (stickBottom) log.scrollTop = log.scrollHeight;
+      }
+
+      async function sendProtocolCommand(card, nodeId) {
+        const command = card.querySelector('[data-field="proto-command"]').value;
+        const body = { command, node_id: Number(nodeId) };
+        if (command === "set_target") {
+          body.azimuth_deg = Number(card.querySelector('[data-field="proto-az"]').value);
+          body.elevation_deg = Number(card.querySelector('[data-field="proto-el"]').value);
+          body.mode = card.querySelector('[data-field="proto-mode"]').value || "tracking";
+        } else if (command === "jog") {
+          body.azimuth_rate_deg_s = Number(card.querySelector('[data-field="proto-az-rate"]').value);
+          body.elevation_rate_deg_s = Number(card.querySelector('[data-field="proto-el-rate"]').value);
+        } else if (command === "set_mode") {
+          body.mode = card.querySelector('[data-field="proto-mode"]').value || "idle";
+        }
+        await post("/api/protocol", body);
+        refreshState();
+      }
+
+      function bindProtocolConsole(card, nodeId) {
+        if (card.dataset.protocolBound === "1") return;
+        card.dataset.protocolBound = "1";
+        const commandSelect = card.querySelector('[data-field="proto-command"]');
+        commandSelect.addEventListener("change", () => updateProtocolFields(card));
+        card.querySelector('[data-field="proto-send"]').addEventListener("click", () => {
+          sendProtocolCommand(card, nodeId).catch((err) => {
+            const log = card.querySelector('[data-field="proto-log"]');
+            log.innerHTML = `<div class="tx">error: ${err}</div>` + log.innerHTML;
+          });
+        });
+        const hideBox = card.querySelector('[data-field="proto-hide-status"]');
+        if (hideBox) {
+          hideBox.checked = hideGetStatusEnabled();
+          hideBox.addEventListener("change", () => {
+            setHideGetStatusEnabled(hideBox.checked);
+            if (window.hotboxLatestState) updateMirrorCards(window.hotboxLatestState);
+          });
+        }
+        updateProtocolFields(card);
+      }
 
       function pillClass(homed, fault, mode) {
         if (fault) return "bad";
@@ -692,6 +1052,58 @@
             <div class="mirror-secondary">
               <button class="tiny" data-action="home">Home</button>
             </div>
+            <details class="protocol">
+              <summary>Protocol</summary>
+              <p class="protocol-hint">
+                Raw wire commands for this mirror. Live TX/RX traffic appears below.
+                Enable <strong>Raw mode</strong> (top panel) to stop automatic polls/targets —
+                otherwise Track/Park may overwrite <code>set_target</code> each tick.
+              </p>
+              <div class="protocol-form">
+                <div class="protocol-row">
+                  <label>Command</label>
+                  <select data-field="proto-command">
+                    <option value="home">home</option>
+                    <option value="stop">stop</option>
+                    <option value="set_target">set_target</option>
+                    <option value="jog">jog</option>
+                    <option value="get_status">get_status</option>
+                    <option value="clear_error">clear_error</option>
+                    <option value="set_mode">set_mode</option>
+                  </select>
+                </div>
+                <div class="protocol-row proto-field" data-fields="set_target">
+                  <label>Azimuth °</label>
+                  <input data-field="proto-az" type="number" step="0.1" value="0" />
+                </div>
+                <div class="protocol-row proto-field" data-fields="set_target">
+                  <label>Elevation °</label>
+                  <input data-field="proto-el" type="number" step="0.1" value="0" />
+                </div>
+                <div class="protocol-row proto-field" data-fields="set_target set_mode">
+                  <label>Mode</label>
+                  <input data-field="proto-mode" type="text" value="tracking" placeholder="tracking | parked | idle" />
+                </div>
+                <div class="protocol-row proto-field" data-fields="jog">
+                  <label>Az rate °/s</label>
+                  <input data-field="proto-az-rate" type="number" step="0.1" value="0" />
+                </div>
+                <div class="protocol-row proto-field" data-fields="jog">
+                  <label>El rate °/s</label>
+                  <input data-field="proto-el-rate" type="number" step="0.1" value="0" />
+                </div>
+                <div class="protocol-actions">
+                  <button type="button" class="tiny" data-field="proto-send">Send</button>
+                </div>
+                <div class="protocol-log-tools">
+                  <label>
+                    <input type="checkbox" data-field="proto-hide-status" />
+                    Hide get_status
+                  </label>
+                </div>
+                <div class="protocol-log" data-field="proto-log">No traffic yet.</div>
+              </div>
+            </details>
           </div>
         `;
         card.querySelectorAll(".mode-switch [data-mode]").forEach((button) => {
@@ -710,6 +1122,7 @@
           });
         });
         bindJogStick(card, String(nodeId));
+        bindProtocolConsole(card, String(nodeId));
         grid.appendChild(card);
         return card;
       }
@@ -718,6 +1131,7 @@
         const mirrors = state.mirrors || {};
         const targets = state.targets || {};
         const mirrorModes = state.mirror_modes || {};
+        const traffic = state.protocol_traffic || [];
         const targetMirrors = state.geometry?.target?.mirrors || state.geometry?.estimated?.mirrors || [];
         const missById = Object.fromEntries(targetMirrors.map((m) => [String(m.node_id), m.miss_m]));
         Object.keys(mirrors).sort((a, b) => Number(a) - Number(b)).forEach((id) => {
@@ -744,6 +1158,7 @@
             miss === undefined || miss === null ? "—" : Number(miss).toFixed(3);
           setActiveModeButtons(card.querySelector(".mode-switch"), mirrorMode);
           bindJogStick(card, id).setVisible(mirrorMode === "jog");
+          updateProtocolTraffic(card, id, traffic);
         });
       }
 
@@ -759,6 +1174,7 @@
           document.getElementById("state").textContent = JSON.stringify(state, null, 2);
           updateFleetModeUi(state.mode);
           updateHeatDemandUi(!!state.heat_demand);
+          updateRawModeUi(!!state.raw_mode);
           const gps = state.gps || {};
           document.getElementById("gps-pill").textContent = gps.valid
             ? `${gps.source} · ${Number(gps.latitude_deg).toFixed(4)}, ${Number(gps.longitude_deg).toFixed(4)}`

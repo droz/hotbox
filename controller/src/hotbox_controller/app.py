@@ -19,7 +19,7 @@ from .protocol import CommandName, MirrorCommand
 from .scene import build_mirror_scene_entry, build_target_scene, default_mount_world, mount_world_from_calibration
 from .sun import SunService, SunVector
 from .tracking import TrackingTarget, idle_dump_world, safe_park, track_point
-from .transport import MirrorTransport, build_transport
+from .transport import LoggingMirrorTransport, MirrorTransport, ProtocolTrafficLog, build_transport
 
 
 class JogRequest(BaseModel):
@@ -56,8 +56,46 @@ class HeatDemandRequest(BaseModel):
     enabled: bool
 
 
+class RawModeRequest(BaseModel):
+    """When enabled, the controller issues no automatic wire traffic."""
+
+    enabled: bool
+
+
+class ProtocolCommandRequest(BaseModel):
+    """Low-level wire command for mirror controllers (bypasses supervisor helpers).
+
+    Commands: home, stop, set_target, jog, get_status, clear_error, set_mode, discover.
+    ``discover`` rediscovers the fleet and ignores ``node_id``.
+    """
+
+    command: str
+    node_id: int = 0
+    # set_target
+    azimuth_deg: float | None = None
+    elevation_deg: float | None = None
+    mode: str | None = None
+    # jog
+    azimuth_rate_deg_s: float | None = None
+    elevation_rate_deg_s: float | None = None
+
+
 # Canonical modes. ``auto`` → track, ``manual`` → jog.
 SUPERVISOR_MODES = frozenset({"track", "park", "jog"})
+
+# Wire-protocol commands exposed by the low-level console (plus transport discover).
+PROTOCOL_COMMANDS = frozenset(
+    {
+        CommandName.HOME.value,
+        CommandName.STOP.value,
+        CommandName.SET_TARGET.value,
+        CommandName.JOG.value,
+        CommandName.GET_STATUS.value,
+        CommandName.CLEAR_ERROR.value,
+        CommandName.SET_MODE.value,
+        CommandName.DISCOVER.value,
+    }
+)
 
 
 class ControllerApplication:
@@ -69,7 +107,13 @@ class ControllerApplication:
         self.config = config or app_config_from_system()
         self.gps = GpsService(self.config.site, self.config.gps)
         self.sun = SunService(self.config.site)
-        self.transport = transport or build_transport(self.config.transport)
+        self.protocol_traffic = ProtocolTrafficLog()
+        raw_transport = transport or build_transport(self.config.transport)
+        self.transport = (
+            raw_transport
+            if isinstance(raw_transport, LoggingMirrorTransport)
+            else LoggingMirrorTransport(raw_transport, self.protocol_traffic)
+        )
         self.fleet = MirrorFleet(self.transport)
         self.calibrations = load_calibrations(self.config.calibration_path)
         if self.config.system is not None:
@@ -79,6 +123,8 @@ class ControllerApplication:
         self._true_geometry: dict[str, Any] | None = None
         # Simulated oven heat-demand relay. When False, Track mirrors park (product behavior).
         self.heat_demand = True
+        # Raw mode: no automatic set_target / status polls — only user-initiated sends.
+        self.raw_mode = False
         # Per-mirror supervisor mode (track|park|jog). Fleet switcher sets all of these.
         self._node_modes: dict[int, str] = {}
         self.fastapi = self._build_fastapi()
@@ -122,6 +168,14 @@ class ControllerApplication:
     def set_heat_demand(self, enabled: bool) -> None:
         """Simulate the oven heat-demand relay (True = oven wants power)."""
         self.heat_demand = bool(enabled)
+
+    def set_raw_mode(self, enabled: bool) -> None:
+        """Disable automatic wire traffic so only explicit user commands are sent."""
+        self.raw_mode = bool(enabled)
+
+    def _cached_statuses(self) -> dict[int, Any]:
+        """Last known mirror statuses without issuing get_status on the wire."""
+        return {node_id: node.status for node_id, node in self.fleet.nodes().items()}
 
     def _tracking_kwargs(self) -> dict[str, float | int | bool | object]:
         mirror = self.config.mirror
@@ -268,6 +322,9 @@ class ControllerApplication:
         return out
 
     def control_tick(self) -> None:
+        if self.raw_mode:
+            # Raw mode: do not poll or command mirrors from the closed-loop tick.
+            return
         fix = self.gps.current_fix()
         if fix.valid:
             self.sun = SunService(
@@ -303,7 +360,8 @@ class ControllerApplication:
                 )
             )
         sun = self.sun.sun_vector(fix.when_utc)
-        statuses = self.fleet.poll()
+        # In raw mode, reuse cached status so /api/state does not flood get_status.
+        statuses = self._cached_statuses() if self.raw_mode else self.fleet.poll()
         targets = self._command_targets(sun, statuses)
         mirror_modes = {str(node_id): self.node_mode(node_id) for node_id in self.fleet.nodes()}
 
@@ -322,6 +380,7 @@ class ControllerApplication:
             "timestamp_utc": utc_now().isoformat(),
             "mode": self.mode,
             "heat_demand": self.heat_demand,
+            "raw_mode": self.raw_mode,
             "mirror_modes": mirror_modes,
             "gps": fix.as_dict(),
             "sun": {
@@ -332,6 +391,7 @@ class ControllerApplication:
             "transport": self.config.transport.mode,
             "mirrors": {str(node_id): status.as_dict() for node_id, status in statuses.items()},
             "targets": {str(node_id): asdict(target) for node_id, target in targets.items()},
+            "protocol_traffic": self.protocol_traffic.snapshot(limit=200),
             "calibration_count": len(self.calibrations),
             "geometry": {
                 "target": target_scene,
@@ -387,6 +447,88 @@ class ControllerApplication:
                 },
             )
         )
+
+    def send_protocol_command(self, request: ProtocolCommandRequest) -> dict[str, Any]:
+        """Send a raw protocol command to a mirror (or rediscover the fleet).
+
+        This bypasses supervisor helpers such as Track/Park mode transitions. Useful
+        for exercising the wire protocol from the UI. Enable ``raw_mode`` to stop the
+        control loop / state poll from issuing automatic wire traffic; otherwise
+        Track/Park may overwrite ``set_target`` on the next ``control_tick``.
+        """
+        command_name = str(request.command).strip().lower()
+        if command_name not in PROTOCOL_COMMANDS:
+            raise ValueError(
+                f"unknown protocol command {request.command!r}; "
+                f"expected one of {sorted(PROTOCOL_COMMANDS)}"
+            )
+
+        if command_name == CommandName.DISCOVER.value:
+            nodes = self.fleet.discover()
+            for node_id in nodes:
+                self._node_modes.setdefault(int(node_id), "track")
+            return {
+                "status": "ok",
+                "command": command_name,
+                "nodes": [
+                    {
+                        "node_id": node.node_id,
+                        "endpoint": node.endpoint,
+                        "transport_name": node.transport_name,
+                    }
+                    for node in nodes.values()
+                ],
+            }
+
+        node_id = int(request.node_id)
+        if node_id not in self.fleet.nodes():
+            raise KeyError(f"unknown node_id={node_id}")
+
+        payload: dict[str, Any] = {}
+        if command_name == CommandName.SET_TARGET.value:
+            payload = {
+                "azimuth_deg": float(request.azimuth_deg if request.azimuth_deg is not None else 0.0),
+                "elevation_deg": float(request.elevation_deg if request.elevation_deg is not None else 0.0),
+                "mode": str(request.mode or "tracking"),
+            }
+        elif command_name == CommandName.JOG.value:
+            payload = {
+                "azimuth_rate_deg_s": float(
+                    request.azimuth_rate_deg_s if request.azimuth_rate_deg_s is not None else 0.0
+                ),
+                "elevation_rate_deg_s": float(
+                    request.elevation_rate_deg_s if request.elevation_rate_deg_s is not None else 0.0
+                ),
+            }
+        elif command_name == CommandName.SET_MODE.value:
+            payload = {"mode": str(request.mode or "idle")}
+
+        command = MirrorCommand(node_id=node_id, command=CommandName(command_name), payload=payload)
+        if command_name == CommandName.GET_STATUS.value:
+            status = self.transport.poll_status(node_id)
+            node = self.fleet.nodes().get(node_id)
+            if node is not None:
+                node.status = status
+            return {
+                "status": "ok",
+                "command": command_name,
+                "node_id": node_id,
+                "payload": payload,
+                "mirror_status": status.as_dict(),
+            }
+
+        self.transport.send(command)
+        return {
+            "status": "ok",
+            "command": command_name,
+            "node_id": node_id,
+            "payload": payload,
+            "wire": {
+                "node_id": command.node_id,
+                "command": str(command.command),
+                "payload": command.payload,
+            },
+        }
 
     def _build_fastapi(self) -> FastAPI:
         static_dir = Path(__file__).parent / "web" / "static"
@@ -453,6 +595,11 @@ class ControllerApplication:
             self.set_heat_demand(request.enabled)
             return {"status": "ok", "heat_demand": self.heat_demand}
 
+        @app.post("/api/raw_mode")
+        def api_raw_mode(request: RawModeRequest) -> dict[str, Any]:
+            self.set_raw_mode(request.enabled)
+            return {"status": "ok", "raw_mode": self.raw_mode}
+
         @app.post("/api/auto")
         def auto() -> dict[str, Any]:
             """Resume sun tracking (alias for ``POST /api/mode`` with ``track``)."""
@@ -474,6 +621,18 @@ class ControllerApplication:
         def api_target(request: TargetRequest) -> dict[str, str]:
             self.set_manual_target(request)
             return {"status": "ok"}
+
+        @app.post("/api/protocol")
+        def api_protocol(request: ProtocolCommandRequest) -> dict[str, Any]:
+            """Send a raw wire-protocol command to a mirror controller."""
+            from fastapi import HTTPException
+
+            try:
+                return self.send_protocol_command(request)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
 
         @app.get("/")
         def index() -> FileResponse:

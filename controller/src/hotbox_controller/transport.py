@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections import deque
 from dataclasses import dataclass
 import logging
+import threading
 import time
 from typing import Any, Iterable
+
+from hotbox_shared import utc_now
 
 from .config import TransportConfig
 from .protocol import CAN_CMD_BASE_ID, CAN_RSP_BASE_ID, CommandName, MirrorCommand, MirrorStatus
@@ -17,6 +21,71 @@ class DiscoveredNode:
     node_id: int
     transport_name: str
     endpoint: str
+
+
+@dataclass(slots=True)
+class ProtocolTrafficEntry:
+    seq: int
+    timestamp_utc: str
+    direction: str  # "tx" | "rx"
+    node_id: int | None
+    kind: str
+    payload: dict[str, Any]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "seq": self.seq,
+            "timestamp_utc": self.timestamp_utc,
+            "direction": self.direction,
+            "node_id": self.node_id,
+            "kind": self.kind,
+            "payload": self.payload,
+        }
+
+
+class ProtocolTrafficLog:
+    """Ring buffer of recent protocol TX/RX messages for the web console."""
+
+    def __init__(self, capacity: int = 400) -> None:
+        self._capacity = max(1, int(capacity))
+        self._entries: deque[ProtocolTrafficEntry] = deque(maxlen=self._capacity)
+        self._seq = 0
+        self._lock = threading.Lock()
+
+    def record(
+        self,
+        *,
+        direction: str,
+        kind: str,
+        node_id: int | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> ProtocolTrafficEntry:
+        with self._lock:
+            self._seq += 1
+            entry = ProtocolTrafficEntry(
+                seq=self._seq,
+                timestamp_utc=utc_now().isoformat(),
+                direction=direction,
+                node_id=None if node_id is None else int(node_id),
+                kind=str(kind),
+                payload=dict(payload or {}),
+            )
+            self._entries.append(entry)
+            return entry
+
+    def snapshot(self, *, limit: int = 200, node_id: int | None = None) -> list[dict[str, Any]]:
+        with self._lock:
+            entries = list(self._entries)
+        if node_id is not None:
+            want = int(node_id)
+            entries = [e for e in entries if e.node_id == want]
+        if limit > 0:
+            entries = entries[-limit:]
+        return [e.as_dict() for e in entries]
+
+    def clear(self) -> None:
+        with self._lock:
+            self._entries.clear()
 
 
 class MirrorTransport(ABC):
@@ -34,6 +103,70 @@ class MirrorTransport(ABC):
 
     def close(self) -> None:
         return None
+
+
+class LoggingMirrorTransport(MirrorTransport):
+    """Wraps a transport and records wire traffic for the protocol console."""
+
+    def __init__(self, inner: MirrorTransport, traffic: ProtocolTrafficLog) -> None:
+        self._inner = inner
+        self._traffic = traffic
+        self._last_status_log_mono: dict[int, float] = {}
+        self._last_status_payload: dict[int, dict[str, Any]] = {}
+        self._last_tx_log_mono: dict[tuple[int, str], float] = {}
+        self._last_tx_payload: dict[tuple[int, str], dict[str, Any]] = {}
+        self._status_log_interval_s = 0.25
+        self._tx_repeat_interval_s = 0.25
+
+    def discover(self) -> Iterable[DiscoveredNode]:
+        nodes = list(self._inner.discover())
+        self._traffic.record(
+            direction="tx",
+            kind="discover",
+            node_id=None,
+            payload={"node_ids": [n.node_id for n in nodes]},
+        )
+        return nodes
+
+    def send(self, command: MirrorCommand) -> None:
+        key = (int(command.node_id), str(command.command))
+        payload = dict(command.payload)
+        now = time.monotonic()
+        last_t = self._last_tx_log_mono.get(key, 0.0)
+        last_payload = self._last_tx_payload.get(key)
+        # Collapse high-rate identical repeats (e.g. Track set_target each tick).
+        if payload != last_payload or (now - last_t) >= self._tx_repeat_interval_s:
+            self._traffic.record(
+                direction="tx",
+                kind=str(command.command),
+                node_id=command.node_id,
+                payload=payload,
+            )
+            self._last_tx_log_mono[key] = now
+            self._last_tx_payload[key] = payload
+        self._inner.send(command)
+
+    def poll_status(self, node_id: int) -> MirrorStatus:
+        status = self._inner.poll_status(node_id)
+        payload = status.as_dict()
+        now = time.monotonic()
+        key = (int(node_id), "get_status")
+        last_tx_t = self._last_tx_log_mono.get(key, 0.0)
+        if (now - last_tx_t) >= self._tx_repeat_interval_s:
+            self._traffic.record(direction="tx", kind="get_status", node_id=node_id, payload={})
+            self._last_tx_log_mono[key] = now
+            self._last_tx_payload[key] = {}
+        last_t = self._last_status_log_mono.get(node_id, 0.0)
+        last_payload = self._last_status_payload.get(node_id)
+        # Status polls are frequent (UI + control loop). Log on change or periodically.
+        if payload != last_payload or (now - last_t) >= self._status_log_interval_s:
+            self._traffic.record(direction="rx", kind="status", node_id=node_id, payload=payload)
+            self._last_status_log_mono[node_id] = now
+            self._last_status_payload[node_id] = payload
+        return status
+
+    def close(self) -> None:
+        self._inner.close()
 
 
 class UsbSerialTransport(MirrorTransport):

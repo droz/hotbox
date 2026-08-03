@@ -9,6 +9,7 @@ class FakeTransport(MirrorTransport):
     def __init__(self, node_ids: list[int] | None = None) -> None:
         self.node_ids = node_ids or [0]
         self.sent: list[MirrorCommand] = []
+        self.polls: list[int] = []
 
     def discover(self):
         for node_id in self.node_ids:
@@ -18,6 +19,7 @@ class FakeTransport(MirrorTransport):
         self.sent.append(command)
 
     def poll_status(self, node_id: int) -> MirrorStatus:
+        self.polls.append(int(node_id))
         return MirrorStatus(node_id=node_id, homed=True, azimuth_deg=10.0, elevation_deg=20.0, mode="idle")
 
 
@@ -119,3 +121,115 @@ def test_set_mode_rejects_unknown() -> None:
         assert False, "expected ValueError"
     except ValueError as exc:
         assert "unsupported" in str(exc)
+
+
+def test_send_protocol_command_raw_wire() -> None:
+    from hotbox_controller.app import ProtocolCommandRequest
+
+    app, transport = _app()
+    before = len(transport.sent)
+
+    home = app.send_protocol_command(ProtocolCommandRequest(command="home", node_id=0))
+    assert home["command"] == "home"
+    assert transport.sent[before].command == CommandName.HOME
+    assert transport.sent[before].node_id == 0
+
+    target = app.send_protocol_command(
+        ProtocolCommandRequest(
+            command="set_target",
+            node_id=1,
+            azimuth_deg=12.5,
+            elevation_deg=34.0,
+            mode="parked",
+        )
+    )
+    assert target["payload"]["azimuth_deg"] == 12.5
+    assert target["payload"]["elevation_deg"] == 34.0
+    assert target["payload"]["mode"] == "parked"
+    assert transport.sent[-1].command == CommandName.SET_TARGET
+
+    jog = app.send_protocol_command(
+        ProtocolCommandRequest(command="jog", node_id=0, azimuth_rate_deg_s=1.5, elevation_rate_deg_s=-0.5)
+    )
+    assert jog["payload"]["azimuth_rate_deg_s"] == 1.5
+    assert transport.sent[-1].command == CommandName.JOG
+
+    status = app.send_protocol_command(ProtocolCommandRequest(command="get_status", node_id=0))
+    assert status["mirror_status"]["node_id"] == 0
+    assert status["mirror_status"]["homed"] is True
+
+    cleared = app.send_protocol_command(ProtocolCommandRequest(command="clear_error", node_id=0))
+    assert cleared["command"] == "clear_error"
+    assert transport.sent[-1].command == CommandName.CLEAR_ERROR
+
+    mode = app.send_protocol_command(ProtocolCommandRequest(command="set_mode", node_id=0, mode="idle"))
+    assert mode["payload"]["mode"] == "idle"
+    assert transport.sent[-1].command == CommandName.SET_MODE
+
+    discovered = app.send_protocol_command(ProtocolCommandRequest(command="discover"))
+    assert {n["node_id"] for n in discovered["nodes"]} == {0, 1}
+
+
+def test_send_protocol_command_rejects_unknown() -> None:
+    from hotbox_controller.app import ProtocolCommandRequest
+
+    app, _transport = _app()
+    try:
+        app.send_protocol_command(ProtocolCommandRequest(command="explode", node_id=0))
+        assert False, "expected ValueError"
+    except ValueError as exc:
+        assert "unknown protocol command" in str(exc)
+
+
+def test_protocol_traffic_is_recorded() -> None:
+    from hotbox_controller.app import ProtocolCommandRequest
+
+    app, _transport = _app()
+    app.send_protocol_command(ProtocolCommandRequest(command="home", node_id=0))
+    app.send_protocol_command(ProtocolCommandRequest(command="get_status", node_id=0))
+    traffic = app.current_snapshot()["protocol_traffic"]
+    kinds = [e["kind"] for e in traffic if e.get("node_id") == 0]
+    assert "home" in kinds
+    assert "status" in kinds
+    assert any(e["direction"] == "tx" for e in traffic)
+    assert any(e["direction"] == "rx" for e in traffic)
+
+
+def test_raw_mode_stops_automatic_wire_traffic() -> None:
+    from hotbox_controller.app import ProtocolCommandRequest
+
+    app, transport = _app()
+    app.set_mode("track")
+    app.set_raw_mode(True)
+    assert app.raw_mode is True
+    assert app.current_snapshot()["raw_mode"] is True
+
+    transport.sent.clear()
+    transport.polls.clear()
+    app.control_tick()
+    assert transport.sent == []
+    assert transport.polls == []
+
+    transport.polls.clear()
+    snap = app.current_snapshot()
+    assert snap["raw_mode"] is True
+    assert transport.polls == []
+
+    # Explicit protocol sends still work.
+    app.send_protocol_command(
+        ProtocolCommandRequest(
+            command="set_target",
+            node_id=0,
+            azimuth_deg=1.0,
+            elevation_deg=2.0,
+            mode="tracking",
+        )
+    )
+    assert transport.sent[-1].command == CommandName.SET_TARGET
+
+    app.set_raw_mode(False)
+    transport.sent.clear()
+    transport.polls.clear()
+    app.control_tick()
+    assert any(c.command == CommandName.SET_TARGET for c in transport.sent)
+    assert transport.polls
