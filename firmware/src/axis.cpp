@@ -121,7 +121,10 @@ void BrushedAxis::stop() {
   driveMotor(0.0f);
 }
 
-void BrushedAxis::clearFault() { fault_text_ = nullptr; }
+void BrushedAxis::clearFault() {
+  fault_text_ = nullptr;
+  stall_timer_s_ = 0.0f;
+}
 
 void BrushedAxis::setFault(const char* text) {
   fault_text_ = text;
@@ -206,14 +209,18 @@ void BrushedAxis::update(float dt_s) {
     const float pwm_command = clampf(error_deg / 10.0f, -1.0f, 1.0f);
     driveMotor(pwm_command);
     command_velocity_deg_s_ = pwm_command * kMaxVelocityDegS;
-    if (encoder_alive_ && fabs(command_velocity_deg_s_) > 1.0f &&
-        fabs(velocity_deg_s_) < kStallVelocityThreshDegS) {
-      stall_timer_s_ += dt_s;
+    if (kStallTimeoutS > 0.0f) {
+      if (encoder_alive_ && fabs(command_velocity_deg_s_) > 1.0f &&
+          fabs(velocity_deg_s_) < kStallVelocityThreshDegS) {
+        stall_timer_s_ += dt_s;
+      } else {
+        stall_timer_s_ = 0.0f;
+      }
+      if (stall_timer_s_ > kStallTimeoutS) {
+        setFault("stalled");
+      }
     } else {
       stall_timer_s_ = 0.0f;
-    }
-    if (stall_timer_s_ > kStallTimeoutS) {
-      setFault("stalled");
     }
     return;
   }

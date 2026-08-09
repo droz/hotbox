@@ -46,6 +46,18 @@ def test_firmware_header_contains_key_defines() -> None:
     assert f"#define HOTBOX_MOTOR_PWM_HZ ({system.pins.motor_pwm_hz})" in header
 
 
+def test_actuator_two_stage_gear_ratio() -> None:
+    system = load_system_constants()
+    assert system.actuator.motor_gear_ratio == 70.0
+    assert system.actuator.worm_gear_ratio == 120.0
+    assert abs(system.actuator.gear_ratio - 70.0 * 120.0) < 1e-9
+    expected_tpd = 64 * 4.0 * 70.0 * 120.0 / 360.0
+    assert abs(system.actuator.ticks_per_degree - expected_tpd) < 1e-6
+    header = render_firmware_header(system)
+    assert "HOTBOX_MOTOR_GEAR_RATIO (70.000000f)" in header
+    assert "HOTBOX_WORM_GEAR_RATIO (120.000000f)" in header
+
+
 def test_pins_reject_invalid_label() -> None:
     from hotbox_shared.system import PinConstants
     import pytest

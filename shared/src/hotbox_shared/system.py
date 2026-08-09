@@ -127,24 +127,30 @@ class ActuatorConstants:
 
     Encoder note
     ------------
-    The encoder sits on the motor shaft *before* the gearbox.  The relationship is:
+    The encoder sits on the motor shaft *before* both reduction stages:
 
-        ticks_per_degree = (encoder_ppr * 4) * gear_ratio / 360
-
-    All three values are stored so the gear ratio is explicit and auditable.
+        overall_gear_ratio = motor_gear_ratio * worm_gear_ratio
+        ticks_per_degree = (encoder_ppr * 4) * overall_gear_ratio / 360
     """
 
     # --- Encoder / gearbox ---
     encoder_ppr: int = 64
     """Encoder pulses per revolution of the *motor* shaft (single-channel edges)."""
-    gear_ratio: float = 50.0
-    """Output shaft turns per motor shaft turn (> 1 means speed reduction)."""
+    motor_gear_ratio: float = 70.0
+    """Motor gearbox ratio (motor shaft → intermediate shaft)."""
+    worm_gear_ratio: float = 120.0
+    """Mount worm-drive ratio (intermediate shaft → output / mount shaft)."""
+
+    @property
+    def gear_ratio(self) -> float:
+        """Overall reduction: motor_gear_ratio × worm_gear_ratio."""
+        return self.motor_gear_ratio * self.worm_gear_ratio
 
     @property
     def ticks_per_degree(self) -> float:
         """Quadrature encoder ticks per degree of output (mount) shaft rotation.
 
-        Derived from encoder_ppr × 4 (quadrature edges) × gear_ratio / 360.
+        Derived from encoder_ppr × 4 (quadrature edges) × overall gear ratio / 360.
         """
         return self.encoder_ppr * 4.0 * self.gear_ratio / 360.0
 
@@ -175,7 +181,7 @@ class ActuatorConstants:
     stall_velocity_threshold_deg_s: float = 0.05
     """Mirror is considered stalled when |velocity| < this while |command| is large [°/s]."""
     stall_timeout_s: float = 1.0
-    """Time after which a stalled axis triggers a fault [s]."""
+    """Time after which a stalled axis triggers a fault [s]. ``<= 0`` disables stall faults."""
 
     # --- Control loop ---
     control_period_s: float = 0.02

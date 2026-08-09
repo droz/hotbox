@@ -50,6 +50,8 @@ def render_firmware_header(system: SystemConstants) -> str:
         "",
         "// Actuator constants (from config/system.yaml actuator section)",
         f"#define HOTBOX_ENCODER_PPR ({system.actuator.encoder_ppr}u)",
+        f"#define HOTBOX_MOTOR_GEAR_RATIO ({system.actuator.motor_gear_ratio:.6f}f)",
+        f"#define HOTBOX_WORM_GEAR_RATIO ({system.actuator.worm_gear_ratio:.6f}f)",
         f"#define HOTBOX_GEAR_RATIO ({system.actuator.gear_ratio:.6f}f)",
         f"#define HOTBOX_TICKS_PER_DEGREE ({system.actuator.ticks_per_degree:.6f}f)",
         f"#define HOTBOX_MAX_VELOCITY_DEG_S ({system.actuator.max_velocity_deg_s:.6f}f)",

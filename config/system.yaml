@@ -78,11 +78,12 @@ control:
 
 actuator:
   # ── Encoder / gearbox ────────────────────────────────────────────────────────
-  # The encoder is mounted on the motor shaft BEFORE the gearbox.
-  # Relationship:  ticks_per_degree = (encoder_ppr × 4) × gear_ratio / 360
-  encoder_ppr: 64          # Pulses per revolution of the motor shaft (single-channel edges)
-  gear_ratio: 50.0         # Output (mount) shaft turns per motor shaft turn
-  # ticks_per_degree is derived: encoder_ppr × 4 (quadrature) × gear_ratio / 360
+  # Encoder is on the motor shaft BEFORE both reduction stages.
+  # ticks_per_degree = (encoder_ppr × 4) × motor_gear_ratio × worm_gear_ratio / 360
+  encoder_ppr: 8               # Pulses per revolution of the motor shaft (single-channel edges)
+  motor_gear_ratio: 70.0       # Motor gearbox (motor shaft → intermediate)
+  worm_gear_ratio: 120.0       # Mount worm drive (intermediate → output / mount shaft)
+  # Overall gear_ratio = motor_gear_ratio × worm_gear_ratio (derived in code)
 
   # ── Velocity limits ───────────────────────────────────────────────────────────
   max_velocity_deg_s: 30.0    # Maximum output-shaft speed [°/s]
@@ -93,7 +94,7 @@ actuator:
 
   # ── PID (position loop, works in output-shaft ° with ±255 PWM output) ────────
   pid_kp: 1.2
-  pid_ki: 0.05
+  pid_ki: 0.5
   pid_kd: 0.01
 
   # ── SITL physics ─────────────────────────────────────────────────────────────
@@ -102,8 +103,9 @@ actuator:
   velocity_time_constant_s: 0.2  # [s]
 
   # ── Stall detection ──────────────────────────────────────────────────────────
+  # Set stall_timeout_s to 0 (or negative) to disable stall faults while tuning PID.
   stall_velocity_threshold_deg_s: 0.05  # |ω| < this while |cmd| is large → stalling [°/s]
-  stall_timeout_s: 1.0                  # Time before fault is raised [s]
+  stall_timeout_s: 0.0                  # 0 = disabled; e.g. 1.0 to re-enable after bring-up [s]
 
   # ── Control loop ─────────────────────────────────────────────────────────────
   control_period_s: 0.02  # Firmware ISR / control loop period (50 Hz) [s]
