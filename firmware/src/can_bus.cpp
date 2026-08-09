@@ -10,8 +10,8 @@ namespace hotbox {
 CanBus::CanBus(ProtocolHandler* protocol) : protocol_(protocol) {}
 
 bool CanBus::begin() {
-  const gpio_num_t tx_pin = static_cast<gpio_num_t>(kCanTxPin);
-  const gpio_num_t rx_pin = static_cast<gpio_num_t>(kCanRxPin);
+  const gpio_num_t tx_pin = static_cast<gpio_num_t>(pinToGpio(kCanTxPin));
+  const gpio_num_t rx_pin = static_cast<gpio_num_t>(pinToGpio(kCanRxPin));
 
   twai_general_config_t g_config =
       TWAI_GENERAL_CONFIG_DEFAULT(tx_pin, rx_pin, TWAI_MODE_NORMAL);

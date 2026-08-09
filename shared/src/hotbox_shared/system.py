@@ -182,6 +182,58 @@ class ActuatorConstants:
     """Firmware control-loop period [s] (50 Hz)."""
 
 
+_ARDUINO_PIN_NAMES = frozenset(
+    {*(f"D{i}" for i in range(14)), *(f"A{i}" for i in range(8))}
+)
+
+
+@dataclass(slots=True, frozen=True)
+class PinConstants:
+    """Arduino Nano ESP32 pin roles baked into firmware via the generated header.
+
+    Values are Arduino pin labels (``D5``, ``A0``, …), not raw ESP32 GPIO numbers.
+    Swap ``*_enc_a`` / ``*_enc_b`` on an axis to invert quadrature direction.
+    """
+
+    can_tx: str = "D10"
+    can_rx: str = "D9"
+    elevation_motor_p: str = "A0"
+    elevation_motor_m: str = "A1"
+    elevation_enc_a: str = "D6"
+    elevation_enc_b: str = "D5"
+    elevation_hall: str = "D7"
+    azimuth_motor_p: str = "A2"
+    azimuth_motor_m: str = "A3"
+    azimuth_enc_a: str = "D3"
+    azimuth_enc_b: str = "D2"
+    azimuth_hall: str = "D4"
+    motor_pwm_hz: int = 20000
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "can_tx",
+            "can_rx",
+            "elevation_motor_p",
+            "elevation_motor_m",
+            "elevation_enc_a",
+            "elevation_enc_b",
+            "elevation_hall",
+            "azimuth_motor_p",
+            "azimuth_motor_m",
+            "azimuth_enc_a",
+            "azimuth_enc_b",
+            "azimuth_hall",
+        ):
+            value = getattr(self, field_name)
+            if value not in _ARDUINO_PIN_NAMES:
+                raise ValueError(
+                    f"pins.{field_name}={value!r} is not a valid Arduino pin label "
+                    f"(expected one of {sorted(_ARDUINO_PIN_NAMES)})"
+                )
+        if int(self.motor_pwm_hz) <= 0:
+            raise ValueError(f"pins.motor_pwm_hz must be positive, got {self.motor_pwm_hz}")
+
+
 @dataclass(slots=True, frozen=True)
 class SystemConstants:
     default_site: SiteConstants
@@ -190,6 +242,7 @@ class SystemConstants:
     fleet: FleetConstants
     control: ControlConstants
     actuator: ActuatorConstants = ActuatorConstants()
+    pins: PinConstants = PinConstants()
 
     def mount_world(self, node_id: int) -> np.ndarray:
         return self.fleet.mount_by_id(node_id).mount_world(

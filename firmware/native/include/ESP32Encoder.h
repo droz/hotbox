@@ -4,19 +4,22 @@
 
 #include <cstdint>
 
+#include "hotbox_geometry.h"
+
 // Two encoder instances: index 0 = azimuth, index 1 = elevation.
 // Defined in hal.cpp; set by hotbox_cil_set_encoder() from the Python harness.
 extern volatile long g_encoder_counts[2];
 
+enum class puType { up, down, none };
+
 class ESP32Encoder {
 public:
     int axis_idx_ = -1;  // set by attachFullQuad based on pin
+    static puType useInternalWeakPullResistors;
 
-    // pin_a values match electrical/pinouts.txt via config.h:
-    // D2 = azimuth (horiz), D5 = elevation (vert).
+    // Identify axis from the A-channel Arduino pin in config/system.yaml.
     void attachFullQuad(int pin_a, int /*pin_b*/) {
-        // D2 = 2 → azimuth (0), D5 = 5 → elevation (1)
-        axis_idx_ = (pin_a == 2) ? 0 : 1;
+        axis_idx_ = (pin_a == HOTBOX_PIN_AZIMUTH_ENC_A) ? 0 : 1;
     }
 
     void setCount(long val) {

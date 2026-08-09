@@ -11,6 +11,8 @@ volatile int  g_hal_analog_out[32]  = {};
 volatile long g_encoder_counts[2]   = {};
 _SerialStub Serial;
 
+puType ESP32Encoder::useInternalWeakPullResistors = puType::up;
+
 void pinMode(int /*pin*/, int /*mode*/) {}
 
 void analogWrite(int pin, int value) {

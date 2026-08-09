@@ -40,11 +40,15 @@ def test_firmware_header_contains_key_defines() -> None:
     assert "HOTBOX_ABSORBER_CENTER_HEIGHT_M" in header
     assert "HOTBOX_MIRROR_GRID_NX" in header
     assert "HOTBOX_MIRROR_OFFSET_D_M" in header
+    assert "HOTBOX_PIN_ELEVATION_ENC_A" in header
+    assert system.pins.elevation_enc_a in header
+    assert f"#define HOTBOX_PIN_ELEVATION_ENC_A {system.pins.elevation_enc_a}" in header
+    assert f"#define HOTBOX_MOTOR_PWM_HZ ({system.pins.motor_pwm_hz})" in header
 
 
-def test_firmware_header_contains_key_defines() -> None:
-    system = load_system_constants()
-    header = render_firmware_header(system)
-    assert "HOTBOX_ABSORBER_CENTER_HEIGHT_M" in header
-    assert "HOTBOX_MIRROR_GRID_NX" in header
-    assert "HOTBOX_MIRROR_OFFSET_D_M" in header
+def test_pins_reject_invalid_label() -> None:
+    from hotbox_shared.system import PinConstants
+    import pytest
+
+    with pytest.raises(ValueError, match="elevation_enc_a"):
+        PinConstants(elevation_enc_a="GPIO8")

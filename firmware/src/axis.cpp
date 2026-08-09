@@ -62,12 +62,16 @@ void BrushedAxis::begin() {
   analogWrite(motor_m_, 0);
   // Active-low halls: keep internal pull-up so open wires read not-triggered.
   pinMode(hall_pin_, INPUT_PULLUP);
+  // ESP32Encoder configures PCNT with raw GPIO numbers (not Arduino D# labels).
+  ESP32Encoder::useInternalWeakPullResistors = puType::up;
+  const int gpio_a = pinToGpio(enc_a_);
+  const int gpio_b = pinToGpio(enc_b_);
   if (enc_a_ == kHorizEncA) {
-    g_az_encoder.attachFullQuad(enc_a_, enc_b_);
+    g_az_encoder.attachFullQuad(gpio_a, gpio_b);
     g_az_encoder.setCount(0);
     encoder_ticks_ = g_az_encoder.getCount();
   } else {
-    g_el_encoder.attachFullQuad(enc_a_, enc_b_);
+    g_el_encoder.attachFullQuad(gpio_a, gpio_b);
     g_el_encoder.setCount(0);
     encoder_ticks_ = g_el_encoder.getCount();
   }

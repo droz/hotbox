@@ -5,27 +5,38 @@
 
 namespace hotbox {
 
-// ── Pin assignments ──────────────────────────────────────────────────────────
-constexpr int kCanTxPin = D10;
-constexpr int kCanRxPin = D9;
+// ── Pin assignments (from config/system.yaml via hotbox_geometry.h) ───────────
+constexpr int kCanTxPin = HOTBOX_PIN_CAN_TX;
+constexpr int kCanRxPin = HOTBOX_PIN_CAN_RX;
 
-constexpr int kVertMotorP = A0;
-constexpr int kVertMotorM = A1;
-constexpr int kVertEncA = D5;
-constexpr int kVertEncB = D6;
-constexpr int kVertHall = D7;
+constexpr int kVertMotorP = HOTBOX_PIN_ELEVATION_MOTOR_P;
+constexpr int kVertMotorM = HOTBOX_PIN_ELEVATION_MOTOR_M;
+constexpr int kVertEncA = HOTBOX_PIN_ELEVATION_ENC_A;
+constexpr int kVertEncB = HOTBOX_PIN_ELEVATION_ENC_B;
+constexpr int kVertHall = HOTBOX_PIN_ELEVATION_HALL;
 
-constexpr int kHorizMotorP = A2;
-constexpr int kHorizMotorM = A3;
-constexpr int kHorizEncA = D2;
-constexpr int kHorizEncB = D3;
-constexpr int kHorizHall = D4;
+constexpr int kHorizMotorP = HOTBOX_PIN_AZIMUTH_MOTOR_P;
+constexpr int kHorizMotorM = HOTBOX_PIN_AZIMUTH_MOTOR_M;
+constexpr int kHorizEncA = HOTBOX_PIN_AZIMUTH_ENC_A;
+constexpr int kHorizEncB = HOTBOX_PIN_AZIMUTH_ENC_B;
+constexpr int kHorizHall = HOTBOX_PIN_AZIMUTH_HALL;
 
 // H-bridge PWM carrier (Arduino-ESP32 default is 1 kHz; 20 kHz is above hearing).
-constexpr int kMotorPwmHz = 20000;
+constexpr int kMotorPwmHz = HOTBOX_MOTOR_PWM_HZ;
 
 #ifndef HOTBOX_NODE_ID
 #define HOTBOX_NODE_ID 0
+#endif
+
+// ESP32Encoder / TWAI take Espressif GPIO numbers. On Nano ESP32 the Arduino
+// D# labels are remapped (D5 → GPIO 8, etc.), so convert before driving
+// peripherals that bypass the Arduino pin API.
+#if defined(NATIVE_CIL)
+inline int pinToGpio(int arduino_pin) { return arduino_pin; }
+#else
+inline int pinToGpio(int arduino_pin) {
+  return static_cast<int>(digitalPinToGPIONumber(static_cast<int8_t>(arduino_pin)));
+}
 #endif
 
 // ── Actuator constants (generated from config/system.yaml) ───────────────────

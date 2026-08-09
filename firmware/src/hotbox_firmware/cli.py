@@ -52,8 +52,20 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def regenerate_geometry_header() -> None:
+    """Rebuild ``firmware/include/hotbox_geometry.h`` from ``config/system.yaml``."""
+    repo_root = firmware_root().parent
+    shared_dir = repo_root / "shared"
+    cmd = ["uv", "run", "--directory", str(shared_dir), "hotbox-gen-firmware-geometry"]
+    print("+", " ".join(cmd), flush=True)
+    completed = subprocess.run(cmd, cwd=repo_root)
+    if completed.returncode != 0:
+        raise SystemExit(completed.returncode)
+
+
 def build_firmware(node_id: int, *, pio_args: list[str] | None = None) -> int:
     """Build firmware for ``node_id`` into its dedicated PlatformIO env."""
+    regenerate_geometry_header()
     env = env_for_node(node_id)
     return run_pio(["run", "-e", env, *list(pio_args or ())])
 

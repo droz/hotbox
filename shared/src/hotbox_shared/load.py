@@ -11,6 +11,7 @@ from .system import (
     FleetConstants,
     MirrorConstants,
     MountDesign,
+    PinConstants,
     SiteConstants,
     SystemConstants,
 )
@@ -47,8 +48,17 @@ def system_constants_from_dict(raw: dict) -> SystemConstants:
     )
     control = ControlConstants(**raw["control"])
     actuator = ActuatorConstants(**raw["actuator"]) if "actuator" in raw else ActuatorConstants()
+    pins = PinConstants(**raw["pins"]) if "pins" in raw else PinConstants()
     if fleet.assembly_count != len(fleet.mounts):
         raise ValueError(
             f"fleet.assembly_count ({fleet.assembly_count}) != number of mounts ({len(fleet.mounts)})"
         )
-    return SystemConstants(default_site=site, absorber=absorber, mirror=mirror, fleet=fleet, control=control, actuator=actuator)
+    return SystemConstants(
+        default_site=site,
+        absorber=absorber,
+        mirror=mirror,
+        fleet=fleet,
+        control=control,
+        actuator=actuator,
+        pins=pins,
+    )

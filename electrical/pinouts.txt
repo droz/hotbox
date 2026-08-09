@@ -40,3 +40,8 @@ AZIMUTH_MOTOR_M    | A3
 AZIMUTH_ENC_A      | D2
 AZIMUTH_ENC_B      | D3
 AZIMUTH_HALL       | D4
+
+Firmware pin *roles* (including encoder A/B sense) live in config/system.yaml
+under `pins:` and are baked into firmware via `uv run hotbox-gen-firmware-geometry`.
+Swap elevation_enc_a/b or azimuth_enc_a/b there to invert quadrature direction.
+The table above is the board harness silk → Arduino pad map.

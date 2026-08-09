@@ -51,6 +51,7 @@ from .system import (
     FleetConstants,
     MirrorConstants,
     MountDesign,
+    PinConstants,
     SiteConstants,
     SystemConstants,
 )
@@ -67,6 +68,7 @@ __all__ = [
     "MountAngles",
     "MountDesign",
     "MountJointLimits",
+    "PinConstants",
     "SiteConstants",
     "SitePose",
     "SystemConstants",

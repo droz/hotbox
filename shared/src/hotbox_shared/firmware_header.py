@@ -62,6 +62,21 @@ def render_firmware_header(system: SystemConstants) -> str:
         f"#define HOTBOX_STALL_TIMEOUT_S ({system.actuator.stall_timeout_s:.6f}f)",
         f"#define HOTBOX_CONTROL_PERIOD_S ({system.actuator.control_period_s:.6f}f)",
         "",
+        "// Arduino pin labels from config/system.yaml pins (not raw ESP32 GPIO numbers).",
+        f"#define HOTBOX_PIN_CAN_TX {system.pins.can_tx}",
+        f"#define HOTBOX_PIN_CAN_RX {system.pins.can_rx}",
+        f"#define HOTBOX_PIN_ELEVATION_MOTOR_P {system.pins.elevation_motor_p}",
+        f"#define HOTBOX_PIN_ELEVATION_MOTOR_M {system.pins.elevation_motor_m}",
+        f"#define HOTBOX_PIN_ELEVATION_ENC_A {system.pins.elevation_enc_a}",
+        f"#define HOTBOX_PIN_ELEVATION_ENC_B {system.pins.elevation_enc_b}",
+        f"#define HOTBOX_PIN_ELEVATION_HALL {system.pins.elevation_hall}",
+        f"#define HOTBOX_PIN_AZIMUTH_MOTOR_P {system.pins.azimuth_motor_p}",
+        f"#define HOTBOX_PIN_AZIMUTH_MOTOR_M {system.pins.azimuth_motor_m}",
+        f"#define HOTBOX_PIN_AZIMUTH_ENC_A {system.pins.azimuth_enc_a}",
+        f"#define HOTBOX_PIN_AZIMUTH_ENC_B {system.pins.azimuth_enc_b}",
+        f"#define HOTBOX_PIN_AZIMUTH_HALL {system.pins.azimuth_hall}",
+        f"#define HOTBOX_MOTOR_PWM_HZ ({int(system.pins.motor_pwm_hz)})",
+        "",
         ]
     )
     return "\n".join(lines)

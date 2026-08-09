@@ -107,3 +107,24 @@ actuator:
 
   # ── Control loop ─────────────────────────────────────────────────────────────
   control_period_s: 0.02  # Firmware ISR / control loop period (50 Hz) [s]
+
+# Arduino Nano ESP32 pin roles for firmware.
+# Labels are Arduino D#/A# names (firmware remaps them to ESP32 GPIO numbers).
+# Swap *_enc_a / *_enc_b on an axis to invert encoder direction without rewiring.
+# Physical silk / harness map: electrical/pinouts.txt (ENC_A yellow → D5, etc.).
+# Regenerate firmware header after edits: uv run hotbox-gen-firmware-geometry
+pins:
+  can_tx: D10
+  can_rx: D9
+  elevation_motor_p: A0
+  elevation_motor_m: A1
+  # A/B swapped vs electrical/pinouts.txt silk (yellow/white) for correct sense.
+  elevation_enc_a: D6
+  elevation_enc_b: D5
+  elevation_hall: D7
+  azimuth_motor_p: A2
+  azimuth_motor_m: A3
+  azimuth_enc_a: D3
+  azimuth_enc_b: D2
+  azimuth_hall: D4
+  motor_pwm_hz: 20000
