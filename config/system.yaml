@@ -80,7 +80,7 @@ actuator:
   # ── Encoder / gearbox ────────────────────────────────────────────────────────
   # Encoder is on the motor shaft BEFORE both reduction stages.
   # ticks_per_degree = (encoder_ppr × 4) × motor_gear_ratio × worm_gear_ratio / 360
-  encoder_ppr: 8               # Pulses per revolution of the motor shaft (single-channel edges)
+  encoder_ppr: 16              # Pulses per revolution of the motor shaft (single-channel edges)
   motor_gear_ratio: 70.0       # Motor gearbox (motor shaft → intermediate)
   worm_gear_ratio: 120.0       # Mount worm drive (intermediate → output / mount shaft)
   # Overall gear_ratio = motor_gear_ratio × worm_gear_ratio (derived in code)
@@ -92,10 +92,11 @@ actuator:
   # ── Homing ───────────────────────────────────────────────────────────────────
   homing_velocity_deg_s: 5.0  # Creep speed toward hall sensor during homing [°/s]
 
-  # ── PID (position loop, works in output-shaft ° with ±255 PWM output) ────────
-  pid_kp: 1.2
-  pid_ki: 0.5
-  pid_kd: 0.01
+  # ── PID (duty command u ∈ [-1,1]: kp*error + ki*∫error + kd*derror/dt) ──────
+  # Same gains for azimuth and elevation. Override at runtime with set_pid.
+  pid_kp: 40.0
+  pid_ki: 50.0
+  pid_kd: 2.0
 
   # ── SITL physics ─────────────────────────────────────────────────────────────
   # First-order lag approximating motor electrical + mechanical inertia.

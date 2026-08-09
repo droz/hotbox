@@ -4,6 +4,29 @@
 #include <cstring>
 
 namespace hotbox {
+namespace {
+
+bool hasCommand(const String& line, const char* name) {
+  String a = String("\"command\":\"") + name + "\"";
+  String b = String("\"command\": \"") + name + "\"";
+  return line.indexOf(a) >= 0 || line.indexOf(b) >= 0;
+}
+
+bool readFloatField(const String& line, const char* key, float* out) {
+  String needle = String("\"") + key + "\":";
+  int index = line.indexOf(needle);
+  if (index < 0) {
+    needle = String("\"") + key + "\": ";
+    index = line.indexOf(needle);
+  }
+  if (index < 0) {
+    return false;
+  }
+  *out = line.substring(index + needle.length()).toFloat();
+  return true;
+}
+
+}  // namespace
 
 ProtocolHandler::ProtocolHandler(MirrorMount* mount) : mount_(mount) {}
 
@@ -44,6 +67,16 @@ void ProtocolHandler::emitStatus() {
   Serial.print(mount_->azimuthDeg(), 3);
   Serial.print(",\"elevation_deg\":");
   Serial.print(mount_->elevationDeg(), 3);
+  Serial.print(",\"azimuth_integral\":");
+  Serial.print(mount_->azimuthIntegralTerm(), 4);
+  Serial.print(",\"elevation_integral\":");
+  Serial.print(mount_->elevationIntegralTerm(), 4);
+  Serial.print(",\"pid_kp\":");
+  Serial.print(mount_->pidKp(), 4);
+  Serial.print(",\"pid_ki\":");
+  Serial.print(mount_->pidKi(), 4);
+  Serial.print(",\"pid_kd\":");
+  Serial.print(mount_->pidKd(), 4);
   Serial.print(",\"mode\":\"");
   Serial.print(mount_->modeText());
   Serial.print("\",\"az_hall\":");
@@ -89,6 +122,9 @@ bool ProtocolHandler::handleBinary(const uint8_t* data, size_t len) {
     case kCanCmdClearError:
       mount_->clearError();
       return false;
+    case kCanCmdReset:
+      mount_->reset();
+      return false;
     case kCanCmdSetTarget: {
       if (len < 5) {
         return false;
@@ -96,6 +132,17 @@ bool ProtocolHandler::handleBinary(const uint8_t* data, size_t len) {
       const int16_t az_c = static_cast<int16_t>(data[1] | (data[2] << 8));
       const int16_t el_c = static_cast<int16_t>(data[3] | (data[4] << 8));
       mount_->setTarget(az_c / 100.0f, el_c / 100.0f);
+      return false;
+    }
+    case kCanCmdSetPid: {
+      // kp,ki,kd as int16 milli-units (value * 1000).
+      if (len < 7) {
+        return false;
+      }
+      const int16_t kp_m = static_cast<int16_t>(data[1] | (data[2] << 8));
+      const int16_t ki_m = static_cast<int16_t>(data[3] | (data[4] << 8));
+      const int16_t kd_m = static_cast<int16_t>(data[5] | (data[6] << 8));
+      mount_->setPid(kp_m / 1000.0f, ki_m / 1000.0f, kd_m / 1000.0f);
       return false;
     }
     case kCanCmdGetStatus:
@@ -106,47 +153,50 @@ bool ProtocolHandler::handleBinary(const uint8_t* data, size_t len) {
 }
 
 void ProtocolHandler::handleLine(const String& line) {
-  // Accept both compact (`"command":"home"`) and spaced (`"command": "home"`) JSON.
-  auto hasCommand = [&](const char* name) -> bool {
-    String a = String("\"command\":\"") + name + "\"";
-    String b = String("\"command\": \"") + name + "\"";
-    return line.indexOf(a) >= 0 || line.indexOf(b) >= 0;
-  };
-
-  if (hasCommand("home")) {
+  if (hasCommand(line, "home")) {
     mount_->home();
     // Immediate ack = command accepted / homing started. Completion is
     // visible via mode "homing" → "idle" and homed=true (status push + polls).
     emitAck("home", true);
     return;
   }
-  if (hasCommand("stop")) {
+  if (hasCommand(line, "stop")) {
     mount_->stop();
     emitAck("stop", true);
     return;
   }
-  if (hasCommand("clear_error")) {
+  if (hasCommand(line, "clear_error")) {
     mount_->clearError();
     emitAck("clear_error", true);
     return;
   }
-  if (hasCommand("get_status")) {
+  if (hasCommand(line, "reset")) {
+    emitAck("reset", true);
+    mount_->reset();  // may reboot; ack is flushed first
+    return;
+  }
+  if (hasCommand(line, "get_status")) {
     emitStatus();
     return;
   }
-  if (hasCommand("set_target")) {
-    int az_index = line.indexOf("\"azimuth_deg\":");
-    int el_index = line.indexOf("\"elevation_deg\":");
+  if (hasCommand(line, "set_target")) {
     float az = 0.0f;
     float el = 0.0f;
-    if (az_index >= 0) {
-      az = line.substring(az_index + 14).toFloat();
-    }
-    if (el_index >= 0) {
-      el = line.substring(el_index + 16).toFloat();
-    }
+    readFloatField(line, "azimuth_deg", &az);
+    readFloatField(line, "elevation_deg", &el);
     mount_->setTarget(az, el);
     emitAck("set_target", true);
+    return;
+  }
+  if (hasCommand(line, "set_pid")) {
+    float kp = mount_->pidKp();
+    float ki = mount_->pidKi();
+    float kd = mount_->pidKd();
+    readFloatField(line, "kp", &kp);
+    readFloatField(line, "ki", &ki);
+    readFloatField(line, "kd", &kd);
+    mount_->setPid(kp, ki, kd);
+    emitAck("set_pid", true);
     return;
   }
   emitAck("unknown", false);

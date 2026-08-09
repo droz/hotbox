@@ -89,6 +89,7 @@ void BrushedAxis::startHoming() {
   // If already on the switch (or the pin is stuck low), back off first so we
   // don't "succeed" instantly with motors never driven.
   homing_backoff_ = hallTriggered();
+  resetPidState();
   clearFault();
 }
 
@@ -105,6 +106,7 @@ void BrushedAxis::finishHoming() {
   homed_ = true;
   mode_ = AxisMode::Idle;
   homing_backoff_ = false;
+  resetPidState();
   driveMotor(0.0f);
 }
 
@@ -118,6 +120,7 @@ void BrushedAxis::stop() {
   mode_ = AxisMode::Idle;
   command_velocity_deg_s_ = 0.0f;
   homing_backoff_ = false;
+  resetPidState();
   driveMotor(0.0f);
 }
 
@@ -126,10 +129,23 @@ void BrushedAxis::clearFault() {
   stall_timer_s_ = 0.0f;
 }
 
+void BrushedAxis::setPidGains(float kp, float ki, float kd) {
+  kp_ = kp;
+  ki_ = ki;
+  kd_ = kd;
+}
+
+void BrushedAxis::resetPidState() {
+  integral_ = 0.0f;
+  last_error_deg_ = 0.0f;
+  pid_has_last_error_ = false;
+}
+
 void BrushedAxis::setFault(const char* text) {
   fault_text_ = text;
   mode_ = AxisMode::Fault;
   homing_backoff_ = false;
+  resetPidState();
   driveMotor(0.0f);
 }
 
@@ -206,7 +222,21 @@ void BrushedAxis::update(float dt_s) {
     if (enc_a_ == kHorizEncA) {
       error_deg = limited_azimuth_error_deg(target_deg_, position_deg_);
     }
-    const float pwm_command = clampf(error_deg / 10.0f, -1.0f, 1.0f);
+    float d_error = 0.0f;
+    if (pid_has_last_error_ && dt_s > 1e-6f) {
+      d_error = (error_deg - last_error_deg_) / dt_s;
+    }
+    last_error_deg_ = error_deg;
+    pid_has_last_error_ = true;
+
+    // Duty fraction u ∈ [-1, 1]: kp*e + ki*∫e + kd*de/dt with integrator anti-windup.
+    float u = kp_ * error_deg + ki_ * integral_ + kd_ * d_error;
+    const bool saturated = u > 1.0f || u < -1.0f;
+    if (!saturated || (error_deg * integral_ <= 0.0f)) {
+      integral_ += error_deg * dt_s;
+    }
+    u = kp_ * error_deg + ki_ * integral_ + kd_ * d_error;
+    const float pwm_command = clampf(u, -1.0f, 1.0f);
     driveMotor(pwm_command);
     command_velocity_deg_s_ = pwm_command * kMaxVelocityDegS;
     if (kStallTimeoutS > 0.0f) {
@@ -233,8 +263,14 @@ MirrorMount::MirrorMount()
       elevation_(kVertMotorP, kVertMotorM, kVertEncA, kVertEncB, kVertHall) {}
 
 void MirrorMount::begin() {
+  applyPidGains();
   azimuth_.begin();
   elevation_.begin();
+}
+
+void MirrorMount::applyPidGains() {
+  azimuth_.setPidGains(pid_kp_, pid_ki_, pid_kd_);
+  elevation_.setPidGains(pid_kp_, pid_ki_, pid_kd_);
 }
 
 void MirrorMount::home() {
@@ -267,6 +303,29 @@ void MirrorMount::clearError() {
   azimuth_.stop();
   elevation_.stop();
   refreshModeText();
+}
+
+void MirrorMount::setPid(float kp, float ki, float kd) {
+  pid_kp_ = kp;
+  pid_ki_ = ki;
+  pid_kd_ = kd;
+  applyPidGains();
+}
+
+void MirrorMount::reset() {
+  azimuth_.clearFault();
+  elevation_.clearFault();
+  azimuth_.stop();
+  elevation_.stop();
+  azimuth_.resetPidState();
+  elevation_.resetPidState();
+  refreshModeText();
+#if !defined(NATIVE_CIL)
+  Serial.println("{\"hotbox\":\"reset\",\"via\":\"soft\"}");
+  Serial.flush();
+  delay(20);
+  ESP.restart();
+#endif
 }
 
 void MirrorMount::update(float dt_s) {

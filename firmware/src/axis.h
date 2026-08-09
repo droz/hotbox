@@ -19,7 +19,12 @@ class BrushedAxis {
   void clearFault();
   void update(float dt_s);
 
+  void setPidGains(float kp, float ki, float kd);
+  void resetPidState();
+
   float positionDeg() const { return position_deg_; }
+  /** Integral term contribution to duty command (ki * ∫error dt), before clamp. */
+  float integralTerm() const { return ki_ * integral_; }
   bool isHomed() const { return homed_; }
   bool hallTriggered() const;
   AxisMode mode() const { return mode_; }
@@ -51,6 +56,13 @@ class BrushedAxis {
   bool homing_backoff_ = false;
   AxisMode mode_ = AxisMode::Idle;
   const char* fault_text_ = nullptr;
+
+  float kp_ = kPidKp;
+  float ki_ = kPidKi;
+  float kd_ = kPidKd;
+  float integral_ = 0.0f;
+  float last_error_deg_ = 0.0f;
+  bool pid_has_last_error_ = false;
 };
 
 class MirrorMount {
@@ -62,10 +74,18 @@ class MirrorMount {
   void stop();
   void setTarget(float azimuth_deg, float elevation_deg);
   void clearError();
+  /** Soft reset: stop, clear faults/PID state. On device also reboots via ESP.restart(). */
+  void reset();
+  void setPid(float kp, float ki, float kd);
   void update(float dt_s);
 
   float azimuthDeg() const { return azimuth_.positionDeg(); }
   float elevationDeg() const { return elevation_.positionDeg(); }
+  float azimuthIntegralTerm() const { return azimuth_.integralTerm(); }
+  float elevationIntegralTerm() const { return elevation_.integralTerm(); }
+  float pidKp() const { return pid_kp_; }
+  float pidKi() const { return pid_ki_; }
+  float pidKd() const { return pid_kd_; }
   bool isHomed() const { return azimuth_.isHomed() && elevation_.isHomed(); }
   bool azimuthHallTriggered() const { return azimuth_.hallTriggered(); }
   bool elevationHallTriggered() const { return elevation_.hallTriggered(); }
@@ -74,9 +94,13 @@ class MirrorMount {
 
  private:
   void refreshModeText();
+  void applyPidGains();
 
   BrushedAxis azimuth_;
   BrushedAxis elevation_;
+  float pid_kp_ = kPidKp;
+  float pid_ki_ = kPidKi;
+  float pid_kd_ = kPidKd;
   const char* mode_text_ = "idle";
 };
 

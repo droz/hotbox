@@ -10,7 +10,9 @@ enum CanCommandId : uint8_t {
   kCanCmdStop = 2,
   kCanCmdSetTarget = 3,
   kCanCmdGetStatus = 4,
+  kCanCmdReset = 5,
   kCanCmdClearError = 6,
+  kCanCmdSetPid = 7,
 };
 
 constexpr uint32_t kCanCmdBaseId = 0x100;

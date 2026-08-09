@@ -917,6 +917,10 @@
           result.textContent = "Set az/el above, then Send.";
           result.classList.add("empty");
           result.classList.remove("error");
+        } else if (command === "set_pid") {
+          result.textContent = "Set Kp/Ki/Kd (both axes), then Send.";
+          result.classList.add("empty");
+          result.classList.remove("error");
         } else {
           result.textContent = "No arguments — Send to run.";
           result.classList.add("empty");
@@ -932,11 +936,17 @@
             `mode: ${s.mode}`,
             `az: ${Number(s.azimuth_deg).toFixed(3)}°`,
             `el: ${Number(s.elevation_deg).toFixed(3)}°`,
+            `∫ az: ${Number(s.azimuth_integral ?? 0).toFixed(4)}`,
+            `∫ el: ${Number(s.elevation_integral ?? 0).toFixed(4)}`,
+            `pid: kp=${s.pid_kp ?? "—"} ki=${s.pid_ki ?? "—"} kd=${s.pid_kd ?? "—"}`,
             `fault: ${s.fault ?? "none"}`,
           ].join("\n");
         }
         if (command === "set_target" && response?.payload) {
           return `ok → az ${Number(response.payload.azimuth_deg).toFixed(3)}° / el ${Number(response.payload.elevation_deg).toFixed(3)}°`;
+        }
+        if (command === "set_pid" && response?.payload) {
+          return `ok → kp ${Number(response.payload.kp).toFixed(3)} / ki ${Number(response.payload.ki).toFixed(3)} / kd ${Number(response.payload.kd).toFixed(3)}`;
         }
         if (response?.status === "ok") {
           return `ok · ${command}`;
@@ -989,6 +999,11 @@
         if (command === "set_target") {
           body.azimuth_deg = Number(card.querySelector('[data-field="proto-az"]').value);
           body.elevation_deg = Number(card.querySelector('[data-field="proto-el"]').value);
+        }
+        if (command === "set_pid") {
+          body.kp = Number(card.querySelector('[data-field="proto-kp"]').value);
+          body.ki = Number(card.querySelector('[data-field="proto-ki"]').value);
+          body.kd = Number(card.querySelector('[data-field="proto-kd"]').value);
         }
         const response = await post("/api/protocol", body);
         const text = formatProtocolResult(command, response);
@@ -1253,6 +1268,7 @@
             <span class="stat">az <strong data-field="az">…</strong></span>
             <span class="stat">el <strong data-field="el">…</strong></span>
             <span class="stat">miss <strong data-field="miss">…</strong></span>
+            <span class="stat">∫ <strong data-field="integral">…</strong></span>
             <span class="stat" data-field="fault-wrap" hidden>fault <strong data-field="fault">none</strong></span>
           </div>
           <div class="mirror-actions">
@@ -1276,7 +1292,7 @@
             </div>
             <div class="mirror-secondary">
               <button class="tiny" data-action="home">Home</button>
-              <button class="tiny" data-action="reset" title="Pulse DTR and reopen USB to reboot the Arduino">Reset</button>
+              <button class="tiny" data-action="reset" title="Soft reset (protocol reset → ESP.restart)">Reset</button>
             </div>
             <details class="protocol">
               <summary>Protocol</summary>
@@ -1291,8 +1307,10 @@
                     <option value="home">home</option>
                     <option value="stop">stop</option>
                     <option value="set_target">set_target</option>
+                    <option value="set_pid">set_pid</option>
                     <option value="get_status">get_status</option>
                     <option value="clear_error">clear_error</option>
+                    <option value="reset">reset</option>
                   </select>
                 </div>
                 <div class="protocol-row proto-field" data-fields="set_target" hidden>
@@ -1302,6 +1320,18 @@
                 <div class="protocol-row proto-field" data-fields="set_target" hidden>
                   <label>Elevation °</label>
                   <input data-field="proto-el" type="number" step="0.1" value="0" />
+                </div>
+                <div class="protocol-row proto-field" data-fields="set_pid" hidden>
+                  <label>Kp</label>
+                  <input data-field="proto-kp" type="number" step="0.01" value="1.2" />
+                </div>
+                <div class="protocol-row proto-field" data-fields="set_pid" hidden>
+                  <label>Ki</label>
+                  <input data-field="proto-ki" type="number" step="0.01" value="0.5" />
+                </div>
+                <div class="protocol-row proto-field" data-fields="set_pid" hidden>
+                  <label>Kd</label>
+                  <input data-field="proto-kd" type="number" step="0.01" value="0.01" />
                 </div>
                 <div class="protocol-actions">
                   <button type="button" class="tiny" data-field="proto-send">Send</button>
@@ -1390,13 +1420,13 @@
               : (fwMode === "timeout" || fwMode === "disconnected" ? fwMode : (status.homed ? mirrorMode : "home?"));
           }
           card.querySelector('[data-field="fw-mode"]').textContent = fwMode;
-          const azNow = Number(status.azimuth_deg).toFixed(1);
-          const elNow = Number(status.elevation_deg).toFixed(1);
+          const azNow = Number(status.azimuth_deg).toFixed(3);
+          const elNow = Number(status.elevation_deg).toFixed(3);
           if (target) {
             card.querySelector('[data-field="az"]').innerHTML =
-              `${azNow}° <span class="tgt">→ ${Number(target.azimuth_deg).toFixed(1)}°</span>`;
+              `${azNow}° <span class="tgt">→ ${Number(target.azimuth_deg).toFixed(3)}°</span>`;
             card.querySelector('[data-field="el"]').innerHTML =
-              `${elNow}° <span class="tgt">→ ${Number(target.elevation_deg).toFixed(1)}°</span>`;
+              `${elNow}° <span class="tgt">→ ${Number(target.elevation_deg).toFixed(3)}°</span>`;
           } else {
             card.querySelector('[data-field="az"]').textContent = `${azNow}°`;
             card.querySelector('[data-field="el"]').textContent = `${elNow}°`;
@@ -1404,6 +1434,21 @@
           const miss = missById[id];
           card.querySelector('[data-field="miss"]').textContent =
             miss === undefined || miss === null ? "—" : `${Number(miss).toFixed(3)} m`;
+          const azI = Number(status.azimuth_integral ?? 0);
+          const elI = Number(status.elevation_integral ?? 0);
+          card.querySelector('[data-field="integral"]').textContent =
+            `az ${azI.toFixed(3)} · el ${elI.toFixed(3)}`;
+          // Prefill Kp/Ki/Kd once from firmware status — never overwrite while editing
+          // (state polls would otherwise clobber values as soon as the input blurs).
+          if (status.pid_kp != null && card.dataset.pidPrefill !== "1") {
+            card.dataset.pidPrefill = "1";
+            const kpInput = card.querySelector('[data-field="proto-kp"]');
+            const kiInput = card.querySelector('[data-field="proto-ki"]');
+            const kdInput = card.querySelector('[data-field="proto-kd"]');
+            if (kpInput) kpInput.value = Number(status.pid_kp);
+            if (kiInput) kiInput.value = Number(status.pid_ki ?? 0);
+            if (kdInput) kdInput.value = Number(status.pid_kd ?? 0);
+          }
           const faultWrap = card.querySelector('[data-field="fault-wrap"]');
           const faultEl = card.querySelector('[data-field="fault"]');
           if (status.fault) {

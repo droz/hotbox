@@ -68,7 +68,7 @@ class HeatDemandRequest(BaseModel):
 class ProtocolCommandRequest(BaseModel):
     """Low-level wire command for mirror controllers (bypasses supervisor helpers).
 
-    Commands: home, stop, set_target, get_status, clear_error, discover.
+    Commands: home, stop, set_target, get_status, clear_error, reset, set_pid, discover.
     ``discover`` rediscovers the fleet and ignores ``node_id``.
     Put the mirror in supervisor ``raw`` mode so Track/Park/Jog do not overwrite
     wire commands. Jog stick rates are a host API only (integrated into ``set_target``).
@@ -80,6 +80,10 @@ class ProtocolCommandRequest(BaseModel):
     azimuth_deg: float | None = None
     elevation_deg: float | None = None
     mode: str | None = None
+    # set_pid (shared gains for both axes)
+    kp: float | None = None
+    ki: float | None = None
+    kd: float | None = None
 
 
 # Canonical modes. ``auto`` → track, ``manual`` → jog.
@@ -93,6 +97,8 @@ PROTOCOL_COMMANDS = frozenset(
         CommandName.SET_TARGET.value,
         CommandName.GET_STATUS.value,
         CommandName.CLEAR_ERROR.value,
+        CommandName.RESET.value,
+        CommandName.SET_PID.value,
         CommandName.DISCOVER.value,
     }
 )
@@ -547,11 +553,15 @@ class ControllerApplication:
         }
 
     def reset_one(self, node_id: int) -> None:
-        """Hardware-reset one mirror via the transport (USB DTR pulse + reopen)."""
+        """Soft-reset one mirror via the wire ``reset`` command (firmware ESP.restart)."""
         node_id = int(node_id)
         if node_id not in self.fleet.nodes():
             raise KeyError(f"unknown node_id={node_id}")
-        self.transport.reset_node(node_id)
+        try:
+            self.transport.send(MirrorCommand(node_id=node_id, command=CommandName.RESET))
+        except ConnectionError:
+            # Board reboots and drops CDC; hotplug reconnect picks it back up.
+            pass
 
     def park_all(self) -> None:
         self.set_mode("park")
@@ -634,6 +644,12 @@ class ControllerApplication:
                 "azimuth_deg": clamped.azimuth_deg,
                 "elevation_deg": clamped.elevation_deg,
             }
+        elif command_name == CommandName.SET_PID.value:
+            payload = {
+                "kp": float(request.kp if request.kp is not None else 0.0),
+                "ki": float(request.ki if request.ki is not None else 0.0),
+                "kd": float(request.kd if request.kd is not None else 0.0),
+            }
 
         command = MirrorCommand(node_id=node_id, command=CommandName(command_name), payload=payload)
         if command_name == CommandName.GET_STATUS.value:
@@ -708,7 +724,7 @@ class ControllerApplication:
 
         @app.post("/api/reset_one")
         def api_reset_one(request: NodeRequest) -> dict[str, str]:
-            """Pulse DTR and reopen the USB CDC port to reboot the Arduino."""
+            """Soft-reset via protocol ``reset`` (firmware ESP.restart)."""
             from fastapi import HTTPException
 
             try:

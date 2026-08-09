@@ -164,13 +164,13 @@ class ActuatorConstants:
     homing_velocity_deg_s: float = 5.0
     """Slow creep speed used during hall-sensor homing [°/s]."""
 
-    # --- PID (position loop, output shaft degrees) ---
+    # --- PID (position loop, output shaft degrees → duty ∈ [-1, 1]) ---
     pid_kp: float = 1.2
-    """Proportional gain (applied in encoder-tick space, output ±255 PWM units)."""
+    """Proportional gain: contribution kp * error_deg to motor duty."""
     pid_ki: float = 0.05
-    """Integral gain."""
+    """Integral gain: contribution ki * ∫error_deg dt to motor duty."""
     pid_kd: float = 0.01
-    """Derivative gain."""
+    """Derivative gain: contribution kd * d(error_deg)/dt to motor duty."""
 
     # --- SITL physics model ---
     velocity_time_constant_s: float = 0.2
