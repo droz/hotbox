@@ -17,6 +17,8 @@ void analogWrite(int pin, int value) {
     if (pin >= 0 && pin < 32) g_hal_analog_out[pin] = value;
 }
 
+void analogWriteFrequency(uint32_t /*frequency*/) {}
+
 int digitalRead(int pin) {
     return (pin >= 0 && pin < 32) ? g_hal_digital_in[pin] : 0;
 }

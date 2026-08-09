@@ -24,3 +24,10 @@ def test_mirror_status_wire_roundtrip() -> None:
     assert restored.homed is True
     assert abs(restored.azimuth_deg - 10.5) < 1e-9
     assert restored.mode == "position"
+
+
+def test_mirror_command_usb_wire_is_compact() -> None:
+    """Firmware string-matches commands; spaces after ':' previously caused timeouts."""
+    wire = MirrorCommand(node_id=0, command=CommandName.GET_STATUS).to_wire().decode()
+    assert '"command":"get_status"' in wire
+    assert '"command": "get_status"' not in wire

@@ -21,6 +21,9 @@ constexpr int kHorizEncA = D5;
 constexpr int kHorizEncB = D6;
 constexpr int kHorizHall = D7;
 
+// H-bridge PWM carrier (Arduino-ESP32 default is 1 kHz; 20 kHz is above hearing).
+constexpr int kMotorPwmHz = 20000;
+
 #ifndef HOTBOX_NODE_ID
 #define HOTBOX_NODE_ID 0
 #endif

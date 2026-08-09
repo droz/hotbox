@@ -510,6 +510,11 @@
       .protocol-log-head .section-label {
         margin: 0;
       }
+      .protocol-log-head .log-tools {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+      }
       .protocol-log-head label {
         display: inline-flex;
         align-items: center;
@@ -526,6 +531,14 @@
         width: auto;
         accent-color: var(--accent);
       }
+      .protocol-log-head button.tiny {
+        font-size: 0.65rem;
+        padding: 0.15rem 0.4rem;
+      }
+      .protocol-log-head button.tiny.paused {
+        border-color: var(--accent);
+        color: var(--text);
+      }
       .protocol-log {
         margin: 0;
         max-height: 9rem;
@@ -538,9 +551,15 @@
         border-radius: 8px;
         padding: 0.35rem 0.45rem;
         font-variant-numeric: tabular-nums;
+        user-select: text;
+        -webkit-user-select: text;
+      }
+      .protocol-log.is-paused {
+        outline: 1px dashed #5a6a78;
       }
       .protocol-log .tx { color: #9fd0ff; }
       .protocol-log .rx { color: #b8e0a8; }
+      .protocol-log .timeout { color: #ffb4a8; }
       .section-label {
         margin: 0;
         font-size: 0.75rem;
@@ -928,21 +947,26 @@
       function formatTrafficLine(entry) {
         const t = String(entry.timestamp_utc || "").slice(11, 23);
         const arrow = entry.direction === "tx" ? "→" : "←";
+        const kind = String(entry.kind || "");
+        if (kind === "timeout" || kind === "disconnected") {
+          return `<div class="timeout">${t} ${arrow} ${kind}</div>`;
+        }
         const payload = entry.payload && Object.keys(entry.payload).length
           ? " " + JSON.stringify(entry.payload)
           : "";
         const cls = entry.direction === "tx" ? "tx" : "rx";
-        return `<div class="${cls}">${t} ${arrow} ${entry.kind}${payload}</div>`;
+        return `<div class="${cls}">${t} ${arrow} ${kind}${payload}</div>`;
       }
 
       function isStatusTraffic(entry) {
         const kind = String(entry.kind || "");
-        return kind === "get_status" || kind === "status";
+        return kind === "get_status" || kind === "status" || kind === "timeout";
       }
 
       function updateProtocolTraffic(card, nodeId, traffic) {
         const log = card.querySelector('[data-field="proto-log"]');
         if (!log) return;
+        if (log.dataset.paused === "1") return;
         const hideStatus = hideGetStatusEnabled();
         let entries = (traffic || []).filter((e) => String(e.node_id) === String(nodeId));
         if (hideStatus) entries = entries.filter((e) => !isStatusTraffic(e));
@@ -996,14 +1020,41 @@
             if (window.hotboxLatestState) updateMirrorCards(window.hotboxLatestState);
           });
         }
+        const pauseBtn = card.querySelector('[data-field="proto-pause-log"]');
+        const log = card.querySelector('[data-field="proto-log"]');
+        if (pauseBtn && log) {
+          pauseBtn.addEventListener("click", () => {
+            const paused = log.dataset.paused === "1";
+            if (paused) {
+              delete log.dataset.paused;
+              delete log.dataset.trafficKey; // force redraw on resume
+              pauseBtn.textContent = "Pause";
+              pauseBtn.classList.remove("paused");
+              log.classList.remove("is-paused");
+              if (window.hotboxLatestState) updateMirrorCards(window.hotboxLatestState);
+            } else {
+              log.dataset.paused = "1";
+              pauseBtn.textContent = "Resume";
+              pauseBtn.classList.add("paused");
+              log.classList.add("is-paused");
+            }
+          });
+        }
         updateProtocolFields(card);
       }
 
       function pillClass(homed, fault, mode) {
-        if (fault) return "bad";
+        if (fault || mode === "fault") return "bad";
+        if (mode === "timeout" || mode === "disconnected") return "bad";
         if (!homed) return "warn";
         if (mode === "position" || mode === "idle" || mode === "homing") return "ok";
         return "";
+      }
+
+      function formatFwMode(status) {
+        const mode = String(status?.mode || "—");
+        if (mode === "timeout" || mode === "disconnected") return mode;
+        return mode;
       }
 
       const JOG_MAX_RATE_DEG_S = 8;
@@ -1198,6 +1249,7 @@
             <span class="pill" data-field="status-pill">…</span>
           </div>
           <div class="mirror-stats" data-field="mirror-stats">
+            <span class="stat">fw <strong data-field="fw-mode">…</strong></span>
             <span class="stat">az <strong data-field="az">…</strong></span>
             <span class="stat">el <strong data-field="el">…</strong></span>
             <span class="stat">miss <strong data-field="miss">…</strong></span>
@@ -1224,6 +1276,7 @@
             </div>
             <div class="mirror-secondary">
               <button class="tiny" data-action="home">Home</button>
+              <button class="tiny" data-action="reset" title="Pulse DTR and reopen USB to reboot the Arduino">Reset</button>
             </div>
             <details class="protocol">
               <summary>Protocol</summary>
@@ -1259,10 +1312,13 @@
                 </div>
                 <div class="protocol-log-head">
                   <p class="section-label">Log</p>
-                  <label title="Hide get_status traffic">
-                    <input type="checkbox" data-field="proto-hide-status" />
-                    hide status
-                  </label>
+                  <div class="log-tools">
+                    <button type="button" class="tiny" data-field="proto-pause-log" title="Freeze log so you can select and copy">Pause</button>
+                    <label title="Hide get_status traffic">
+                      <input type="checkbox" data-field="proto-hide-status" />
+                      hide status
+                    </label>
+                  </div>
                 </div>
                 <div class="protocol-log" data-field="proto-log">No traffic yet.</div>
               </div>
@@ -1281,6 +1337,15 @@
             if (action === "home") {
               jogControllers.get(String(nodeId))?.stop({ sendZero: false });
               post("/api/home_one", { node_id: id }).then(() => refreshState()).catch(console.error);
+            } else if (action === "reset") {
+              jogControllers.get(String(nodeId))?.stop({ sendZero: false });
+              button.disabled = true;
+              post("/api/reset_one", { node_id: id })
+                .then(() => refreshState())
+                .catch(console.error)
+                .finally(() => {
+                  button.disabled = false;
+                });
             }
           });
         });
@@ -1306,16 +1371,25 @@
           const card = ensureMirrorCard(id);
           const statusPill = card.querySelector('[data-field="status-pill"]');
           const demandNote = !state.heat_demand && mirrorMode === "track" ? " (divert)" : "";
-          statusPill.textContent = status.fault
-            ? "fault"
-            : (status.homed ? `${mirrorMode}${demandNote}` : "not homed");
+          const fwMode = formatFwMode(status);
+          // Pill: prefer wire/firmware mode when it's an error/diagnostic state.
+          if (status.fault) {
+            statusPill.textContent = `fault · ${fwMode}`;
+          } else if (fwMode === "timeout" || fwMode === "disconnected") {
+            statusPill.textContent = fwMode;
+          } else if (!status.homed) {
+            statusPill.textContent = `not homed · ${fwMode}`;
+          } else {
+            statusPill.textContent = `${mirrorMode}${demandNote} · ${fwMode}`;
+          }
           statusPill.className = `pill ${pillClass(status.homed, status.fault, status.mode)}`;
           const tabNote = document.querySelector(`#tab-mirror-${id} [data-field="tab-note"]`);
           if (tabNote) {
             tabNote.textContent = status.fault
               ? "fault"
-              : (status.homed ? mirrorMode : "home?");
+              : (fwMode === "timeout" || fwMode === "disconnected" ? fwMode : (status.homed ? mirrorMode : "home?"));
           }
+          card.querySelector('[data-field="fw-mode"]').textContent = fwMode;
           const azNow = Number(status.azimuth_deg).toFixed(1);
           const elNow = Number(status.elevation_deg).toFixed(1);
           if (target) {

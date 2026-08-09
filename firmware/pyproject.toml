@@ -1,0 +1,23 @@
+[project]
+name = "hotbox-firmware"
+version = "0.1.0"
+description = "PlatformIO build and upload helpers for Hot-Box Arduino firmware."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    # PlatformIO's tool manager shells out to `python -m pip` when installing
+    # toolchain extras (e.g. esptool crypto deps). uv venvs omit pip by default.
+    "pip>=25.0",
+    "platformio>=6.1.0",
+]
+
+[project.scripts]
+hotbox-firmware-build = "hotbox_firmware.cli:build_main"
+hotbox-firmware-upload = "hotbox_firmware.cli:upload_main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hotbox_firmware"]

@@ -165,7 +165,7 @@ The controller package already includes calibration file load/save support. The 
 
 Prefer existing libraries where they fit:
 
-- firmware: `ESP32Encoder`, `PID`, `CAN`, PlatformIO-managed dependencies
+- firmware: `ESP32Encoder`, `PID`, PlatformIO-managed deps; CAN via ESP32-S3 TWAI
 - controller: `pvlib`, `python-can`, `pyserial`, `FastAPI`, `numpy`, `scipy`, `PyYAML`
 - UI: `Three.js`
 
@@ -238,14 +238,71 @@ Use `--batch-seconds N` for a short headless run.
 
 The controller supports three mirror transports:
 
-- `usb` — JSON lines over USB serial (`pyserial`)
-- `can` — compact binary frames over SocketCAN (`python-can`)
+- `usb` — JSON lines over USB serial (`pyserial`); default for bench bring-up
+- `can` — compact binary frames over SocketCAN (`python-can`); typical on a Pi in the field
 - `sim` — in-process simulated mirror nodes (used by `sim_in_the_loop/`)
 
-Configure transport mode in `controller/src/hotbox_controller/config.py`.
+Override transport with `HOTBOX_TRANSPORT=usb|can|sim` (default `usb`).
 
-Firmware uses PlatformIO:
+USB port mapping:
+
+- **One** Arduino Nano ESP32 plugged in → auto-discovered by USB VID/PID (`2341:0070`) and mapped to **node 0**
+- **Multiple** boards → set an explicit map (VID/PID alone cannot tell which board is which node):
 
 ```bash
-cd firmware && pio run
+export HOTBOX_USB_PORTS='0:/dev/cu.usbmodem1101,1:/dev/ttyACM1'
+```
+
+Paths look like `/dev/cu.usbmodem*` on macOS and `/dev/ttyACM*` on Linux.
+
+### Flash firmware and test a real board (not simulation)
+
+Works the same on a Mac (USB bench) or a Raspberry Pi.
+
+1. **Plug in** the Nano ESP32 over USB. Unplug other Nano ESP32 boards first for single-board bring-up.
+
+2. **Flash** firmware for the matching node id (single-board auto-discovery expects **0**):
+
+```bash
+cd firmware
+uv run hotbox-firmware-upload --node-id 0
+# optional: --port /dev/cu.usbmodem1101   # or /dev/ttyACM0 on Linux
+```
+
+Upload always builds that node first. For a second board, flash `--node-id 1`, leave both plugged in, and set `HOTBOX_USB_PORTS` as above.
+
+3. **Start the controller** against real USB (not `sim_in_the_loop`):
+
+```bash
+cd controller
+# optional: export HOTBOX_TRANSPORT=usb
+# optional: export HOTBOX_USB_PORTS='0:/dev/ttyACM0'
+uv run hotbox-controller
+```
+
+Open [http://127.0.0.1:8000/](http://127.0.0.1:8000/). You should see mirror **M0** with live az/el (not sim-only “true” geometry).
+
+4. **Smoke-test from the UI**
+
+- Select the **M0** tab.
+- Put the mirror in **Raw** so Track/Park do not overwrite your wire commands.
+- Expand **Protocol** → send `get_status` and confirm a status reply in the log.
+- Prefer **Home** once (or Protocol `home`) before commanding large moves.
+- Try Protocol `set_target` with small angles, or switch to **Jog** and nudge with the stick.
+- Use **Park** / **Track** only when you intend the supervisor to drive targets (Track also follows heat-demand / sun logic).
+
+On a Pi with CAN instead of USB serial:
+
+```bash
+export HOTBOX_TRANSPORT=can
+# nodes are addressed by CAN id; plug USB only if you still need it for programming
+cd controller && uv run hotbox-controller
+```
+
+Firmware build/upload helpers:
+
+```bash
+cd firmware
+uv run hotbox-firmware-build --node-id 0
+uv run hotbox-firmware-upload --node-id 1 --port /dev/ttyACM0
 ```

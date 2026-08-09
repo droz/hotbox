@@ -22,7 +22,7 @@ from .calibration import load_calibrations
 from .config import AppConfig, SiteConfig, app_config_from_system
 from .gps import GpsService
 from .mirror_fleet import MirrorFleet
-from .protocol import CommandName, MirrorCommand
+from .protocol import CommandName, MirrorCommand, MirrorStatus
 from .scene import build_mirror_scene_entry, build_target_scene, default_mount_world, mount_world_from_calibration
 from .sun import SunService, SunVector
 from .tracking import TrackingTarget, idle_dump_world, safe_park, track_point
@@ -173,12 +173,23 @@ class ControllerApplication:
 
     def _poll_statuses(self) -> dict[int, Any]:
         """Poll non-raw mirrors; reuse cache for raw (no automatic get_status)."""
+        # Hotplug: if the fleet is empty (started unplugged) or we only have
+        # disconnected cards, rediscover so newly plugged boards appear.
+        nodes = self.fleet.nodes()
+        if not nodes:
+            nodes = self.fleet.discover()
+            for node_id in nodes:
+                self._node_modes.setdefault(int(node_id), "track")
+
         out: dict[int, Any] = {}
         for node_id, node in self.fleet.nodes().items():
             if self.node_mode(node_id) == "raw":
                 out[node_id] = node.status
             else:
-                status = self.transport.poll_status(node_id)
+                try:
+                    status = self.transport.poll_status(node_id)
+                except ConnectionError:
+                    status = MirrorStatus(node_id=int(node_id), mode="disconnected")
                 node.status = status
                 out[node_id] = status
         return out
@@ -299,7 +310,26 @@ class ControllerApplication:
             int(node_id): self._clamp_target(int(node_id), target, allow_dual=allow_dual)
             for node_id, target in targets.items()
         }
-        self.fleet.apply_targets(clamped)
+        try:
+            self.fleet.apply_targets(clamped)
+        except ConnectionError:
+            # USB hot-unplug during a command cycle — next poll reconnects.
+            return
+
+    def home_all(self) -> None:
+        self.set_mode("jog")
+        try:
+            self.fleet.home_all()
+        except ConnectionError:
+            return
+
+    def home_one(self, node_id: int) -> None:
+        self.set_mirror_mode(node_id, "jog")
+        self.fleet.home(node_id)
+
+    def stop_one(self, node_id: int) -> None:
+        self.set_mirror_mode(node_id, "jog")
+        self.fleet.stop(node_id)
 
     def _halt_jog_rates(self, node_id: int) -> None:
         """Zero host jog rates without changing supervisor mode or releasing the hold pose."""
@@ -452,13 +482,17 @@ class ControllerApplication:
         for node_id in self.fleet.nodes():
             if self.node_mode(node_id) == "raw":
                 continue
+            # Jog is allowed before/without homing so motor wiring can be checked
+            # open-loop (no encoders yet). Track/Park still require a successful home.
+            if self.node_mode(node_id) == "jog":
+                self._advance_jog(node_id, status=statuses[node_id])
+                continue
             if not statuses[node_id].homed:
                 continue
             desired = self._desired_target_for_node(
                 node_id, sun=sun, statuses=statuses, tracking=tracking
             )
             if desired is None:
-                self._advance_jog(node_id, status=statuses[node_id])
                 continue
             self._apply_targets({node_id: desired})
 
@@ -512,17 +546,12 @@ class ControllerApplication:
             },
         }
 
-    def home_all(self) -> None:
-        self.set_mode("jog")
-        self.fleet.home_all()
-
-    def home_one(self, node_id: int) -> None:
-        self.set_mirror_mode(node_id, "jog")
-        self.fleet.home(node_id)
-
-    def stop_one(self, node_id: int) -> None:
-        self.set_mirror_mode(node_id, "jog")
-        self.fleet.stop(node_id)
+    def reset_one(self, node_id: int) -> None:
+        """Hardware-reset one mirror via the transport (USB DTR pulse + reopen)."""
+        node_id = int(node_id)
+        if node_id not in self.fleet.nodes():
+            raise KeyError(f"unknown node_id={node_id}")
+        self.transport.reset_node(node_id)
 
     def park_all(self) -> None:
         self.set_mode("park")
@@ -645,17 +674,51 @@ class ControllerApplication:
 
         @app.post("/api/home")
         def home() -> dict[str, str]:
-            self.home_all()
+            from fastapi import HTTPException
+
+            try:
+                self.home_all()
+            except ConnectionError as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
             return {"status": "ok"}
 
         @app.post("/api/home_one")
         def api_home_one(request: NodeRequest) -> dict[str, str]:
-            self.home_one(request.node_id)
+            from fastapi import HTTPException
+
+            try:
+                self.home_one(request.node_id)
+            except ConnectionError as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
             return {"status": "ok"}
 
         @app.post("/api/stop_one")
         def api_stop_one(request: NodeRequest) -> dict[str, str]:
-            self.stop_one(request.node_id)
+            from fastapi import HTTPException
+
+            try:
+                self.stop_one(request.node_id)
+            except ConnectionError as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            return {"status": "ok"}
+
+        @app.post("/api/reset_one")
+        def api_reset_one(request: NodeRequest) -> dict[str, str]:
+            """Pulse DTR and reopen the USB CDC port to reboot the Arduino."""
+            from fastapi import HTTPException
+
+            try:
+                self.reset_one(request.node_id)
+            except ConnectionError as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+            except RuntimeError as exc:
+                raise HTTPException(status_code=501, detail=str(exc)) from exc
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
             return {"status": "ok"}
 
         @app.post("/api/park")
@@ -676,6 +739,10 @@ class ControllerApplication:
                 from fastapi import HTTPException
 
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except ConnectionError as exc:
+                from fastapi import HTTPException
+
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
             return {"status": "ok", "mode": self.mode}
 
         @app.post("/api/mirror_mode")
@@ -686,6 +753,10 @@ class ControllerApplication:
                 from fastapi import HTTPException
 
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except ConnectionError as exc:
+                from fastapi import HTTPException
+
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
             return {
                 "status": "ok",
                 "mode": self.mode,
@@ -712,12 +783,22 @@ class ControllerApplication:
 
         @app.post("/api/jog")
         def api_jog(request: JogRequest) -> dict[str, Any]:
-            self.jog(request)
+            from fastapi import HTTPException
+
+            try:
+                self.jog(request)
+            except ConnectionError as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
             return {"status": "ok", "mode": self.mode, "mirror_mode": self.node_mode(request.node_id)}
 
         @app.post("/api/target")
         def api_target(request: TargetRequest) -> dict[str, str]:
-            self.set_manual_target(request)
+            from fastapi import HTTPException
+
+            try:
+                self.set_manual_target(request)
+            except ConnectionError as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
             return {"status": "ok"}
 
         @app.post("/api/protocol")
@@ -731,6 +812,8 @@ class ControllerApplication:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             except KeyError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except ConnectionError as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
 
         @app.get("/")
         def index() -> FileResponse:

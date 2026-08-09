@@ -48,7 +48,15 @@ class MirrorCommand:
     payload: dict[str, Any] = field(default_factory=dict)
 
     def to_wire(self) -> bytes:
-        return (json.dumps({"node_id": self.node_id, "command": self.command, "payload": self.payload}) + "\n").encode("utf-8")
+        # Compact separators: firmware's Arduino string matching expects
+        # `"command":"get_status"` (no space after ':').
+        return (
+            json.dumps(
+                {"node_id": self.node_id, "command": self.command, "payload": self.payload},
+                separators=(",", ":"),
+            )
+            + "\n"
+        ).encode("utf-8")
 
     @classmethod
     def from_wire(cls, data: bytes) -> MirrorCommand:

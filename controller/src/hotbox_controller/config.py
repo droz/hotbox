@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import os
 from pathlib import Path
 
 from hotbox_shared import SystemConstants, load_system_constants
+
+from .usb_discover import usb_ports_from_env
 
 
 @dataclass(slots=True)
@@ -72,6 +75,8 @@ class AppConfig:
 def app_config_from_system(system: SystemConstants | None = None) -> AppConfig:
     system = system or load_system_constants()
     node_ids = tuple(mount.node_id for mount in system.fleet.mounts)
+    transport_mode = os.environ.get("HOTBOX_TRANSPORT", "usb").strip().lower() or "usb"
+    usb_ports = usb_ports_from_env()
     return AppConfig(
         site=SiteConfig(
             latitude_deg=system.default_site.latitude_deg,
@@ -97,6 +102,6 @@ def app_config_from_system(system: SystemConstants | None = None) -> AppConfig:
             default_oa_distance_m=system.mirror.default_oa_distance_m,
             default_mount_height_m=system.mirror.default_mount_height_m,
         ),
-        transport=TransportConfig(sim_node_ids=node_ids),
+        transport=TransportConfig(mode=transport_mode, usb_ports=usb_ports, sim_node_ids=node_ids),
         system=system,
     )

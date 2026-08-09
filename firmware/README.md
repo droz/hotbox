@@ -9,10 +9,23 @@ Goals:
 - quadrature encoder + hall homing
 - host-shim friendly structure for simulation
 
-Build with PlatformIO:
+Build / flash with `uv` (installs PlatformIO into this package env).
+Each mirror has its own build env, and upload always builds that node first:
 
 ```bash
-pio run
+cd firmware
+uv run hotbox-firmware-build --node-id 0
+uv run hotbox-firmware-upload --node-id 1
+# optional: uv run hotbox-firmware-upload --node-id 1 --port /dev/cu.usbmodem1101
+```
+
+`--node-id` must be `0`, `1`, or `2` (matches `config/system.yaml` mounts).
+
+Or call PlatformIO directly:
+
+```bash
+pio run -e nano_esp32_node0
+pio run -t upload -e nano_esp32_node1
 ```
 
 The firmware implements:
@@ -21,4 +34,5 @@ The firmware implements:
 - hall-sensor homing
 - position servo (`set_target`); host integrates jog rates into targets
 - status modes: `idle` | `homing` | `position` | `fault`
-- the same JSON command protocol used over USB serial
+- USB serial JSON protocol and ESP32-S3 TWAI (CAN) binary protocol
+- TWAI soft-fails without a transceiver so USB bench bring-up still works

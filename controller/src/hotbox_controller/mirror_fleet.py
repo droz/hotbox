@@ -21,11 +21,24 @@ class MirrorFleet:
         self._nodes: dict[int, MirrorNode] = {}
 
     def discover(self) -> dict[int, MirrorNode]:
+        """Merge transport discoveries into the fleet.
+
+        Previously-seen nodes are kept when a rediscover finds nothing (USB
+        hot-unplug) so the UI keeps cards and reconnect can restore them.
+        """
         discovered = list(self._transport.discover())
-        self._nodes = {
-            node.node_id: MirrorNode(node_id=node.node_id, endpoint=node.endpoint, transport_name=node.transport_name, status=MirrorStatus(node_id=node.node_id))
-            for node in discovered
-        }
+        for node in discovered:
+            existing = self._nodes.get(node.node_id)
+            if existing is not None:
+                existing.endpoint = node.endpoint
+                existing.transport_name = node.transport_name
+            else:
+                self._nodes[node.node_id] = MirrorNode(
+                    node_id=node.node_id,
+                    endpoint=node.endpoint,
+                    transport_name=node.transport_name,
+                    status=MirrorStatus(node_id=node.node_id),
+                )
         return self._nodes
 
     def nodes(self) -> dict[int, MirrorNode]:

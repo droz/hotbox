@@ -44,6 +44,10 @@ float limited_azimuth_error_deg(float target_deg, float position_deg) {
   return target_rel - position_rel;
 }
 
+constexpr float kHomingPwm = 0.15f;
+constexpr float kHomingBackoffTimeoutS = 8.0f;
+constexpr float kHomingSeekTimeoutS = 30.0f;
+
 }  // namespace
 
 BrushedAxis::BrushedAxis(int motor_p, int motor_m, int enc_a, int enc_b, int hall_pin)
@@ -52,7 +56,12 @@ BrushedAxis::BrushedAxis(int motor_p, int motor_m, int enc_a, int enc_b, int hal
 void BrushedAxis::begin() {
   pinMode(motor_p_, OUTPUT);
   pinMode(motor_m_, OUTPUT);
-  pinMode(hall_pin_, INPUT);
+  // Arduino-ESP32 on this core: global frequency for subsequent analogWrite().
+  analogWriteFrequency(static_cast<uint32_t>(kMotorPwmHz));
+  analogWrite(motor_p_, 0);
+  analogWrite(motor_m_, 0);
+  // Active-low halls: keep internal pull-up so open wires read not-triggered.
+  pinMode(hall_pin_, INPUT_PULLUP);
   if (enc_a_ == kHorizEncA) {
     g_az_encoder.attachFullQuad(enc_a_, enc_b_);
     g_az_encoder.setCount(0);
@@ -66,12 +75,33 @@ void BrushedAxis::begin() {
   position_deg_ = static_cast<float>(encoder_ticks_) / kTicksPerDegree;
 }
 
-bool BrushedAxis::hallTriggered() const { return digitalRead(hall_pin_) == HIGH; }
+// Hall sensors are active-low open-collector (pulled up; magnet → LOW).
+bool BrushedAxis::hallTriggered() const { return digitalRead(hall_pin_) == LOW; }
 
 void BrushedAxis::startHoming() {
   homed_ = false;
   mode_ = AxisMode::Homing;
+  homing_phase_s_ = 0.0f;
+  // If already on the switch (or the pin is stuck low), back off first so we
+  // don't "succeed" instantly with motors never driven.
+  homing_backoff_ = hallTriggered();
   clearFault();
+}
+
+void BrushedAxis::finishHoming() {
+  if (enc_a_ == kHorizEncA) {
+    g_az_encoder.setCount(0);
+  } else {
+    g_el_encoder.setCount(0);
+  }
+  encoder_ticks_ = 0;
+  last_encoder_ticks_ = 0;
+  position_deg_ = 0.0f;
+  velocity_deg_s_ = 0.0f;
+  homed_ = true;
+  mode_ = AxisMode::Idle;
+  homing_backoff_ = false;
+  driveMotor(0.0f);
 }
 
 void BrushedAxis::setTargetDeg(float target_deg) {
@@ -83,6 +113,7 @@ void BrushedAxis::setTargetDeg(float target_deg) {
 void BrushedAxis::stop() {
   mode_ = AxisMode::Idle;
   command_velocity_deg_s_ = 0.0f;
+  homing_backoff_ = false;
   driveMotor(0.0f);
 }
 
@@ -91,6 +122,7 @@ void BrushedAxis::clearFault() { fault_text_ = nullptr; }
 void BrushedAxis::setFault(const char* text) {
   fault_text_ = text;
   mode_ = AxisMode::Fault;
+  homing_backoff_ = false;
   driveMotor(0.0f);
 }
 
@@ -120,25 +152,40 @@ void BrushedAxis::update(float dt_s) {
   last_encoder_ticks_ = encoder_ticks_;
   position_deg_ = static_cast<float>(encoder_ticks_) / kTicksPerDegree;
   velocity_deg_s_ = static_cast<float>(delta_ticks) / kTicksPerDegree / dt_s;
+  if (delta_ticks != 0) {
+    encoder_alive_ = true;
+  }
 
   if (mode_ == AxisMode::Homing) {
-    if (hallTriggered()) {
-      if (enc_a_ == kHorizEncA) {
-        g_az_encoder.setCount(0);
-      } else {
-        g_el_encoder.setCount(0);
+    homing_phase_s_ += dt_s;
+    if (homing_backoff_) {
+      // Leave the hall switch (or a stuck-low pin) before searching for home.
+      if (!hallTriggered()) {
+        homing_backoff_ = false;
+        homing_phase_s_ = 0.0f;
+        driveMotor(0.0f);
+        return;
       }
-      encoder_ticks_ = 0;
-      last_encoder_ticks_ = 0;
-      position_deg_ = 0.0f;
-      velocity_deg_s_ = 0.0f;
-      homed_ = true;
-      mode_ = AxisMode::Idle;
-      driveMotor(0.0f);
+      if (homing_phase_s_ > kHomingBackoffTimeoutS) {
+        setFault("hall_stuck");
+        return;
+      }
+      command_velocity_deg_s_ = -kHomingVelocityDegS;
+      driveMotor(-kHomingPwm);
+      return;
+    }
+
+    // Seek toward the hall edge.
+    if (hallTriggered()) {
+      finishHoming();
+      return;
+    }
+    if (homing_phase_s_ > kHomingSeekTimeoutS) {
+      setFault("hall_not_found");
       return;
     }
     command_velocity_deg_s_ = kHomingVelocityDegS;
-    driveMotor(0.15f);
+    driveMotor(kHomingPwm);
     return;
   }
 
@@ -155,7 +202,8 @@ void BrushedAxis::update(float dt_s) {
     const float pwm_command = clampf(error_deg / 10.0f, -1.0f, 1.0f);
     driveMotor(pwm_command);
     command_velocity_deg_s_ = pwm_command * kMaxVelocityDegS;
-    if (fabs(command_velocity_deg_s_) > 1.0f && fabs(velocity_deg_s_) < kStallVelocityThreshDegS) {
+    if (encoder_alive_ && fabs(command_velocity_deg_s_) > 1.0f &&
+        fabs(velocity_deg_s_) < kStallVelocityThreshDegS) {
       stall_timer_s_ += dt_s;
     } else {
       stall_timer_s_ = 0.0f;
@@ -182,6 +230,11 @@ void MirrorMount::home() {
   azimuth_.startHoming();
   elevation_.startHoming();
   refreshModeText();
+  Serial.print("{\"hotbox\":\"home_start\",\"az_hall\":");
+  Serial.print(azimuth_.hallTriggered() ? "true" : "false");
+  Serial.print(",\"el_hall\":");
+  Serial.print(elevation_.hallTriggered() ? "true" : "false");
+  Serial.println("}");
 }
 
 void MirrorMount::stop() {

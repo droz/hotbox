@@ -28,6 +28,7 @@ class BrushedAxis {
  private:
   void driveMotor(float command);
   void setFault(const char* text);
+  void finishHoming();
 
   int motor_p_;
   int motor_m_;
@@ -41,7 +42,13 @@ class BrushedAxis {
   float target_deg_ = 0.0f;
   float command_velocity_deg_s_ = 0.0f;
   float stall_timer_s_ = 0.0f;
+  float homing_phase_s_ = 0.0f;
   bool homed_ = false;
+  // Stall detect only after the encoder has moved at least once — otherwise a
+  // missing encoder would immediately fault any open-loop PWM bring-up.
+  bool encoder_alive_ = false;
+  // True while leaving an already-asserted hall before the seek toward home.
+  bool homing_backoff_ = false;
   AxisMode mode_ = AxisMode::Idle;
   const char* fault_text_ = nullptr;
 };
@@ -60,6 +67,8 @@ class MirrorMount {
   float azimuthDeg() const { return azimuth_.positionDeg(); }
   float elevationDeg() const { return elevation_.positionDeg(); }
   bool isHomed() const { return azimuth_.isHomed() && elevation_.isHomed(); }
+  bool azimuthHallTriggered() const { return azimuth_.hallTriggered(); }
+  bool elevationHallTriggered() const { return elevation_.hallTriggered(); }
   const char* modeText() const { return mode_text_; }
   const char* faultText() const;
 

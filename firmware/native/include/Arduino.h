@@ -13,6 +13,7 @@ using String = std::string;
 // ── Pin mode / value constants ────────────────────────────────────────────────
 constexpr int INPUT  = 0;
 constexpr int OUTPUT = 1;
+constexpr int INPUT_PULLUP = 2;
 constexpr int HIGH   = 1;
 constexpr int LOW    = 0;
 
@@ -33,6 +34,7 @@ extern volatile int  g_hal_analog_out[32];  // 0-255 PWM value
 // ── HAL functions — defined in hal.cpp (non-inline so all TUs share one copy) ─
 void pinMode(int pin, int mode);
 void analogWrite(int pin, int value);
+void analogWriteFrequency(uint32_t frequency);
 int  digitalRead(int pin);
 void digitalWrite(int pin, int value);
 void delay(unsigned long ms);
