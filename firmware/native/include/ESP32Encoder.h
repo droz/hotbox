@@ -12,10 +12,11 @@ class ESP32Encoder {
 public:
     int axis_idx_ = -1;  // set by attachFullQuad based on pin
 
-    // pin_a values D5 (azimuth) and D2 (elevation) are used to identify axis.
+    // pin_a values match electrical/pinouts.txt via config.h:
+    // D2 = azimuth (horiz), D5 = elevation (vert).
     void attachFullQuad(int pin_a, int /*pin_b*/) {
-        // D5 = 5 (horizontal / azimuth), D2 = 2 (vertical / elevation)
-        axis_idx_ = (pin_a == 5) ? 0 : 1;
+        // D2 = 2 → azimuth (0), D5 = 5 → elevation (1)
+        axis_idx_ = (pin_a == 2) ? 0 : 1;
     }
 
     void setCount(long val) {

@@ -26,17 +26,17 @@ CAN_L        | GREEN  | 4
 ARDUINO PINOUT
 ---------------
 
-NAME          | PIN
---------------+------
-CAN_TX        | D10
-CAN_RX        | D9
-VERT_MOTOR_P  | A0
-VERT_MOTOR_M  | A1
-VERT_ENC_A    | D2
-VERT_ENC_B    | D3
-VERT_HALL     | D4
-HORIZ_MOTOR_P | A2
-HORIZ_MOTOR_M | A3
-HORIZ_ENC_A   | D5
-HORIZ_ENC_B   | D6
-HORIZ_HALL    | D7
+NAME               | PIN
+-------------------+------
+CAN_TX             | D10
+CAN_RX             | D9
+ELEVATION_MOTOR_P  | A0
+ELEVATION_MOTOR_M  | A1
+ELEVATION_ENC_A    | D5
+ELEVATION_ENC_B    | D6
+ELEVATION_HALL     | D7
+AZIMUTH_MOTOR_P    | A2
+AZIMUTH_MOTOR_M    | A3
+AZIMUTH_ENC_A      | D2
+AZIMUTH_ENC_B      | D3
+AZIMUTH_HALL       | D4

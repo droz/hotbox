@@ -11,15 +11,15 @@ constexpr int kCanRxPin = D9;
 
 constexpr int kVertMotorP = A0;
 constexpr int kVertMotorM = A1;
-constexpr int kVertEncA = D2;
-constexpr int kVertEncB = D3;
-constexpr int kVertHall = D4;
+constexpr int kVertEncA = D5;
+constexpr int kVertEncB = D6;
+constexpr int kVertHall = D7;
 
 constexpr int kHorizMotorP = A2;
 constexpr int kHorizMotorM = A3;
-constexpr int kHorizEncA = D5;
-constexpr int kHorizEncB = D6;
-constexpr int kHorizHall = D7;
+constexpr int kHorizEncA = D2;
+constexpr int kHorizEncB = D3;
+constexpr int kHorizHall = D4;
 
 // H-bridge PWM carrier (Arduino-ESP32 default is 1 kHz; 20 kHz is above hearing).
 constexpr int kMotorPwmHz = 20000;

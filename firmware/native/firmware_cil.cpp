@@ -66,9 +66,8 @@ void hotbox_cil_set_encoder(int axis, long ticks) {
 
 // Set the hall sensor digital input for an axis.
 void hotbox_cil_set_hall(int axis, int triggered) {
-    // D7 = azimuth hall, D4 = elevation hall (see config.h).
     // Hardware is active-low: triggered → pin reads LOW.
-    int pin = (axis == 0) ? 7 : 4;
+    const int pin = (axis == 0) ? hotbox::kHorizHall : hotbox::kVertHall;
     g_hal_digital_in[pin] = triggered ? 0 : 1;
 }
 
