@@ -51,11 +51,15 @@ def test_actuator_two_stage_gear_ratio() -> None:
     assert system.actuator.motor_gear_ratio == 70.0
     assert system.actuator.worm_gear_ratio == 120.0
     assert abs(system.actuator.gear_ratio - 70.0 * 120.0) < 1e-9
-    expected_tpd = 64 * 4.0 * 70.0 * 120.0 / 360.0
+    expected_tpd = (
+        system.actuator.encoder_ppr * 4.0 * system.actuator.motor_gear_ratio * system.actuator.worm_gear_ratio / 360.0
+    )
     assert abs(system.actuator.ticks_per_degree - expected_tpd) < 1e-6
+    assert system.actuator.pwm_deadband == 0.05
     header = render_firmware_header(system)
     assert "HOTBOX_MOTOR_GEAR_RATIO (70.000000f)" in header
     assert "HOTBOX_WORM_GEAR_RATIO (120.000000f)" in header
+    assert "HOTBOX_PWM_DEADBAND (0.050000f)" in header
 
 
 def test_pins_reject_invalid_label() -> None:

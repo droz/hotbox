@@ -151,16 +151,19 @@ void BrushedAxis::setFault(const char* text) {
 
 void BrushedAxis::driveMotor(float command) {
   command = clampf(command, -1.0f, 1.0f);
+  // Below deadband: both legs fully off (no PWM edge activity → lower quiescent draw).
+  if (fabs(command) < kPwmDeadband) {
+    analogWrite(motor_p_, 0);
+    analogWrite(motor_m_, 0);
+    return;
+  }
   int pwm = static_cast<int>(fabs(command) * 255.0f);
-  if (command > 0.01f) {
+  if (command > 0.0f) {
     analogWrite(motor_p_, pwm);
     analogWrite(motor_m_, 0);
-  } else if (command < -0.01f) {
-    analogWrite(motor_p_, 0);
-    analogWrite(motor_m_, pwm);
   } else {
     analogWrite(motor_p_, 0);
-    analogWrite(motor_m_, 0);
+    analogWrite(motor_m_, pwm);
   }
 }
 
@@ -222,6 +225,19 @@ void BrushedAxis::update(float dt_s) {
     if (enc_a_ == kHorizEncA) {
       error_deg = limited_azimuth_error_deg(target_deg_, position_deg_);
     }
+
+    // Close enough: fully coast. Freeze I (don't clear) so small re-entries
+    // don't have to re-wind the integrator from zero (that felt jittery).
+    // Reset D history only so de/dt isn't a spike when leaving the band.
+    if (kPositionDeadbandDeg > 0.0f && fabs(error_deg) < kPositionDeadbandDeg) {
+      last_error_deg_ = error_deg;
+      pid_has_last_error_ = false;
+      driveMotor(0.0f);
+      command_velocity_deg_s_ = 0.0f;
+      stall_timer_s_ = 0.0f;
+      return;
+    }
+
     float d_error = 0.0f;
     if (pid_has_last_error_ && dt_s > 1e-6f) {
       d_error = (error_deg - last_error_deg_) / dt_s;

@@ -171,6 +171,10 @@ class ActuatorConstants:
     """Integral gain: contribution ki * ∫error_deg dt to motor duty."""
     pid_kd: float = 0.01
     """Derivative gain: contribution kd * d(error_deg)/dt to motor duty."""
+    pwm_deadband: float = 0.05
+    """Absolute duty below this forces both H-bridge legs off (power save near target)."""
+    position_deadband_deg: float = 0.05
+    """Absolute position error [°] below which PWM is off and the I-term is frozen."""
 
     # --- SITL physics model ---
     velocity_time_constant_s: float = 0.2

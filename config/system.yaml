@@ -94,9 +94,13 @@ actuator:
 
   # ── PID (duty command u ∈ [-1,1]: kp*error + ki*∫error + kd*derror/dt) ──────
   # Same gains for azimuth and elevation. Override at runtime with set_pid.
-  pid_kp: 40.0
+  pid_kp: 20.0
   pid_ki: 50.0
   pid_kd: 2.0
+  # Duty below this is forced to 0 (both H-bridge legs off) to save power near target.
+  pwm_deadband: 0.05
+  # |position error| below this → PWM off and freeze I (no integrate; keep value).
+  position_deadband_deg: 0.01
 
   # ── SITL physics ─────────────────────────────────────────────────────────────
   # First-order lag approximating motor electrical + mechanical inertia.
