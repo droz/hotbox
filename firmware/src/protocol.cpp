@@ -61,6 +61,9 @@ uint8_t ProtocolHandler::modeId() const {
   if (strcmp(mode, "position") == 0) {
     return kModePosition;
   }
+  if (strcmp(mode, "velocity") == 0) {
+    return kModeVelocity;
+  }
   if (strcmp(mode, "fault") == 0) {
     return kModeFault;
   }
@@ -161,6 +164,16 @@ bool ProtocolHandler::handleBinary(const uint8_t* data, size_t len) {
       mount_->setTarget(az_c / 100.0f, el_c / 100.0f);
       return false;
     }
+    case kCanCmdSetVelocity: {
+      // Same packing as set_target: int16 centi-units (°/s * 100).
+      if (len < 5) {
+        return false;
+      }
+      const int16_t az_c = static_cast<int16_t>(data[1] | (data[2] << 8));
+      const int16_t el_c = static_cast<int16_t>(data[3] | (data[4] << 8));
+      mount_->setVelocity(az_c / 100.0f, el_c / 100.0f);
+      return false;
+    }
     case kCanCmdSetPid: {
       // kp,ki,kd as int16 milli-units (value * 1000).
       if (len < 7) {
@@ -222,6 +235,15 @@ void ProtocolHandler::handleLine(const String& line) {
     readFloatField(line, "elevation_deg", &el);
     mount_->setTarget(az, el);
     emitAck("set_target", true);
+    return;
+  }
+  if (hasCommand(line, "set_velocity")) {
+    float az = 0.0f;
+    float el = 0.0f;
+    readFloatField(line, "azimuth_deg_s", &az);
+    readFloatField(line, "elevation_deg_s", &el);
+    mount_->setVelocity(az, el);
+    emitAck("set_velocity", true);
     return;
   }
   if (hasCommand(line, "set_pid")) {

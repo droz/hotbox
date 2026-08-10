@@ -74,3 +74,16 @@ class MirrorFleet:
                     },
                 )
             )
+
+    def apply_velocities(self, rates: dict[int, tuple[float, float]]) -> None:
+        for node_id, (az_rate, el_rate) in rates.items():
+            self._transport.send(
+                MirrorCommand(
+                    node_id=int(node_id),
+                    command=CommandName.SET_VELOCITY,
+                    payload={
+                        "azimuth_deg_s": float(az_rate),
+                        "elevation_deg_s": float(el_rate),
+                    },
+                )
+            )

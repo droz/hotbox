@@ -48,6 +48,8 @@ class SimulatedMirrorNode:
     homing_velocity_deg_s: float = 2.0
     _home_az: _AxisHomeState = field(default_factory=_AxisHomeState)
     _home_el: _AxisHomeState = field(default_factory=_AxisHomeState)
+    _vel_az: float = 0.0
+    _vel_el: float = 0.0
 
     @property
     def homed(self) -> bool:
@@ -98,6 +100,15 @@ class SimulatedMirrorNode:
             self.target_elevation_deg = float(command.payload.get("elevation_deg", self.target_elevation_deg))
             self.mode = "position"
             self.fault = None
+            self._vel_az = 0.0
+            self._vel_el = 0.0
+        elif command.command == CommandName.SET_VELOCITY:
+            if self.mode == "homing":
+                return
+            self._vel_az = float(command.payload.get("azimuth_deg_s", 0.0))
+            self._vel_el = float(command.payload.get("elevation_deg_s", 0.0))
+            self.mode = "velocity"
+            self.fault = None
         elif command.command == CommandName.CLEAR_ERROR:
             self.fault = None
             if self.azimuth_home == "fault":
@@ -138,6 +149,19 @@ class SimulatedMirrorNode:
             self._step_homing(dt_s)
             return
 
+        if self.mode == "velocity":
+            v_az = self._limit_aware_velocity(
+                self.azimuth_axis.state.angle_deg, self._vel_az, azimuth=True
+            )
+            v_el = self._limit_aware_velocity(
+                self.altitude_axis.state.angle_deg, self._vel_el, azimuth=False
+            )
+            pwm_az = self._pwm_for_velocity(self.azimuth_axis, v_az)
+            pwm_el = self._pwm_for_velocity(self.altitude_axis, v_el)
+            self.azimuth_axis.step(pwm_az, dt_s)
+            self.altitude_axis.step(pwm_el, dt_s)
+            return
+
         if self.mode == "position":
             pwm_az = self._azimuth_pwm(self.target_azimuth_deg)
             pwm_el = self._position_pwm(self.altitude_axis, self.target_elevation_deg)
@@ -150,6 +174,23 @@ class SimulatedMirrorNode:
                     self.azimuth_home = "fault"
                 if self._axis_stalled(self.altitude_axis):
                     self.elevation_home = "fault"
+
+    def _limit_aware_velocity(self, position_deg: float, commanded_deg_s: float, *, azimuth: bool) -> float:
+        """Match firmware: zero outward velocity at joint limits (homing is exempt)."""
+        from hotbox_shared import relative_azimuth_deg
+
+        if azimuth:
+            rel = relative_azimuth_deg(position_deg, self.oven_facing_azimuth_deg)
+            if rel >= 150.0 and commanded_deg_s > 0.0:
+                return 0.0
+            if rel <= -150.0 and commanded_deg_s < 0.0:
+                return 0.0
+            return commanded_deg_s
+        if position_deg >= 90.0 and commanded_deg_s > 0.0:
+            return 0.0
+        if position_deg <= 0.0 and commanded_deg_s < 0.0:
+            return 0.0
+        return commanded_deg_s
 
     def _pwm_for_velocity(self, axis: ActuatorModel, velocity_deg_s: float) -> float:
         max_v = max(axis.max_velocity_deg_s, 1e-6)

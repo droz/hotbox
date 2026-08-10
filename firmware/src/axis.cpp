@@ -145,7 +145,17 @@ void BrushedAxis::finishHoming(float mid_deg) {
 
 void BrushedAxis::setTargetDeg(float target_deg) {
   target_deg_ = target_deg;
+  command_velocity_deg_s_ = 0.0f;
   mode_ = AxisMode::Position;
+  // Switching loops: clear shared-ish state so leftover I doesn't punch.
+  resetPidState();
+  clearFault();
+}
+
+void BrushedAxis::setVelocityDegS(float velocity_deg_s) {
+  command_velocity_deg_s_ = velocity_deg_s;
+  mode_ = AxisMode::Velocity;
+  resetPidState();
   clearFault();
 }
 
@@ -166,12 +176,26 @@ void BrushedAxis::setPidGains(float kp, float ki, float kd) {
   kp_ = kp;
   ki_ = ki;
   kd_ = kd;
+  syncVelocityGainsFromPosition();
+}
+
+void BrushedAxis::syncVelocityGainsFromPosition() {
+  // Unit-matched derivation (see computeVelocityPidDuty):
+  //   Kp_vel [duty/(deg/s)] ↔ Kd_pos
+  //   Ki_vel [duty/deg]     ↔ Kp_pos
+  //   Kd_vel unused (noise on accel)
+  kp_vel_ = kd_;
+  ki_vel_ = kp_;
+  kd_vel_ = 0.0f;
 }
 
 void BrushedAxis::resetPidState() {
   integral_ = 0.0f;
   last_error_deg_ = 0.0f;
   pid_has_last_error_ = false;
+  vel_integral_ = 0.0f;
+  last_vel_error_ = 0.0f;
+  vel_pid_has_last_error_ = false;
 }
 
 void BrushedAxis::setFault(const char* text) {
@@ -228,6 +252,49 @@ float BrushedAxis::computePositionPidDuty(float error_deg, float dt_s, bool appl
   }
   u = kp_ * error_deg + ki_ * integral_ + kd_ * d_error;
   return clampf(u, -1.0f, 1.0f);
+}
+
+float BrushedAxis::computeVelocityPidDuty(float target_velocity_deg_s, float dt_s) {
+  const float error = target_velocity_deg_s - velocity_deg_s_;
+  float d_error = 0.0f;
+  if (vel_pid_has_last_error_ && dt_s > 1e-6f) {
+    d_error = (error - last_vel_error_) / dt_s;
+  }
+  last_vel_error_ = error;
+  vel_pid_has_last_error_ = true;
+
+  float u = kp_vel_ * error + ki_vel_ * vel_integral_ + kd_vel_ * d_error;
+  const bool saturated = u > 1.0f || u < -1.0f;
+  if (!saturated || (error * vel_integral_ <= 0.0f)) {
+    vel_integral_ += error * dt_s;
+  }
+  // Reuse the same duty-fraction I-cap as the position loop.
+  if (fabs(ki_vel_) > 1e-12f && kPidIntegralLimit > 0.0f) {
+    const float i_max = kPidIntegralLimit / fabs(ki_vel_);
+    vel_integral_ = clampf(vel_integral_, -i_max, i_max);
+  }
+  u = kp_vel_ * error + ki_vel_ * vel_integral_ + kd_vel_ * d_error;
+  return clampf(u, -1.0f, 1.0f);
+}
+
+float BrushedAxis::limitAwareVelocityCommand(float commanded_deg_s) const {
+  if (enc_a_ == kHorizEncA) {
+    const float rel = wrap180(position_deg_ - kOvenFacingAzimuthDeg);
+    if (rel >= kAzimuthMaxDeg && commanded_deg_s > 0.0f) {
+      return 0.0f;
+    }
+    if (rel <= kAzimuthMinDeg && commanded_deg_s < 0.0f) {
+      return 0.0f;
+    }
+    return commanded_deg_s;
+  }
+  if (position_deg_ >= kElevationMaxDeg && commanded_deg_s > 0.0f) {
+    return 0.0f;
+  }
+  if (position_deg_ <= kElevationMinDeg && commanded_deg_s < 0.0f) {
+    return 0.0f;
+  }
+  return commanded_deg_s;
 }
 
 void BrushedAxis::update(float dt_s) {
@@ -293,16 +360,39 @@ void BrushedAxis::update(float dt_s) {
         break;
     }
 
-    // Constant-velocity stages: ramp a position setpoint and track it with PID.
-    target_deg_ += command_velocity_deg_s_ * dt_s;
-    const float error_deg = target_deg_ - position_deg_;
-    const float pwm_command = computePositionPidDuty(error_deg, dt_s, /*apply_position_deadband=*/false);
+    // Constant-speed stages: regulate measured shaft rate with the velocity PID.
+    const float pwm_command = computeVelocityPidDuty(command_velocity_deg_s_, dt_s);
     driveMotor(pwm_command);
     return;
   }
 
   if (mode_ == AxisMode::Fault) {
     driveMotor(0.0f);
+    return;
+  }
+
+  if (mode_ == AxisMode::Velocity) {
+    float limited_cmd = limitAwareVelocityCommand(command_velocity_deg_s_);
+    if (fabs(limited_cmd) < 1e-6f && fabs(command_velocity_deg_s_) > 1e-6f) {
+      // Hard stop: don't wind the velocity integrator into the bumper.
+      vel_integral_ = 0.0f;
+      vel_pid_has_last_error_ = false;
+    }
+    const float pwm_command = computeVelocityPidDuty(limited_cmd, dt_s);
+    driveMotor(pwm_command);
+    if (kStallTimeoutS > 0.0f) {
+      if (encoder_alive_ && fabs(limited_cmd) > 1.0f &&
+          fabs(velocity_deg_s_) < kStallVelocityThreshDegS) {
+        stall_timer_s_ += dt_s;
+      } else {
+        stall_timer_s_ = 0.0f;
+      }
+      if (stall_timer_s_ > kStallTimeoutS) {
+        setFault("stalled");
+      }
+    } else {
+      stall_timer_s_ = 0.0f;
+    }
     return;
   }
 
@@ -382,6 +472,12 @@ void MirrorMount::setTarget(float azimuth_deg, float elevation_deg) {
   refreshModeText();
 }
 
+void MirrorMount::setVelocity(float azimuth_deg_s, float elevation_deg_s) {
+  azimuth_.setVelocityDegS(azimuth_deg_s);
+  elevation_.setVelocityDegS(elevation_deg_s);
+  refreshModeText();
+}
+
 void MirrorMount::clearError() {
   azimuth_.clearFault();
   elevation_.clearFault();
@@ -424,6 +520,8 @@ void MirrorMount::refreshModeText() {
     mode_text_ = "fault";
   } else if (azimuth_.mode() == AxisMode::Homing || elevation_.mode() == AxisMode::Homing) {
     mode_text_ = "homing";
+  } else if (azimuth_.mode() == AxisMode::Velocity || elevation_.mode() == AxisMode::Velocity) {
+    mode_text_ = "velocity";
   } else if (azimuth_.mode() == AxisMode::Position || elevation_.mode() == AxisMode::Position) {
     mode_text_ = "position";
   } else {

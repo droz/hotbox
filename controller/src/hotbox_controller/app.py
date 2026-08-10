@@ -30,7 +30,7 @@ from .transport import LoggingMirrorTransport, MirrorTransport, ProtocolTrafficL
 
 
 class JogRequest(BaseModel):
-    """Host-side jog stick rates. Integrated into ``set_target``; not a wire command."""
+    """Host-side jog stick rates. Streamed as firmware ``set_velocity``."""
 
     node_id: int
     azimuth_rate_deg_s: float = 0.0
@@ -68,10 +68,10 @@ class HeatDemandRequest(BaseModel):
 class ProtocolCommandRequest(BaseModel):
     """Low-level wire command for mirror controllers (bypasses supervisor helpers).
 
-    Commands: home, stop, set_target, get_status, clear_error, reset, set_pid, discover.
+    Commands: home, stop, set_target, set_velocity, get_status, clear_error, reset, set_pid, discover.
     ``discover`` rediscovers the fleet and ignores ``node_id``.
     Put the mirror in supervisor ``raw`` mode so Track/Park/Jog do not overwrite
-    wire commands. Jog stick rates are a host API only (integrated into ``set_target``).
+    wire commands. Jog stick rates are a host API that streams ``set_velocity``.
     """
 
     command: str
@@ -80,6 +80,9 @@ class ProtocolCommandRequest(BaseModel):
     azimuth_deg: float | None = None
     elevation_deg: float | None = None
     mode: str | None = None
+    # set_velocity
+    azimuth_deg_s: float | None = None
+    elevation_deg_s: float | None = None
     # set_pid (shared gains for both axes)
     kp: float | None = None
     ki: float | None = None
@@ -97,6 +100,7 @@ PROTOCOL_COMMANDS = frozenset(
         CommandName.HOME.value,
         CommandName.STOP.value,
         CommandName.SET_TARGET.value,
+        CommandName.SET_VELOCITY.value,
         CommandName.GET_STATUS.value,
         CommandName.CLEAR_ERROR.value,
         CommandName.RESET.value,
@@ -133,7 +137,7 @@ class ControllerApplication:
         self.heat_demand = True
         # Per-mirror supervisor mode (track|park|jog|raw). Fleet switcher sets all of these.
         self._node_modes: dict[int, str] = {}
-        # Host-side jog: rates (°/s) integrated into position targets (no wire jog command).
+        # Host-side jog: rates (°/s) streamed as firmware set_velocity.
         self._jog_rates: dict[int, tuple[float, float]] = {}
         self._jog_pose: dict[int, tuple[float, float]] = {}
         self._jog_last_mono: dict[int, float] = {}
@@ -319,6 +323,12 @@ class ControllerApplication:
             )
         return TrackingTarget(azimuth_deg=az, elevation_deg=el, mode=target.mode)
 
+    def _apply_velocities(self, rates: dict[int, tuple[float, float]]) -> None:
+        try:
+            self.fleet.apply_velocities(rates)
+        except ConnectionError:
+            return
+
     def _apply_targets(self, targets: dict[int, TrackingTarget], *, allow_dual: bool = True) -> None:
         clamped = {
             int(node_id): self._clamp_target(int(node_id), target, allow_dual=allow_dual)
@@ -369,35 +379,15 @@ class ControllerApplication:
         )
 
     def _advance_jog(self, node_id: int, *, status: Any | None = None) -> None:
-        """Integrate jog rates into a position target and send ``set_target`` if moving."""
+        """Stream held jog rates as ``set_velocity`` (no-op when rates are zero)."""
+        _ = status
         node_id = int(node_id)
         if self.node_mode(node_id) != "jog":
             return
         az_rate, el_rate = self._jog_rates.get(node_id, (0.0, 0.0))
-        now = time.monotonic()
-        last = self._jog_last_mono.get(node_id, now)
-        dt = min(max(now - last, 0.0), 0.25)
-        self._jog_last_mono[node_id] = now
         if abs(az_rate) < 1e-9 and abs(el_rate) < 1e-9:
             return
-        pose = self._jog_pose.get(node_id)
-        if pose is None:
-            if status is None:
-                node = self.fleet.nodes().get(node_id)
-                status = None if node is None else node.status
-            if status is None:
-                return
-            pose = (float(status.azimuth_deg), float(status.elevation_deg))
-        az = pose[0] + az_rate * dt
-        el = pose[1] + el_rate * dt
-        # No dual flip while jogging — clamp into the box so axes stop at the stops.
-        clamped = self._clamp_target(
-            node_id,
-            TrackingTarget(azimuth_deg=az, elevation_deg=el, mode="tracking"),
-            allow_dual=False,
-        )
-        self._jog_pose[node_id] = (clamped.azimuth_deg, clamped.elevation_deg)
-        self._apply_targets({node_id: clamped}, allow_dual=False)
+        self._apply_velocities({node_id: (az_rate, el_rate)})
 
     def _set_node_mode(self, node_id: int, mode: str, *, apply_immediate: bool) -> None:
         previous = self._node_modes.get(node_id)
@@ -607,7 +597,7 @@ class ControllerApplication:
         )
 
     def jog(self, request: JogRequest) -> None:
-        """Update host-side jog rates; nonzero rates enter Jog and stream ``set_target``."""
+        """Update host-side jog rates; nonzero rates stream ``set_velocity``."""
         node_id = int(request.node_id)
         az = float(request.azimuth_rate_deg_s)
         el = float(request.elevation_rate_deg_s)
@@ -619,8 +609,30 @@ class ControllerApplication:
             if previous != "jog" or node_id not in self._jog_pose:
                 self._seed_jog_hold(node_id)
         self._jog_rates[node_id] = (az, el)
-        if self.node_mode(node_id) == "jog":
-            self._advance_jog(node_id)
+        self._jog_last_mono[node_id] = time.monotonic()
+        if self.node_mode(node_id) != "jog":
+            return
+        if abs(az) > 1e-9 or abs(el) > 1e-9:
+            self._apply_velocities({node_id: (az, el)})
+            return
+        # Stick centered: hold with set_target at the last known / status pose.
+        node = self.fleet.nodes().get(node_id)
+        if node is not None:
+            self._jog_pose[node_id] = (
+                float(node.status.azimuth_deg),
+                float(node.status.elevation_deg),
+            )
+        pose = self._jog_pose.get(node_id)
+        if pose is None:
+            return
+        self._apply_targets(
+            {
+                node_id: TrackingTarget(
+                    azimuth_deg=pose[0], elevation_deg=pose[1], mode="tracking"
+                )
+            },
+            allow_dual=False,
+        )
 
     def send_protocol_command(self, request: ProtocolCommandRequest) -> dict[str, Any]:
         """Send a raw protocol command to a mirror (or rediscover the fleet).
@@ -664,6 +676,11 @@ class ControllerApplication:
             payload = {
                 "azimuth_deg": float(request.azimuth_deg if request.azimuth_deg is not None else 0.0),
                 "elevation_deg": float(request.elevation_deg if request.elevation_deg is not None else 0.0),
+            }
+        elif command_name == CommandName.SET_VELOCITY.value:
+            payload = {
+                "azimuth_deg_s": float(request.azimuth_deg_s if request.azimuth_deg_s is not None else 0.0),
+                "elevation_deg_s": float(request.elevation_deg_s if request.elevation_deg_s is not None else 0.0),
             }
         elif command_name == CommandName.SET_PID.value:
             payload = {

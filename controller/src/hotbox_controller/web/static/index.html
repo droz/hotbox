@@ -917,6 +917,10 @@
           result.textContent = "Set az/el above, then Send.";
           result.classList.add("empty");
           result.classList.remove("error");
+        } else if (command === "set_velocity") {
+          result.textContent = "Set az/el rates (°/s) above, then Send.";
+          result.classList.add("empty");
+          result.classList.remove("error");
         } else if (command === "set_pid") {
           result.textContent = "Set Kp/Ki/Kd (both axes), then Send.";
           result.classList.add("empty");
@@ -952,6 +956,9 @@
         }
         if (command === "set_target" && response?.payload) {
           return `ok → az ${Number(response.payload.azimuth_deg).toFixed(3)}° / el ${Number(response.payload.elevation_deg).toFixed(3)}°`;
+        }
+        if (command === "set_velocity" && response?.payload) {
+          return `ok → az ${Number(response.payload.azimuth_deg_s).toFixed(3)}°/s / el ${Number(response.payload.elevation_deg_s).toFixed(3)}°/s`;
         }
         if (command === "set_pid" && response?.payload) {
           return `ok → kp ${Number(response.payload.kp).toFixed(3)} / ki ${Number(response.payload.ki).toFixed(3)} / kd ${Number(response.payload.kd).toFixed(3)}`;
@@ -1007,6 +1014,10 @@
         if (command === "set_target") {
           body.azimuth_deg = Number(card.querySelector('[data-field="proto-az"]').value);
           body.elevation_deg = Number(card.querySelector('[data-field="proto-el"]').value);
+        }
+        if (command === "set_velocity") {
+          body.azimuth_deg_s = Number(card.querySelector('[data-field="proto-az-rate"]').value);
+          body.elevation_deg_s = Number(card.querySelector('[data-field="proto-el-rate"]').value);
         }
         if (command === "home") {
           body.axis = card.querySelector('[data-field="proto-home-axis"]').value;
@@ -1347,6 +1358,7 @@
                     <option value="home">home</option>
                     <option value="stop">stop</option>
                     <option value="set_target">set_target</option>
+                    <option value="set_velocity">set_velocity</option>
                     <option value="set_pid">set_pid</option>
                     <option value="get_status">get_status</option>
                     <option value="clear_error">clear_error</option>
@@ -1368,6 +1380,14 @@
                 <div class="protocol-row proto-field" data-fields="set_target" hidden>
                   <label>Elevation °</label>
                   <input data-field="proto-el" type="number" step="0.1" value="0" />
+                </div>
+                <div class="protocol-row proto-field" data-fields="set_velocity" hidden>
+                  <label>Azimuth °/s</label>
+                  <input data-field="proto-az-rate" type="number" step="0.1" value="0" />
+                </div>
+                <div class="protocol-row proto-field" data-fields="set_velocity" hidden>
+                  <label>Elevation °/s</label>
+                  <input data-field="proto-el-rate" type="number" step="0.1" value="0" />
                 </div>
                 <div class="protocol-row proto-field" data-fields="set_pid" hidden>
                   <label>Kp</label>

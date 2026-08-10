@@ -16,6 +16,7 @@ enum CanCommandId : uint8_t {
   kCanCmdReset = 5,
   kCanCmdClearError = 6,
   kCanCmdSetPid = 7,
+  kCanCmdSetVelocity = 8,
 };
 
 constexpr uint32_t kCanCmdBaseId = 0x100;
@@ -28,6 +29,7 @@ enum FirmwareModeId : uint8_t {
   kModeHoming = 1,
   kModePosition = 2,
   kModeFault = 3,
+  kModeVelocity = 4,
 };
 
 class ProtocolHandler {

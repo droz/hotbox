@@ -5,8 +5,8 @@
 namespace hotbox {
 
 // Minimal axis states. Product modes (track/park/jog) live on the host;
-// firmware only servos a position, homes, idles, or faults.
-enum class AxisMode { Idle, Homing, Position, Fault };
+// firmware servos position, velocity, homes, idles, or faults.
+enum class AxisMode { Idle, Homing, Position, Velocity, Fault };
 
 /** Homing sub-states while AxisMode::Homing. */
 enum class HomingPhase {
@@ -22,6 +22,7 @@ class BrushedAxis {
   void begin();
   void startHoming();
   void setTargetDeg(float target_deg);
+  void setVelocityDegS(float velocity_deg_s);
   void stop();
   void clearFault();
   void update(float dt_s);
@@ -30,7 +31,8 @@ class BrushedAxis {
   void resetPidState();
 
   float positionDeg() const { return position_deg_; }
-  /** Integral term contribution to duty command (ki * ∫error dt), before clamp. */
+  float velocityDegS() const { return velocity_deg_s_; }
+  /** Integral term contribution to duty command (position loop), before clamp. */
   float integralTerm() const { return ki_ * integral_; }
   bool isHomed() const { return homed_; }
   /** unhomed | homing | homed | fault */
@@ -44,10 +46,25 @@ class BrushedAxis {
   void setFault(const char* text);
   void finishHoming(float mid_deg);
   void enterHomingPhase(HomingPhase phase);
-  /** Home joint angle for this axis (az 0°, el 90°). */
+  /** Home joint angle for this axis (az = oven-facing, el = 90°). */
   float homeAngleDeg() const;
   /** Position PID → duty ∈ [-1,1]. When ``apply_position_deadband``, coast+freeze I near zero error. */
   float computePositionPidDuty(float error_deg, float dt_s, bool apply_position_deadband);
+  /**
+   * Velocity PID → duty ∈ [-1,1].
+   *
+   * Gains are derived from the position PID by matching SI units:
+   *   kp_vel = kd_pos   [duty / (deg/s)]
+   *   ki_vel = kp_pos   [duty / deg]  (∫ velocity error dt has units deg)
+   *   kd_vel = 0
+   */
+  float computeVelocityPidDuty(float target_velocity_deg_s, float dt_s);
+  void syncVelocityGainsFromPosition();
+  /**
+   * Zero any velocity that would drive further past joint limits (elevation box
+   * or azimuth relative to oven-facing). Homing does not use this.
+   */
+  float limitAwareVelocityCommand(float commanded_deg_s) const;
 
   int motor_p_;
   int motor_m_;
@@ -73,12 +90,21 @@ class BrushedAxis {
   AxisMode mode_ = AxisMode::Idle;
   const char* fault_text_ = nullptr;
 
+  // Position-loop gains (from config / set_pid).
   float kp_ = kPidKp;
   float ki_ = kPidKi;
   float kd_ = kPidKd;
   float integral_ = 0.0f;
   float last_error_deg_ = 0.0f;
   bool pid_has_last_error_ = false;
+
+  // Velocity-loop gains (derived from position gains).
+  float kp_vel_ = kPidKd;
+  float ki_vel_ = kPidKp;
+  float kd_vel_ = 0.0f;
+  float vel_integral_ = 0.0f;
+  float last_vel_error_ = 0.0f;
+  bool vel_pid_has_last_error_ = false;
 };
 
 class MirrorMount {
@@ -91,6 +117,7 @@ class MirrorMount {
   void homeElevation();
   void stop();
   void setTarget(float azimuth_deg, float elevation_deg);
+  void setVelocity(float azimuth_deg_s, float elevation_deg_s);
   void clearError();
   /** Soft reset: stop, clear faults/PID state. On device also reboots via ESP.restart(). */
   void reset();

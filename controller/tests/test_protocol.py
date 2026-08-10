@@ -3,18 +3,17 @@ from __future__ import annotations
 from hotbox_controller.protocol import CommandName, MirrorCommand, MirrorStatus
 
 
-def test_mirror_command_can_roundtrip() -> None:
+def test_set_velocity_can_roundtrip() -> None:
     command = MirrorCommand(
-        node_id=2,
-        command=CommandName.SET_TARGET,
-        payload={"azimuth_deg": 45.25, "elevation_deg": 12.75},
+        node_id=0,
+        command=CommandName.SET_VELOCITY,
+        payload={"azimuth_deg_s": -3.5, "elevation_deg_s": 1.25},
     )
     frame = command.to_can_frame()
-    restored = MirrorCommand.from_can_frame(2, frame)
-    assert restored.node_id == 2
-    assert restored.command == CommandName.SET_TARGET
-    assert abs(restored.payload["azimuth_deg"] - 45.25) < 0.02
-    assert abs(restored.payload["elevation_deg"] - 12.75) < 0.02
+    restored = MirrorCommand.from_can_frame(0, frame)
+    assert restored.command == CommandName.SET_VELOCITY
+    assert abs(restored.payload["azimuth_deg_s"] - (-3.5)) < 0.02
+    assert abs(restored.payload["elevation_deg_s"] - 1.25) < 0.02
 
 
 def test_mirror_status_wire_roundtrip() -> None:

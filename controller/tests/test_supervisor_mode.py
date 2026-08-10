@@ -87,8 +87,11 @@ def test_heat_demand_diverts_above_absorber() -> None:
     absorber_target = app.current_snapshot()["targets"]["0"]
     if absorber_target["mode"] == "parked":
         assert divert_target["mode"] == "parked"
-        assert divert_pose == (0.0, 0.0)
-        assert absorber_pose == (0.0, 0.0)
+        # Face-up stow: el=90°, az=oven-facing (node 0 is south → ~180°).
+        assert divert_pose[1] == 90.0
+        assert absorber_pose[1] == 90.0
+        assert abs(divert_pose[0] - 180.0) < 1.0
+        assert abs(absorber_pose[0] - 180.0) < 1.0
     else:
         assert divert_target["mode"] == "tracking"
         assert absorber_target["mode"] == "tracking"
@@ -132,22 +135,22 @@ def test_zero_rate_jog_does_not_override_track_mode() -> None:
     assert app.node_mode(0) == "jog"
 
 
-def test_jog_integrates_into_set_target() -> None:
+def test_jog_streams_set_velocity() -> None:
     from hotbox_controller.app import JogRequest
-    import time
 
     app, transport = _app()
     transport.sent.clear()
-    app.jog(JogRequest(node_id=0, azimuth_rate_deg_s=10.0, elevation_rate_deg_s=0.0))
+    app.jog(JogRequest(node_id=0, azimuth_rate_deg_s=10.0, elevation_rate_deg_s=-2.0))
     assert app.node_mode(0) == "jog"
-    # Seed hold + possible first integrate (dt may be ~0).
+    # Seed hold uses set_target, then motion uses set_velocity.
     assert any(c.command == CommandName.SET_TARGET for c in transport.sent)
-    time.sleep(0.05)
+    vels = [c for c in transport.sent if c.command == CommandName.SET_VELOCITY and c.node_id == 0]
+    assert vels
+    assert vels[-1].payload["azimuth_deg_s"] == 10.0
+    assert vels[-1].payload["elevation_deg_s"] == -2.0
     transport.sent.clear()
     app.control_tick()
-    moved = [c for c in transport.sent if c.command == CommandName.SET_TARGET and c.node_id == 0]
-    assert moved
-    assert moved[-1].payload["azimuth_deg"] != 10.0  # left the seed pose (status was 10°)
+    assert any(c.command == CommandName.SET_VELOCITY for c in transport.sent)
 
 
 def test_set_mode_rejects_unknown() -> None:
@@ -239,22 +242,23 @@ def test_protocol_set_target_is_passthrough() -> None:
     assert float(cmd.payload["elevation_deg"]) == 97.0
 
 
-def test_jog_stops_at_joint_limits() -> None:
-    from hotbox_controller.app import JogRequest
+def test_jog_streams_velocity_not_position_slew() -> None:
+    """Jog with nonzero rates commands set_velocity (limits defended by firmware later)."""
     import time
 
     app, transport = _app()
-    # Seed near the elevation floor and jog further down.
     app._jog_pose[0] = (app._oven_facing_deg(0), 0.5)
     app._node_modes[0] = "jog"
     app._jog_rates[0] = (0.0, -20.0)
     app._jog_last_mono[0] = time.monotonic() - 0.1
     transport.sent.clear()
     app.control_tick()
-    moved = [c for c in transport.sent if c.command == CommandName.SET_TARGET and c.node_id == 0]
-    assert moved
-    assert float(moved[-1].payload["elevation_deg"]) >= app._joint_limits().elevation_min_deg - 1e-6
-    assert app._jog_pose[0][1] >= app._joint_limits().elevation_min_deg - 1e-6
+    vels = [c for c in transport.sent if c.command == CommandName.SET_VELOCITY and c.node_id == 0]
+    assert vels
+    assert float(vels[-1].payload["elevation_deg_s"]) == -20.0
+
+
+def test_raw_mode_skips_control_loop() -> None:
     from hotbox_controller.app import ProtocolCommandRequest
 
     app, transport = _app()

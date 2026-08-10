@@ -16,6 +16,7 @@ class CommandName(StrEnum):
     RESET = "reset"
     CLEAR_ERROR = "clear_error"
     SET_PID = "set_pid"
+    SET_VELOCITY = "set_velocity"
 
 
 class CommandId(IntEnum):
@@ -26,6 +27,7 @@ class CommandId(IntEnum):
     RESET = 5
     CLEAR_ERROR = 6
     SET_PID = 7
+    SET_VELOCITY = 8
 
 
 _COMMAND_TO_ID = {
@@ -36,6 +38,7 @@ _COMMAND_TO_ID = {
     CommandName.RESET: CommandId.RESET,
     CommandName.CLEAR_ERROR: CommandId.CLEAR_ERROR,
     CommandName.SET_PID: CommandId.SET_PID,
+    CommandName.SET_VELOCITY: CommandId.SET_VELOCITY,
 }
 _ID_TO_COMMAND = {value: name for name, value in _COMMAND_TO_ID.items()}
 
@@ -43,7 +46,7 @@ CAN_CMD_BASE_ID = 0x100
 CAN_RSP_BASE_ID = 0x200
 
 # Firmware axis/status modes (not host supervisor track/park/jog).
-FIRMWARE_MODE_IDS = {"idle": 0, "homing": 1, "position": 2, "fault": 3}
+FIRMWARE_MODE_IDS = {"idle": 0, "homing": 1, "position": 2, "fault": 3, "velocity": 4}
 FIRMWARE_MODE_NAMES = {value: name for name, value in FIRMWARE_MODE_IDS.items()}
 
 
@@ -75,6 +78,10 @@ class MirrorCommand:
             az = int(round(float(self.payload.get("azimuth_deg", 0.0)) * 100.0))
             el = int(round(float(self.payload.get("elevation_deg", 0.0)) * 100.0))
             return struct.pack("<Bhh", cmd_id, az, el)
+        if self.command == CommandName.SET_VELOCITY:
+            az = int(round(float(self.payload.get("azimuth_deg_s", 0.0)) * 100.0))
+            el = int(round(float(self.payload.get("elevation_deg_s", 0.0)) * 100.0))
+            return struct.pack("<Bhh", cmd_id, az, el)
         if self.command == CommandName.SET_PID:
             kp = int(round(float(self.payload.get("kp", 0.0)) * 1000.0))
             ki = int(round(float(self.payload.get("ki", 0.0)) * 1000.0))
@@ -92,6 +99,9 @@ class MirrorCommand:
         if command == CommandName.SET_TARGET and len(data) >= 5:
             az, el = struct.unpack("<hh", data[1:5])
             payload = {"azimuth_deg": az / 100.0, "elevation_deg": el / 100.0}
+        elif command == CommandName.SET_VELOCITY and len(data) >= 5:
+            az, el = struct.unpack("<hh", data[1:5])
+            payload = {"azimuth_deg_s": az / 100.0, "elevation_deg_s": el / 100.0}
         elif command == CommandName.SET_PID and len(data) >= 7:
             kp, ki, kd = struct.unpack("<hhh", data[1:7])
             payload = {"kp": kp / 1000.0, "ki": ki / 1000.0, "kd": kd / 1000.0}
