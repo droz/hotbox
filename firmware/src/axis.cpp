@@ -48,8 +48,6 @@ float limited_azimuth_error_deg(float target_deg, float position_deg) {
 
 constexpr float kHomingLeaveTimeoutS = 8.0f;
 constexpr float kHomingSeekTimeoutS = 30.0f;
-constexpr float kHomingRetractTimeoutS = 8.0f;
-constexpr float kHomingSettleTimeoutS = 8.0f;
 
 }  // namespace
 
@@ -111,32 +109,38 @@ void BrushedAxis::startHoming() {
   homed_ = false;
   mode_ = AxisMode::Homing;
   clearFault();
-  // If already on the switch (or the pin is stuck low), leave it first so we
-  // don't "succeed" instantly / skip the accuracy creep.
-  enterHomingPhase(hallTriggered() ? HomingPhase::LeaveSwitch : HomingPhase::Search);
+  // If already on the switch, leave it first so the rising edge is a true edge.
+  enterHomingPhase(hallTriggered() ? HomingPhase::LeaveSwitch : HomingPhase::Seek);
 }
 
-void BrushedAxis::finishHoming() {
-  // Astronomical joint frame: azimuth home = 0° (north at el=0; body twist 0 at
-  // zenith), elevation home = 90° (face-up / zenith). Hall zero is that pose.
+float BrushedAxis::homeAngleDeg() const {
+  // Elevation home = 90° (face-up). Azimuth home = oven-facing so relative az is
+  // 0° (center of the ±150° travel window) — not absolute north (0°), which sits
+  // on the relative ±180° discontinuity and makes the post-home servo flee.
+  return (enc_a_ == kHorizEncA) ? kOvenFacingAzimuthDeg : 90.0f;
+}
+
+void BrushedAxis::finishHoming(float mid_deg) {
+  // Redefine the encoder so the hall-window midpoint maps to home_deg, without
+  // physically jumping: current pose becomes home + (pos − mid). Then servo home.
+  const float home_deg = homeAngleDeg();
+  const float new_pos = home_deg + (position_deg_ - mid_deg);
+  const long home_at_mid_ticks = lroundf(new_pos * kTicksPerDegree);
   const bool is_azimuth = (enc_a_ == kHorizEncA);
-  const float home_deg = is_azimuth ? 0.0f : 90.0f;
-  const long home_ticks = lroundf(home_deg * kTicksPerDegree);
   if (is_azimuth) {
-    g_az_encoder.setCount(home_ticks);
+    g_az_encoder.setCount(home_at_mid_ticks);
   } else {
-    g_el_encoder.setCount(home_ticks);
+    g_el_encoder.setCount(home_at_mid_ticks);
   }
-  encoder_ticks_ = home_ticks;
-  last_encoder_ticks_ = home_ticks;
-  position_deg_ = home_deg;
+  encoder_ticks_ = home_at_mid_ticks;
+  last_encoder_ticks_ = home_at_mid_ticks;
+  position_deg_ = new_pos;
   velocity_deg_s_ = 0.0f;
-  target_deg_ = home_deg;
   homed_ = true;
-  mode_ = AxisMode::Idle;
-  homing_phase_ = HomingPhase::Search;
+  homing_phase_ = HomingPhase::Seek;
   resetPidState();
-  driveMotor(0.0f);
+  // Drive back to the new zero (hall midpoint).
+  setTargetDeg(home_deg);
 }
 
 void BrushedAxis::setTargetDeg(float target_deg) {
@@ -148,7 +152,7 @@ void BrushedAxis::setTargetDeg(float target_deg) {
 void BrushedAxis::stop() {
   mode_ = AxisMode::Idle;
   command_velocity_deg_s_ = 0.0f;
-  homing_phase_ = HomingPhase::Search;
+  homing_phase_ = HomingPhase::Seek;
   resetPidState();
   driveMotor(0.0f);
 }
@@ -173,7 +177,7 @@ void BrushedAxis::resetPidState() {
 void BrushedAxis::setFault(const char* text) {
   fault_text_ = text;
   mode_ = AxisMode::Fault;
-  homing_phase_ = HomingPhase::Search;
+  homing_phase_ = HomingPhase::Seek;
   resetPidState();
   driveMotor(0.0f);
 }
@@ -246,97 +250,50 @@ void BrushedAxis::update(float dt_s) {
 
     switch (homing_phase_) {
       case HomingPhase::LeaveSwitch:
-        // Leave an already-asserted hall before the fast search.
+        // Leave an already-asserted hall before seeking for a rising edge.
         if (!hallTriggered()) {
-          enterHomingPhase(HomingPhase::Search);
+          enterHomingPhase(HomingPhase::Seek);
           return;
         }
         if (homing_phase_s_ > kHomingLeaveTimeoutS) {
           setFault("hall_stuck");
           return;
         }
-        command_velocity_deg_s_ = kHomingSearchVelocityDegS;
+        // Opposite of Seek so we clear the magnet before driving back through it.
+        command_velocity_deg_s_ = -kHomingVelocityDegS;
         break;
 
-      case HomingPhase::Search:
-        if (hallTriggered()) {
-          homing_mark_deg_ = position_deg_;
-          enterHomingPhase(HomingPhase::Retract);
-          return;
-        }
-        if (homing_phase_s_ > kHomingSeekTimeoutS) {
-          setFault("hall_not_found");
-          return;
-        }
-        command_velocity_deg_s_ = -kHomingSearchVelocityDegS;
-        break;
-
-      case HomingPhase::Retract:
-        // Reverse past the first contact by at least backoff_deg and off the hall.
-        if ((position_deg_ - homing_mark_deg_) >= kHomingBackoffDeg && !hallTriggered()) {
-          enterHomingPhase(HomingPhase::Creep);
-          return;
-        }
-        if (homing_phase_s_ > kHomingRetractTimeoutS) {
-          setFault(hallTriggered() ? "hall_stuck" : "hall_not_found");
-          return;
-        }
-        command_velocity_deg_s_ = kHomingSearchVelocityDegS;
-        break;
-
-      case HomingPhase::Creep:
-        // Near edge (rising into the magnet while seeking negative).
+      case HomingPhase::Seek:
+        // Rising edge into the magnet while seeking more-positive encoder.
         if (hallTriggered()) {
           homing_edge1_deg_ = position_deg_;
-          enterHomingPhase(HomingPhase::CreepAcross);
+          enterHomingPhase(HomingPhase::Across);
           return;
         }
         if (homing_phase_s_ > kHomingSeekTimeoutS) {
           setFault("hall_not_found");
           return;
         }
-        command_velocity_deg_s_ = -kHomingCreepVelocityDegS;
+        command_velocity_deg_s_ = kHomingVelocityDegS;
         break;
 
-      case HomingPhase::CreepAcross:
-        // Far edge: after latching the near edge, reverse slowly across the
-        // magnet window to capture the opposite edge.
+      case HomingPhase::Across:
+        // Falling edge: continue the same way across the magnet window.
         if (!hallTriggered()) {
           homing_edge2_deg_ = position_deg_;
-          homing_mid_deg_ = 0.5f * (homing_edge1_deg_ + homing_edge2_deg_);
-          enterHomingPhase(HomingPhase::SettleMid);
-          target_deg_ = homing_mid_deg_;
+          const float mid_deg = 0.5f * (homing_edge1_deg_ + homing_edge2_deg_);
+          finishHoming(mid_deg);
           return;
         }
         if (homing_phase_s_ > kHomingSeekTimeoutS) {
-          setFault("hall_not_found");
+          setFault("hall_stuck");
           return;
         }
-        command_velocity_deg_s_ = kHomingCreepVelocityDegS;
+        command_velocity_deg_s_ = kHomingVelocityDegS;
         break;
-
-      case HomingPhase::SettleMid: {
-        // Servo to the window midpoint, then zero the encoder there.
-        const float error_deg = homing_mid_deg_ - position_deg_;
-        if (fabs(error_deg) <= kHomingSettleTolDeg) {
-          finishHoming();
-          return;
-        }
-        if (homing_phase_s_ > kHomingSettleTimeoutS) {
-          setFault("home_settle_timeout");
-          return;
-        }
-        target_deg_ = homing_mid_deg_;
-        const float pwm_command =
-            computePositionPidDuty(error_deg, dt_s, /*apply_position_deadband=*/false);
-        driveMotor(pwm_command);
-        command_velocity_deg_s_ = 0.0f;
-        return;
-      }
     }
 
-    // Constant-velocity stages: ramp a position setpoint and track it with the
-    // shared position PID (no position-deadband coast — that would stall the creep).
+    // Constant-velocity stages: ramp a position setpoint and track it with PID.
     target_deg_ += command_velocity_deg_s_ * dt_s;
     const float error_deg = target_deg_ - position_deg_;
     const float pwm_command = computePositionPidDuty(error_deg, dt_s, /*apply_position_deadband=*/false);

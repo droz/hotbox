@@ -1116,8 +1116,10 @@
         let active = false;
         let pointerId = null;
         let lastSent = { az: 0, el: 0 };
+        let heldRates = { az: 0, el: 0 };
         let pending = null;
         let sendTimer = null;
+        let holdTimer = null;
 
         function setKnob(nx, ny) {
           const r = radius();
@@ -1128,20 +1130,42 @@
           return { az, el };
         }
 
+        function flushPending() {
+          if (!pending) return;
+          const next = pending;
+          pending = null;
+          if (Math.abs(next.az - lastSent.az) < 0.05 && Math.abs(next.el - lastSent.el) < 0.05) {
+            return;
+          }
+          lastSent = next;
+          sendJogRates(nodeId, next.az, next.el);
+        }
+
         function queueRates(az, el) {
+          heldRates = { az, el };
           pending = { az, el };
           if (sendTimer != null) return;
           sendTimer = setTimeout(() => {
             sendTimer = null;
-            if (!pending) return;
-            const next = pending;
-            pending = null;
-            if (Math.abs(next.az - lastSent.az) < 0.05 && Math.abs(next.el - lastSent.el) < 0.05) {
-              return;
-            }
-            lastSent = next;
-            sendJogRates(nodeId, next.az, next.el);
-          }, 40); // ~25 Hz max
+            flushPending();
+          }, 40); // ~25 Hz coalesce for pointermove bursts
+        }
+
+        function startHoldRepeat() {
+          if (holdTimer != null) return;
+          // Keep commanding while the stick is held off-center — not only when the
+          // pointer moves. Host integrates each /api/jog (control_tick may be absent).
+          holdTimer = setInterval(() => {
+            if (!active) return;
+            lastSent = { az: heldRates.az, el: heldRates.el };
+            sendJogRates(nodeId, heldRates.az, heldRates.el);
+          }, 50);
+        }
+
+        function stopHoldRepeat() {
+          if (holdTimer == null) return;
+          clearInterval(holdTimer);
+          holdTimer = null;
         }
 
         function ratesFromEvent(event) {
@@ -1168,7 +1192,9 @@
           stick.classList.remove("dragging");
           setKnob(0, 0);
           pending = null;
+          heldRates = { az: 0, el: 0 };
           lastSent = { az: 0, el: 0 };
+          stopHoldRepeat();
           if (sendTimer != null) {
             clearTimeout(sendTimer);
             sendTimer = null;
@@ -1185,6 +1211,7 @@
           stick.setPointerCapture(event.pointerId);
           const rates = ratesFromEvent(event);
           queueRates(rates.az, rates.el);
+          startHoldRepeat();
         });
 
         stick.addEventListener("pointermove", (event) => {

@@ -92,14 +92,11 @@ actuator:
   max_velocity_deg_s: 5.0    # Maximum output-shaft speed [°/s]
   max_accel_deg_s2: 10.0     # Maximum output-shaft acceleration [°/s²] (firmware ramp limiter)
 
-  # ── Homing (search → retract → creep both edges → settle midpoint) ───────────
-  # Fast search → reverse by backoff_deg → slow creep across both hall edges
-  # → settle to the midpoint and zero the encoder there.
-  # Firmware ramps a position setpoint at each stage rate and tracks it with PID.
-  homing_search_velocity_deg_s: 5.0   # Fast approach to first hall contact [°/s]
-  homing_creep_velocity_deg_s: 1.0    # Slow pass across the hall window [°/s]
-  homing_backoff_deg: 5.0             # Reverse past hall after first contact [°]
-  homing_settle_tol_deg: 0.02         # |pos − midpoint| to finish and zero [°]
+  # ── Homing (single speed across both hall edges) ─────────────────────────────
+  # If already on the hall, back up (−encoder) until clear. Then move at constant
+  # speed in the +encoder direction, capture rising + falling edges, redefine zero
+  # at the midpoint, and set_target to home so the axis drives back to center.
+  homing_velocity_deg_s: 3.0   # Constant home seek speed [°/s] — tune as needed
 
   # ── PID (duty command u ∈ [-1,1]: kp*error + ki*∫error + kd*derror/dt) ──────
   # Same gains for azimuth and elevation. Override at runtime with set_pid.

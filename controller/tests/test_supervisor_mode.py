@@ -220,9 +220,9 @@ def test_protocol_traffic_is_recorded() -> None:
     assert any(e["direction"] == "rx" for e in traffic)
 
 
-def test_protocol_set_target_is_joint_limited() -> None:
+def test_protocol_set_target_is_passthrough() -> None:
+    """Protocol set_target must not rewrite/clamp az/el (firmware defends itself)."""
     from hotbox_controller.app import ProtocolCommandRequest
-    from hotbox_shared import within_mount_joint_limits
 
     app, transport = _app()
     app.send_protocol_command(
@@ -230,18 +230,13 @@ def test_protocol_set_target_is_joint_limited() -> None:
             command="set_target",
             node_id=0,
             azimuth_deg=350.0,
-            elevation_deg=-20.0,
+            elevation_deg=97.0,
         )
     )
     cmd = transport.sent[-1]
     assert cmd.command == CommandName.SET_TARGET
-    az = float(cmd.payload["azimuth_deg"])
-    el = float(cmd.payload["elevation_deg"])
-    limits = app._joint_limits()
-    oven = app._oven_facing_deg(0)
-    assert within_mount_joint_limits(az, el, oven_facing_azimuth_deg=oven, limits=limits)
-    assert el >= limits.elevation_min_deg - 1e-6
-    assert el <= limits.elevation_max_deg + 1e-6
+    assert float(cmd.payload["azimuth_deg"]) == 350.0
+    assert float(cmd.payload["elevation_deg"]) == 97.0
 
 
 def test_jog_stops_at_joint_limits() -> None:

@@ -160,15 +160,9 @@ class ActuatorConstants:
     max_accel_deg_s2: float = 120.0
     """Maximum commanded output-shaft angular acceleration [°/s²] (firmware ramp limiter)."""
 
-    # --- Homing (two-stage: fast search → backoff → slow creep) ---
-    homing_search_velocity_deg_s: float = 5.0
-    """Fast approach speed toward first hall contact [°/s]."""
-    homing_creep_velocity_deg_s: float = 0.5
-    """Slow final approach after backoff for an accurate hall edge [°/s]."""
-    homing_backoff_deg: float = 1.0
-    """How far to reverse past the hall after the first contact before creep [°]."""
-    homing_settle_tol_deg: float = 0.05
-    """Absolute error [°] to the hall-window midpoint before zeroing the encoder."""
+    # --- Homing (single constant-speed pass across both hall edges) ---
+    homing_velocity_deg_s: float = 2.0
+    """Constant home seek speed [°/s] (leave hall negative, seek both edges positive)."""
 
     # --- PID (position loop, output shaft degrees → duty ∈ [-1, 1]) ---
     pid_kp: float = 1.2

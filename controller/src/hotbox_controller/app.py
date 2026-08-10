@@ -296,7 +296,10 @@ class ControllerApplication:
         *,
         allow_dual: bool = True,
     ) -> TrackingTarget:
-        """Enforce physical joint limits before any ``set_target`` leaves the host."""
+        """Enforce physical joint limits for supervisor-driven targets (Track/Park/Jog).
+
+        Not used for raw protocol ``set_target`` — that path is pass-through.
+        """
         limits = self._joint_limits()
         mount = self._mirror_world_for_node(node_id)
         if allow_dual:
@@ -656,15 +659,11 @@ class ControllerApplication:
 
         payload: dict[str, Any] = {}
         if command_name == CommandName.SET_TARGET.value:
-            raw_target = TrackingTarget(
-                azimuth_deg=float(request.azimuth_deg if request.azimuth_deg is not None else 0.0),
-                elevation_deg=float(request.elevation_deg if request.elevation_deg is not None else 0.0),
-                mode="tracking",
-            )
-            clamped = self._clamp_target(node_id, raw_target, allow_dual=True)
+            # Thin client: pass the user's angles through unchanged. Firmware
+            # (or Track/Jog helpers) is responsible for joint-limit defense.
             payload = {
-                "azimuth_deg": clamped.azimuth_deg,
-                "elevation_deg": clamped.elevation_deg,
+                "azimuth_deg": float(request.azimuth_deg if request.azimuth_deg is not None else 0.0),
+                "elevation_deg": float(request.elevation_deg if request.elevation_deg is not None else 0.0),
             }
         elif command_name == CommandName.SET_PID.value:
             payload = {

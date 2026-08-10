@@ -10,12 +10,9 @@ enum class AxisMode { Idle, Homing, Position, Fault };
 
 /** Homing sub-states while AxisMode::Homing. */
 enum class HomingPhase {
-  LeaveSwitch,  // started on hall — reverse until clear, then Search
-  Search,       // fast approach until first hall contact
-  Retract,      // reverse by kHomingBackoffDeg past the contact
-  Creep,        // slow approach to the near hall edge
-  CreepAcross,  // continue slowly to the far hall edge
-  SettleMid,    // move to midpoint of the two edges, then zero
+  LeaveSwitch,  // started on hall — reverse until clear, then Seek
+  Seek,         // constant-speed (positive encoder) until rising hall edge
+  Across,       // continue until falling hall edge, then zero + go home
 };
 
 class BrushedAxis {
@@ -45,8 +42,10 @@ class BrushedAxis {
  private:
   void driveMotor(float command);
   void setFault(const char* text);
-  void finishHoming();
+  void finishHoming(float mid_deg);
   void enterHomingPhase(HomingPhase phase);
+  /** Home joint angle for this axis (az 0°, el 90°). */
+  float homeAngleDeg() const;
   /** Position PID → duty ∈ [-1,1]. When ``apply_position_deadband``, coast+freeze I near zero error. */
   float computePositionPidDuty(float error_deg, float dt_s, bool apply_position_deadband);
 
@@ -63,18 +62,14 @@ class BrushedAxis {
   float command_velocity_deg_s_ = 0.0f;
   float stall_timer_s_ = 0.0f;
   float homing_phase_s_ = 0.0f;
-  /** Position at which Search hit the hall (Retract measures reverse travel from here). */
-  float homing_mark_deg_ = 0.0f;
-  /** Hall window edges captured during Creep / CreepAcross (encoder degrees). */
+  /** Hall window edges captured during Seek / Across (encoder degrees). */
   float homing_edge1_deg_ = 0.0f;
   float homing_edge2_deg_ = 0.0f;
-  /** Midpoint of the hall window; SettleMid servos here before zeroing. */
-  float homing_mid_deg_ = 0.0f;
   bool homed_ = false;
   // Stall detect only after the encoder has moved at least once — otherwise a
   // missing encoder would immediately fault any open-loop PWM bring-up.
   bool encoder_alive_ = false;
-  HomingPhase homing_phase_ = HomingPhase::Search;
+  HomingPhase homing_phase_ = HomingPhase::Seek;
   AxisMode mode_ = AxisMode::Idle;
   const char* fault_text_ = nullptr;
 
