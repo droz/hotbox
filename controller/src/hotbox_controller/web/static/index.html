@@ -293,7 +293,16 @@
         align-items: flex-start;
         gap: 0.3rem;
       }
-      .jog-stick-wrap[hidden] { display: none !important; }
+      .jog-stick-wrap.is-disabled {
+        opacity: 0.45;
+        pointer-events: none;
+      }
+      .jog-stick-wrap.is-disabled .jog-stick {
+        cursor: not-allowed;
+      }
+      select option:disabled {
+        color: #6a7a88;
+      }
       .jog-stick {
         position: relative;
         width: 7.25rem;
@@ -1214,7 +1223,7 @@
         }
 
         stick.addEventListener("pointerdown", (event) => {
-          if (wrap.hidden) return;
+          if (wrap.hidden || wrap.classList.contains("is-disabled")) return;
           event.preventDefault();
           active = true;
           pointerId = event.pointerId;
@@ -1252,6 +1261,14 @@
             if (wasHidden && visible) stopJog({ sendZero: false });
             // Leaving Jog: don't POST zero rates here — mode change owns the transition.
             if (!wasHidden && !visible) stopJog({ sendZero: false });
+          },
+          setArmed(armed) {
+            wrap.classList.toggle("is-disabled", !armed);
+            if (!armed && active) stopJog({ sendZero: true });
+            const metaHint = card.querySelector('[data-field="jog-meta"]');
+            if (metaHint && !armed && !wrap.hidden) {
+              metaHint.textContent = "Home both axes to jog";
+            }
           },
         };
         jogControllers.set(nodeId, controller);
@@ -1533,7 +1550,33 @@
             faultEl.textContent = "none";
           }
           setActiveModeButtons(card.querySelector(".mode-switch"), mirrorMode);
-          bindJogStick(card, id).setVisible(mirrorMode === "jog");
+          const jogBtn = card.querySelector('.mode-switch [data-mode="jog"]');
+          if (jogBtn) {
+            jogBtn.disabled = !bothHomed;
+            jogBtn.title = bothHomed ? "" : "Home both axes before jogging";
+          }
+          const jog = bindJogStick(card, id);
+          jog.setVisible(mirrorMode === "jog");
+          jog.setArmed(mirrorMode === "jog" && bothHomed);
+          // Protocol: motion commands require a completed home.
+          const needsHome = !bothHomed;
+          card.querySelectorAll('[data-field="proto-command"] option').forEach((opt) => {
+            if (opt.value === "set_target" || opt.value === "set_velocity") {
+              opt.disabled = needsHome;
+            }
+          });
+          const cmdSelect = card.querySelector('[data-field="proto-command"]');
+          if (cmdSelect && needsHome && (cmdSelect.value === "set_target" || cmdSelect.value === "set_velocity")) {
+            cmdSelect.value = "get_status";
+            updateProtocolFields(card);
+          }
+          const sendBtn = card.querySelector('[data-field="proto-send"]');
+          if (sendBtn && cmdSelect) {
+            const blocked =
+              needsHome && (cmdSelect.value === "set_target" || cmdSelect.value === "set_velocity");
+            sendBtn.disabled = blocked;
+            sendBtn.title = blocked ? "Home both axes first" : "";
+          }
           updateProtocolTraffic(card, id, traffic);
         });
         // Restore tab once mirrors exist; avoid re-selecting every poll tick.
@@ -1555,6 +1598,17 @@
           window.hotboxLatestState = state;
           document.getElementById("state").textContent = JSON.stringify(state, null, 2);
           updateFleetModeUi(state.mode);
+          const mirrors = state.mirrors || {};
+          const anyHomed = Object.values(mirrors).some((s) => {
+            const az = s.azimuth_home || (s.homed ? "homed" : "unhomed");
+            const el = s.elevation_home || (s.homed ? "homed" : "unhomed");
+            return s.homed === true || (az === "homed" && el === "homed");
+          });
+          const fleetJog = document.getElementById("btn-mode-jog");
+          if (fleetJog) {
+            fleetJog.disabled = !anyHomed;
+            fleetJog.title = anyHomed ? "" : "Home mirrors before jogging";
+          }
           updateHeatDemandUi(!!state.heat_demand);
           const gps = state.gps || {};
           document.getElementById("gps-pill").textContent = gps.valid

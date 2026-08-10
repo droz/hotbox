@@ -116,8 +116,10 @@ class MirrorMount {
   void homeAzimuth();
   void homeElevation();
   void stop();
-  void setTarget(float azimuth_deg, float elevation_deg);
-  void setVelocity(float azimuth_deg_s, float elevation_deg_s);
+  /** Returns false if either axis is not yet homeed (command ignored). */
+  bool setTarget(float azimuth_deg, float elevation_deg);
+  /** Returns false if either axis is not yet homeed (command ignored). */
+  bool setVelocity(float azimuth_deg_s, float elevation_deg_s);
   void clearError();
   /** Soft reset: stop, clear faults/PID state. On device also reboots via ESP.restart(). */
   void reset();

@@ -233,8 +233,7 @@ void ProtocolHandler::handleLine(const String& line) {
     float el = 0.0f;
     readFloatField(line, "azimuth_deg", &az);
     readFloatField(line, "elevation_deg", &el);
-    mount_->setTarget(az, el);
-    emitAck("set_target", true);
+    emitAck("set_target", mount_->setTarget(az, el));
     return;
   }
   if (hasCommand(line, "set_velocity")) {
@@ -242,8 +241,7 @@ void ProtocolHandler::handleLine(const String& line) {
     float el = 0.0f;
     readFloatField(line, "azimuth_deg_s", &az);
     readFloatField(line, "elevation_deg_s", &el);
-    mount_->setVelocity(az, el);
-    emitAck("set_velocity", true);
+    emitAck("set_velocity", mount_->setVelocity(az, el));
     return;
   }
   if (hasCommand(line, "set_pid")) {

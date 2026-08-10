@@ -94,7 +94,7 @@ class SimulatedMirrorNode:
                 self.elevation_home = "unhomed"
             self.mode = "idle"
         elif command.command == CommandName.SET_TARGET:
-            if self.mode == "homing":
+            if self.mode == "homing" or not self.homed:
                 return
             self.target_azimuth_deg = float(command.payload.get("azimuth_deg", self.target_azimuth_deg))
             self.target_elevation_deg = float(command.payload.get("elevation_deg", self.target_elevation_deg))
@@ -103,7 +103,7 @@ class SimulatedMirrorNode:
             self._vel_az = 0.0
             self._vel_el = 0.0
         elif command.command == CommandName.SET_VELOCITY:
-            if self.mode == "homing":
+            if self.mode == "homing" or not self.homed:
                 return
             self._vel_az = float(command.payload.get("azimuth_deg_s", 0.0))
             self._vel_el = float(command.payload.get("elevation_deg_s", 0.0))

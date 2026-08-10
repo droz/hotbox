@@ -465,17 +465,25 @@ void MirrorMount::stop() {
   refreshModeText();
 }
 
-void MirrorMount::setTarget(float azimuth_deg, float elevation_deg) {
+bool MirrorMount::setTarget(float azimuth_deg, float elevation_deg) {
+  if (!isHomed()) {
+    return false;
+  }
   clamp_joint_targets(&azimuth_deg, &elevation_deg);
   azimuth_.setTargetDeg(azimuth_deg);
   elevation_.setTargetDeg(elevation_deg);
   refreshModeText();
+  return true;
 }
 
-void MirrorMount::setVelocity(float azimuth_deg_s, float elevation_deg_s) {
+bool MirrorMount::setVelocity(float azimuth_deg_s, float elevation_deg_s) {
+  if (!isHomed()) {
+    return false;
+  }
   azimuth_.setVelocityDegS(azimuth_deg_s);
   elevation_.setVelocityDegS(elevation_deg_s);
   refreshModeText();
+  return true;
 }
 
 void MirrorMount::clearError() {
