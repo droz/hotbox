@@ -63,6 +63,7 @@ def render_firmware_header(system: SystemConstants) -> str:
         f"#define HOTBOX_PID_KP ({system.actuator.pid_kp:.6f}f)",
         f"#define HOTBOX_PID_KI ({system.actuator.pid_ki:.6f}f)",
         f"#define HOTBOX_PID_KD ({system.actuator.pid_kd:.6f}f)",
+        f"#define HOTBOX_PID_INTEGRAL_LIMIT ({system.actuator.pid_integral_limit:.6f}f)",
         f"#define HOTBOX_PWM_DEADBAND ({system.actuator.pwm_deadband:.6f}f)",
         f"#define HOTBOX_POSITION_DEADBAND_DEG ({system.actuator.position_deadband_deg:.6f}f)",
         f"#define HOTBOX_STALL_VELOCITY_THRESHOLD_DEG_S ({system.actuator.stall_velocity_threshold_deg_s:.6f}f)",

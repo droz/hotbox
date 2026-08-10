@@ -52,6 +52,7 @@ constexpr float kTicksPerDegree         = HOTBOX_TICKS_PER_DEGREE;
 constexpr float kPidKp                  = HOTBOX_PID_KP;
 constexpr float kPidKi                  = HOTBOX_PID_KI;
 constexpr float kPidKd                  = HOTBOX_PID_KD;
+constexpr float kPidIntegralLimit       = HOTBOX_PID_INTEGRAL_LIMIT;
 constexpr float kPwmDeadband            = HOTBOX_PWM_DEADBAND;
 constexpr float kPositionDeadbandDeg    = HOTBOX_POSITION_DEADBAND_DEG;
 constexpr float kStallVelocityThreshDegS = HOTBOX_STALL_VELOCITY_THRESHOLD_DEG_S;

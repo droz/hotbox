@@ -217,6 +217,11 @@ float BrushedAxis::computePositionPidDuty(float error_deg, float dt_s, bool appl
   if (!saturated || (error_deg * integral_ <= 0.0f)) {
     integral_ += error_deg * dt_s;
   }
+  // Hard-cap |ki·I| so a long slew cannot bank an I-term that drives overshoot.
+  if (fabs(ki_) > 1e-12f && kPidIntegralLimit > 0.0f) {
+    const float i_max = kPidIntegralLimit / fabs(ki_);
+    integral_ = clampf(integral_, -i_max, i_max);
+  }
   u = kp_ * error_deg + ki_ * integral_ + kd_ * d_error;
   return clampf(u, -1.0f, 1.0f);
 }
