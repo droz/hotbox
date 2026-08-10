@@ -466,22 +466,16 @@ class ControllerApplication:
                 node_id, sun=sun, statuses=statuses, tracking=tracking
             )
             if desired is None:
-                # Jog/Raw: show hold pose or last tracking estimate for scene preview.
-                pose = self._jog_pose.get(int(node_id))
-                if pose is not None and self.node_mode(node_id) == "jog":
+                # Jog/Raw: use live reported pose for scene/preview (not a lagged hold cache).
+                status = statuses.get(node_id)
+                if status is not None:
                     out[node_id] = TrackingTarget(
-                        azimuth_deg=pose[0], elevation_deg=pose[1], mode="tracking"
+                        azimuth_deg=float(status.azimuth_deg),
+                        elevation_deg=float(status.elevation_deg),
+                        mode="tracking",
                     )
                 else:
-                    status = statuses.get(node_id)
-                    if status is not None:
-                        out[node_id] = TrackingTarget(
-                            azimuth_deg=float(status.azimuth_deg),
-                            elevation_deg=float(status.elevation_deg),
-                            mode="tracking",
-                        )
-                    else:
-                        out[node_id] = tracking[node_id]
+                    out[node_id] = tracking[node_id]
             else:
                 out[node_id] = desired
         return out
@@ -543,6 +537,27 @@ class ControllerApplication:
             default_mirror_offset_d_m=self.config.mirror.mount_offset_d_m,
             system=self.config.system,
         )
+        # Live pose from firmware status — redraws as soon as get_status sees new angles
+        # (jog/home), unlike commanded ``target`` which can lag.
+        live_targets = {
+            int(node_id): TrackingTarget(
+                azimuth_deg=float(status.azimuth_deg),
+                elevation_deg=float(status.elevation_deg),
+                mode="tracking",
+            )
+            for node_id, status in statuses.items()
+        }
+        live_scene = build_target_scene(
+            sun=sun,
+            absorber_world=self.absorber_world,
+            targets=live_targets,
+            calibrations=self.calibrations,
+            absorber_height_m=self.config.oven.absorber_height_m,
+            default_oa_distance_m=self.config.mirror.default_oa_distance_m,
+            default_mirror_offset_d_m=self.config.mirror.mount_offset_d_m,
+            system=self.config.system,
+        )
+        live_scene = {**live_scene, "label": "live"}
 
         return {
             "timestamp_utc": utc_now().isoformat(),
@@ -562,7 +577,8 @@ class ControllerApplication:
             "calibration_count": len(self.calibrations),
             "geometry": {
                 "target": target_scene,
-                "estimated": target_scene,
+                "live": live_scene,
+                "estimated": live_scene,
                 "true": self._true_geometry,
             },
         }
@@ -597,7 +613,7 @@ class ControllerApplication:
         )
 
     def jog(self, request: JogRequest) -> None:
-        """Update host-side jog rates; nonzero rates stream ``set_velocity``."""
+        """Update host-side jog rates; nonzero → ``set_velocity``, zero → ``stop``."""
         node_id = int(request.node_id)
         az = float(request.azimuth_rate_deg_s)
         el = float(request.elevation_rate_deg_s)
@@ -615,24 +631,18 @@ class ControllerApplication:
         if abs(az) > 1e-9 or abs(el) > 1e-9:
             self._apply_velocities({node_id: (az, el)})
             return
-        # Stick centered: hold with set_target at the last known / status pose.
+        # Stick centered / released: coast via stop (PID off). Do not chase a
+        # lagged set_target hold pose — that yanks the mirror backward.
+        try:
+            self.fleet.stop(node_id)
+        except ConnectionError:
+            return
         node = self.fleet.nodes().get(node_id)
         if node is not None:
             self._jog_pose[node_id] = (
                 float(node.status.azimuth_deg),
                 float(node.status.elevation_deg),
             )
-        pose = self._jog_pose.get(node_id)
-        if pose is None:
-            return
-        self._apply_targets(
-            {
-                node_id: TrackingTarget(
-                    azimuth_deg=pose[0], elevation_deg=pose[1], mode="tracking"
-                )
-            },
-            allow_dual=False,
-        )
 
     def send_protocol_command(self, request: ProtocolCommandRequest) -> dict[str, Any]:
         """Send a raw protocol command to a mirror (or rediscover the fleet).

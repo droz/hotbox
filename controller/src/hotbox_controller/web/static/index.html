@@ -631,7 +631,7 @@
   <body>
     <header>
       <h1>Hot-Box Controller</h1>
-      <p>World frame: +X east, +Y north, +Z up · target vs true (sim) geometry</p>
+      <p>World frame: +X east, +Y north, +Z up · live status vs true (sim) geometry</p>
     </header>
     <main class="app">
       <section class="viewport">
@@ -640,7 +640,7 @@
         </div>
         <div class="viewport-meta">
           <span id="scene-status">Loading 3D viewer…</span>
-          <span><span class="swatch est"></span>target</span>
+          <span><span class="swatch est"></span>live</span>
           <span><span class="swatch true"></span>true (sim)</span>
         </div>
       </section>
@@ -1477,7 +1477,11 @@
         const targets = state.targets || {};
         const mirrorModes = state.mirror_modes || {};
         const traffic = state.protocol_traffic || [];
-        const targetMirrors = state.geometry?.target?.mirrors || state.geometry?.estimated?.mirrors || [];
+        const targetMirrors =
+          state.geometry?.live?.mirrors ||
+          state.geometry?.estimated?.mirrors ||
+          state.geometry?.target?.mirrors ||
+          [];
         const missById = Object.fromEntries(targetMirrors.map((m) => [String(m.node_id), m.miss_m]));
         Object.keys(mirrors).sort((a, b) => Number(a) - Number(b)).forEach((id) => {
           const status = mirrors[id];
@@ -1588,8 +1592,36 @@
       }
 
       let refreshInFlight = false;
+      let refreshQueued = false;
+      let pollTimer = null;
+
+      function pollPeriodMs() {
+        const state = window.hotboxLatestState;
+        if (!state) return 100;
+        const modes = state.mirror_modes || {};
+        const mirrors = state.mirrors || {};
+        const busy = Object.values(modes).some((m) => m === "jog") ||
+          Object.values(mirrors).some((s) => {
+            const mode = String(s.mode || "");
+            const az = String(s.azimuth_home || "");
+            const el = String(s.elevation_home || "");
+            return mode === "homing" || mode === "velocity" || az === "homing" || el === "homing";
+          });
+        return busy ? 50 : 150;
+      }
+
+      function schedulePoll() {
+        if (pollTimer != null) clearTimeout(pollTimer);
+        pollTimer = setTimeout(() => {
+          refreshState().finally(() => schedulePoll());
+        }, pollPeriodMs());
+      }
+
       async function refreshState() {
-        if (refreshInFlight) return;
+        if (refreshInFlight) {
+          refreshQueued = true;
+          return;
+        }
         refreshInFlight = true;
         try {
           const response = await fetch("/api/state");
@@ -1622,6 +1654,10 @@
           document.getElementById("state").textContent = `Failed to load /api/state: ${err}`;
         } finally {
           refreshInFlight = false;
+          if (refreshQueued) {
+            refreshQueued = false;
+            refreshState();
+          }
         }
       }
 
@@ -1630,7 +1666,7 @@
       });
 
       // 20 Hz UI poll (SITL control loop is also ~20 Hz). Skip ticks while a fetch is in flight.
-      setInterval(refreshState, 50);
+      schedulePoll();
       refreshState();
     </script>
 
@@ -1883,7 +1919,11 @@
       }
 
       window.hotboxOnState = (state) => {
-        renderGeometry(state.geometry?.target || state.geometry?.estimated, state.geometry?.true);
+        // Prefer live firmware angles so jog/home redraw immediately; keep
+        // commanded ``target`` available for overlays if needed later.
+        const primary =
+          state.geometry?.live || state.geometry?.estimated || state.geometry?.target;
+        renderGeometry(primary, state.geometry?.true);
       };
       if (window.hotboxLatestState) window.hotboxOnState(window.hotboxLatestState);
 
