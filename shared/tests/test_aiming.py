@@ -213,8 +213,7 @@ def test_solve_tracking_below_horizon_returns_horizontal_stow() -> None:
         solve_for_mount_offset=True,
     )
     assert angles.night_stow is True
-    assert angles.azimuth_deg == 0.0
-    assert angles.elevation_deg == 0.0
+    assert abs(angles.elevation_deg - 90.0) < 1e-9
     got = normalize(mount_rotation_matrix(angles.azimuth_deg, angles.elevation_deg) @ pivot)
     np.testing.assert_allclose(got, np.array([0.0, 0.0, 1.0]), atol=1e-6)
 
@@ -225,8 +224,9 @@ def test_horizontal_stow_angles_aligns_pivot_to_zenith() -> None:
     target = np.array([0.0, 0.0, 1.0], dtype=float)
     angles = horizontal_stow_angles(pivot, mount_world=mount, target_world=target)
     assert angles.night_stow is True
-    assert angles.azimuth_deg == 0.0
-    assert angles.elevation_deg == 0.0
+    assert abs(angles.elevation_deg - 90.0) < 1e-9
+    got = normalize(mount_rotation_matrix(angles.azimuth_deg, angles.elevation_deg) @ pivot)
+    np.testing.assert_allclose(got, np.array([0.0, 0.0, 1.0]), atol=1e-6)
     got = normalize(mount_rotation_matrix(angles.azimuth_deg, angles.elevation_deg) @ pivot)
     np.testing.assert_allclose(got, np.array([0.0, 0.0, 1.0]), atol=1e-12)
 
@@ -240,7 +240,71 @@ def test_sun_elevation_from_incoming() -> None:
     assert not sun_is_above_horizon(down)
 
 
-def test_apply_mount_joint_limits_prefers_in_range_dual() -> None:
+def test_dual_mount_angles_past_zenith_unclipped() -> None:
+    from hotbox_shared import dual_mount_angles, facet_normal_world, mount_rotation_matrix
+    from hotbox_shared.vectors import normalize
+
+    az, el = 30.0, 40.0
+    daz, del_ = dual_mount_angles(az, el)
+    assert abs(daz - 210.0) < 1e-9
+    assert abs(del_ - 140.0) < 1e-9  # not clipped to 90
+    pivot = np.array([0.0, 0.0, 1.0], dtype=float)
+    n0 = facet_normal_world(az, el, pivot)
+    # Dual uses elev > 90; evaluate via the same R(az, el) formula.
+    n1 = normalize(mount_rotation_matrix(daz, del_) @ pivot)
+    np.testing.assert_allclose(n0, n1, atol=1e-12)
+
+
+def test_apply_mount_joint_limits_keeps_primary_in_0_90() -> None:
+    """With el_max=90, dual past zenith is invalid — do not fake it as face-up."""
+    from hotbox_shared import (
+        MountJointLimits,
+        apply_mount_joint_limits,
+        dual_mount_angles,
+        oven_facing_azimuth_deg,
+        within_mount_joint_limits,
+    )
+
+    mount = np.array([0.0, 2.5, 1.0], dtype=float)
+    absorber = np.array([0.0, 0.0, 1.0], dtype=float)
+    limits = MountJointLimits()
+    oven_az = oven_facing_azimuth_deg(mount, absorber)
+    az, el = oven_az, 45.0
+    dual_az, dual_el = dual_mount_angles(az, el)
+    assert dual_el > limits.elevation_max_deg
+    assert not within_mount_joint_limits(
+        dual_az, dual_el, oven_facing_azimuth_deg=oven_az, limits=limits
+    )
+    got_az, got_el = apply_mount_joint_limits(
+        az, el, mount_world=mount, absorber_world=absorber, limits=limits
+    )
+    assert abs(got_el - 45.0) < 1e-9
+    assert abs(((got_az - az + 180.0) % 360.0) - 180.0) < 1e-6
+
+
+def test_apply_mount_joint_limits_clamps_when_neither_dual_fits() -> None:
+    from hotbox_shared import (
+        MountJointLimits,
+        apply_mount_joint_limits,
+        oven_facing_azimuth_deg,
+        within_mount_joint_limits,
+    )
+
+    mount = np.array([0.0, 2.5, 1.0], dtype=float)
+    absorber = np.array([0.0, 0.0, 1.0], dtype=float)
+    limits = MountJointLimits()
+    oven_az = oven_facing_azimuth_deg(mount, absorber)
+    # Negative elev: dual is past 180 and also out of [0, 90] → clamp.
+    got_az, got_el = apply_mount_joint_limits(
+        30.0, -40.0, mount_world=mount, absorber_world=absorber, limits=limits
+    )
+    assert within_mount_joint_limits(
+        got_az, got_el, oven_facing_azimuth_deg=oven_az, limits=limits
+    )
+    assert got_el == limits.elevation_min_deg
+
+
+def test_apply_mount_joint_limits_prefers_in_range_dual_when_travel_allows() -> None:
     from hotbox_shared import (
         MountJointLimits,
         apply_mount_joint_limits,
@@ -252,20 +316,26 @@ def test_apply_mount_joint_limits_prefers_in_range_dual() -> None:
 
     mount = np.array([0.0, 2.5, 1.0], dtype=float)
     absorber = np.array([0.0, 0.0, 1.0], dtype=float)
-    limits = MountJointLimits()
+    # Allow tip past zenith so both branches can be valid.
+    limits = MountJointLimits(elevation_min_deg=0.0, elevation_max_deg=180.0)
     oven_az = oven_facing_azimuth_deg(mount, absorber)
-    # Primary has negative elevation (outside 0..90); dual should be chosen.
-    az, el = 30.0, -40.0
+    # Both branches in elev range; dual has smaller |rel az|.
+    az, el = (oven_az + 100.0) % 360.0, 40.0
     dual_az, dual_el = dual_mount_angles(az, el)
-    assert dual_el > 0.0
+    assert within_mount_joint_limits(az, el, oven_facing_azimuth_deg=oven_az, limits=limits)
+    assert within_mount_joint_limits(
+        dual_az, dual_el, oven_facing_azimuth_deg=oven_az, limits=limits
+    )
+    assert abs(relative_azimuth_deg(dual_az, oven_az)) < abs(relative_azimuth_deg(az, oven_az))
     got_az, got_el = apply_mount_joint_limits(
         az, el, mount_world=mount, absorber_world=absorber, limits=limits
     )
     assert within_mount_joint_limits(
         got_az, got_el, oven_facing_azimuth_deg=oven_az, limits=limits
     )
+    # Mid-distance ties for dual pairs; prefer smaller |rel az| → dual here.
     assert abs(got_el - dual_el) < 1e-9
-    assert abs(relative_azimuth_deg(got_az, oven_az)) <= limits.azimuth_max_deg + 1e-6
+    assert abs(((got_az - dual_az + 180.0) % 360.0) - 180.0) < 1e-6
 
 
 def test_solve_tracking_respects_joint_limits() -> None:
@@ -340,5 +410,5 @@ def test_system_yaml_loads_joint_limits() -> None:
     assert lim.azimuth_min_deg == -150.0
     assert lim.azimuth_max_deg == 150.0
     assert system.control.safe_park_azimuth_deg == 0.0
-    assert system.control.safe_park_elevation_deg == 0.0
+    assert system.control.safe_park_elevation_deg == 90.0
     assert system.control.idle_aim_height_above_absorber_m == 2.0

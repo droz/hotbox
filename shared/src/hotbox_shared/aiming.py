@@ -123,14 +123,19 @@ def horizontal_stow_angles(
     joint_limits: MountJointLimits | None = None,
 ) -> MountAngles:
     """
-    Face-up stow: mount ``(azimuth, elevation) = (0, 0)``.
+    Face-up stow: elevation ``90°`` (zenith).
 
-    At identity the body axes match world, so a +Z body normal points at zenith and the
-    mirror face is horizontal. Fixed angles (not joint-limited) so Park / night stow are
-    unambiguous. Unused kwargs kept for call-site compatibility.
+    At zenith the body ``+Z`` normal points up for any azimuth; pick the oven-facing
+    twist when mount/target are known so the pose sits at relative az ``0`` (center of
+    the joint travel window). Unused kwargs kept for call-site compatibility.
     """
-    _ = pivot_facet_normal_body, mount_world, target_world, joint_limits
-    return MountAngles(azimuth_deg=0.0, elevation_deg=0.0, night_stow=True)
+    from .mount import oven_facing_azimuth_deg
+
+    _ = pivot_facet_normal_body, joint_limits
+    az = 0.0
+    if mount_world is not None and target_world is not None:
+        az = oven_facing_azimuth_deg(mount_world, target_world)
+    return MountAngles(azimuth_deg=az, elevation_deg=90.0, night_stow=True)
 
 
 @dataclass(frozen=True, slots=True)

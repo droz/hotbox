@@ -1,5 +1,8 @@
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+
 #include "axis.h"
 
 namespace hotbox {
@@ -33,6 +36,8 @@ class ProtocolHandler {
 
   void handleLine(const String& line);
   void emitStatus();
+  /** Write one status JSON object (no trailing newline) into ``buf``. Returns length or -1. */
+  int formatStatus(char* buf, size_t buflen) const;
 
   /** Apply a binary CAN command payload (no transport). Returns true if GET_STATUS. */
   bool handleBinary(const uint8_t* data, size_t len);

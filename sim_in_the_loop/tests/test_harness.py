@@ -15,11 +15,30 @@ def test_sim_transport_home_and_status() -> None:
     assert len(discovered) == 1
 
     transport.send(MirrorCommand(node_id=0, command=CommandName.HOME))
-    for _ in range(100):
+    for _ in range(300):
         nodes[0].step(0.05)
 
     status = transport.poll_status(0)
+    assert status.azimuth_home == "homed"
+    assert status.elevation_home == "homed"
     assert status.homed is True
+
+
+def test_sim_transport_home_single_axis() -> None:
+    from hotbox_controller.protocol import CommandName, MirrorCommand
+    from hotbox_controller.transport import SimTransport
+
+    nodes = {0: SimulatedMirrorNode(node_id=0)}
+    transport = SimTransport(nodes)
+
+    transport.send(MirrorCommand(node_id=0, command=CommandName.HOME, payload={"axis": "az"}))
+    for _ in range(300):
+        nodes[0].step(0.05)
+
+    status = transport.poll_status(0)
+    assert status.azimuth_home == "homed"
+    assert status.elevation_home == "unhomed"
+    assert status.homed is False
 
 
 def test_sitl_harness_runs() -> None:

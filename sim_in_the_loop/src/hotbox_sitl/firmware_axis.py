@@ -1,21 +1,14 @@
 """firmware_axis.py — ctypes wrapper around the native CIL shared library.
 
-The CIL (C-in-the-loop) library is the real firmware control code compiled for
-the host OS.  This module provides two classes that mirror the SITL-internal
-interfaces:
-
-* ``FirmwareAxis``    — single-axis view (matches ``ActuatorModel`` interface).
-* ``FirmwareMirrorNode`` — full two-axis node (matches ``SimulatedMirrorNode``).
+The CIL library is real firmware (``axis`` + ``protocol``) compiled for the host.
+Python owns the plant (encoders/halls → ticks; PWM → motion) and talks to firmware
+the same way USB does: JSON command lines in, status JSON out.
 
 Building the library
 --------------------
     cd firmware/native && make
 
-The output lands in ``firmware/.pio/build/native_cil/``.  This module searches
-for it automatically; override with the ``HOTBOX_CIL_LIB`` environment variable.
-
-If the library is not found, ``load_cil_library()`` raises ``FileNotFoundError``
-so callers can gracefully fall back to the pure-Python SITL.
+Override the library path with ``HOTBOX_CIL_LIB`` if needed.
 """
 
 from __future__ import annotations
@@ -28,8 +21,6 @@ import subprocess
 
 from hotbox_controller.protocol import CommandName, MirrorCommand, MirrorStatus
 
-
-# ── Library discovery ──────────────────────────────────────────────────────────
 
 _LIB_NAMES = ("libfirmware_cil.dylib", "libfirmware_cil.so", "firmware_cil.dll")
 
@@ -57,6 +48,8 @@ def _cil_dependencies() -> list[Path]:
     return [
         repo_root / "firmware" / "src" / "axis.cpp",
         repo_root / "firmware" / "src" / "axis.h",
+        repo_root / "firmware" / "src" / "protocol.cpp",
+        repo_root / "firmware" / "src" / "protocol.h",
         repo_root / "firmware" / "src" / "config.h",
         repo_root / "firmware" / "include" / "hotbox_geometry.h",
         repo_root / "firmware" / "native" / "firmware_cil.cpp",
@@ -85,6 +78,7 @@ def _autobuild_native_cil() -> Path:
         subprocess.run(["make"], cwd=build_dir, check=True)
     return lib_path
 
+
 def _default_lib_path() -> Path:
     native_lib = _autobuild_native_cil()
     if native_lib.exists():
@@ -112,7 +106,6 @@ def load_cil_library(path: Path | str | None = None) -> ctypes.CDLL:
     resolved = Path(env_path) if env_path else (Path(path) if path else _default_lib_path())
     lib = ctypes.CDLL(str(resolved))
 
-    # ── Declare return/arg types ──────────────────────────────────────────────
     lib.hotbox_cil_init.restype = None
     lib.hotbox_cil_reset.restype = None
 
@@ -122,12 +115,10 @@ def load_cil_library(path: Path | str | None = None) -> ctypes.CDLL:
     lib.hotbox_cil_set_hall.argtypes = [ctypes.c_int, ctypes.c_int]
     lib.hotbox_cil_set_hall.restype = None
 
-    lib.hotbox_cil_home.restype = None
-    lib.hotbox_cil_stop.restype = None
-    lib.hotbox_cil_clear_error.restype = None
+    lib.hotbox_cil_handle_line.argtypes = [ctypes.c_char_p]
+    lib.hotbox_cil_handle_line.restype = None
 
-    lib.hotbox_cil_set_target.argtypes = [ctypes.c_float, ctypes.c_float]
-    lib.hotbox_cil_set_target.restype = None
+    lib.hotbox_cil_status_json.restype = ctypes.c_char_p
 
     lib.hotbox_cil_update.argtypes = [ctypes.c_float]
     lib.hotbox_cil_update.restype = None
@@ -146,33 +137,19 @@ def load_cil_library(path: Path | str | None = None) -> ctypes.CDLL:
     lib.hotbox_cil_pwm_az.restype = ctypes.c_float
     lib.hotbox_cil_pwm_el.restype = ctypes.c_float
 
-    lib.hotbox_cil_azimuth_deg.restype = ctypes.c_float
-    lib.hotbox_cil_elevation_deg.restype = ctypes.c_float
-    lib.hotbox_cil_is_homed.restype = ctypes.c_int
-    lib.hotbox_cil_mode.restype = ctypes.c_char_p
-    lib.hotbox_cil_fault.restype = ctypes.c_char_p
-
     lib.hotbox_cil_init()
     load_cil_library._lib = lib  # type: ignore[attr-defined]
     return lib
 
+
 load_cil_library._lib = None  # type: ignore[attr-defined]
 
 
-# ── FirmwareMirrorNode ────────────────────────────────────────────────────────
-
 class FirmwareMirrorNode:
-    """Drop-in replacement for ``SimulatedMirrorNode`` that runs the real
-    firmware C++ control code via the native CIL shared library.
+    """Drop-in replacement for ``SimulatedMirrorNode`` that runs real firmware via CIL.
 
-    The library contains a single global ``MirrorMount`` instance, so only one
-    ``FirmwareMirrorNode`` can exist at a time.  Multi-node SITL runs still use
-    ``SimulatedMirrorNode`` for all but the node under test (or use separate
-    processes — future work).
-
-    Physics (inertia, motor lag) are still modelled in Python via ``ActuatorModel``.
-    The firmware only sees encoder ticks and hall states; it outputs PWM [-1, 1]
-    which the Python plant converts back to velocity / position.
+    Python models plant physics; firmware sees encoder ticks and halls and outputs PWM.
+    Commands/status use the USB JSON protocol path (``handle_line`` / ``status_json``).
     """
 
     def __init__(
@@ -193,17 +170,20 @@ class FirmwareMirrorNode:
         self._lib = load_cil_library(lib_path)
         self._lib.hotbox_cil_reset()
 
-        # Python-side plant state (position & velocity, both axes).
         self._az_angle_deg: float = 0.0
         self._el_angle_deg: float = 0.0
         self._az_vel_deg_s: float = 0.0
         self._el_vel_deg_s: float = 0.0
-        # Hall reference (home) angle for each axis.
         self._az_hall_deg: float = 0.0
         self._el_hall_deg: float = 0.0
 
     @classmethod
-    def from_constants(cls, node_id: int, ac: "hotbox_shared.ActuatorConstants", lib_path: Path | str | None = None) -> "FirmwareMirrorNode":  # type: ignore[name-defined]
+    def from_constants(
+        cls,
+        node_id: int,
+        ac: "hotbox_shared.ActuatorConstants",  # type: ignore[name-defined]
+        lib_path: Path | str | None = None,
+    ) -> "FirmwareMirrorNode":
         return cls(
             node_id=node_id,
             ticks_per_degree=ac.ticks_per_degree,
@@ -213,22 +193,17 @@ class FirmwareMirrorNode:
             lib_path=lib_path,
         )
 
-    # ── Internal helpers ──────────────────────────────────────────────────────
-
     def _inject_plant_state(self) -> None:
-        """Push current Python plant state into the firmware HAL."""
         az_ticks = int(round(self._az_angle_deg * self.ticks_per_degree))
         el_ticks = int(round(self._el_angle_deg * self.ticks_per_degree))
         self._lib.hotbox_cil_set_encoder(0, az_ticks)
         self._lib.hotbox_cil_set_encoder(1, el_ticks)
-
         az_hall = abs(self._az_angle_deg - self._az_hall_deg) <= 1.0
         el_hall = abs(self._el_angle_deg - self._el_hall_deg) <= 1.0
         self._lib.hotbox_cil_set_hall(0, int(az_hall))
         self._lib.hotbox_cil_set_hall(1, int(el_hall))
 
     def _apply_pwm_to_plant(self, pwm_az: float, pwm_el: float, dt_s: float) -> None:
-        """First-order lag plant model: PWM → velocity → position."""
         alpha = min(1.0, dt_s / self.velocity_time_constant_s)
         target_az = pwm_az * self.max_velocity_deg_s
         target_el = pwm_el * self.max_velocity_deg_s
@@ -255,45 +230,42 @@ class FirmwareMirrorNode:
         )
         self._apply_pwm_to_plant(pwm_az.value, pwm_el.value, dt_s)
 
-    # ── SimulatedMirrorNode interface ─────────────────────────────────────────
-
     def handle_command(self, command: MirrorCommand) -> None:
         if command.node_id != self.node_id:
             return
-        cmd = command.command
-        if cmd == CommandName.HOME:
-            # Position axes just behind hall so homing sweep finds it quickly.
-            self._az_angle_deg = self._az_hall_deg - 5.0
-            self._el_angle_deg = self._el_hall_deg - 5.0
-            self._az_vel_deg_s = 0.0
-            self._el_vel_deg_s = 0.0
+        # Harness convenience only: start near the hall so a home finishes in sim time.
+        if command.command == CommandName.HOME:
+            axis = str(command.payload.get("axis", "both")).strip().lower()
+            if axis in {"az", "azimuth", "both"}:
+                self._az_angle_deg = self._az_hall_deg + 5.0
+                self._az_vel_deg_s = 0.0
+            if axis in {"el", "elevation", "both"}:
+                self._el_angle_deg = self._el_hall_deg + 5.0
+                self._el_vel_deg_s = 0.0
             self._inject_plant_state()
-            self._lib.hotbox_cil_home()
-        elif cmd == CommandName.STOP:
-            self._lib.hotbox_cil_stop()
-        elif cmd == CommandName.SET_TARGET:
-            az = float(command.payload.get("azimuth_deg", 0.0))
-            el = float(command.payload.get("elevation_deg", 0.0))
-            self._lib.hotbox_cil_set_target(az, el)
-        elif cmd == CommandName.CLEAR_ERROR:
-            self._lib.hotbox_cil_clear_error()
+        line = command.to_wire().decode("utf-8").strip()
+        self._lib.hotbox_cil_handle_line(line.encode("utf-8"))
 
     def status(self) -> MirrorStatus:
-        mode_bytes = self._lib.hotbox_cil_mode()
-        mode = mode_bytes.decode() if mode_bytes else "idle"
-        fault_bytes = self._lib.hotbox_cil_fault()
-        fault = fault_bytes.decode() if fault_bytes else None
+        raw = self._lib.hotbox_cil_status_json()
+        text = (raw.decode("utf-8") if raw else "") + "\n"
+        fw = MirrorStatus.from_wire(text.encode("utf-8"))
         return MirrorStatus(
             node_id=self.node_id,
-            homed=bool(self._lib.hotbox_cil_is_homed()),
-            fault=fault,
+            azimuth_home=fw.azimuth_home,
+            elevation_home=fw.elevation_home,
+            fault=fw.fault,
             azimuth_deg=self._az_angle_deg,
             elevation_deg=self._el_angle_deg,
-            mode=mode,
+            azimuth_integral=fw.azimuth_integral,
+            elevation_integral=fw.elevation_integral,
+            pid_kp=fw.pid_kp,
+            pid_ki=fw.pid_ki,
+            pid_kd=fw.pid_kd,
+            mode=fw.mode,
         )
 
     def step(self, dt_s: float) -> None:
-        """Advance the plant while running firmware at its own control period."""
         if dt_s <= 0.0:
             return
         substeps = max(1, int(math.ceil(dt_s / self.control_period_s)))

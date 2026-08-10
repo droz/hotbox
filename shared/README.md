@@ -131,12 +131,12 @@ Toggle refinement with `control.solve_for_mount_offset` in `config/system.yaml`
 | `MountAngles` | Result: `azimuth_deg`, `elevation_deg` |
 | `MirrorGridSpec` | Facet grid + `mount_offset_d_m` |
 | `pivot_facet_center_world` | `mount + R @ (0,0,d)` |
-| `mount_rotation_matrix` | Body → world rotation `R_z(az) @ R_x(el)` |
+| `mount_rotation_matrix` | Body → world rotation `R_z(−az) @ R_x(el − 90°)` (astro az/el) |
 
 ### Frames
 
 Right-handed ENU world frame: **+x east**, **+y north**, **+z up**. Mount body frame
-matches world at `(azimuth, elevation) = (0, 0)`. Center facet at `(0, 0, mount_offset_d_m)`
+matches world at `(azimuth, elevation) = (0, 90)`. Center facet at `(0, 0, mount_offset_d_m)`
 in body coordinates.
 
 ## Firmware header

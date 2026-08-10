@@ -1,6 +1,7 @@
 #include "protocol.h"
 
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 
 namespace hotbox {
@@ -23,6 +24,25 @@ bool readFloatField(const String& line, const char* key, float* out) {
     return false;
   }
   *out = line.substring(index + needle.length()).toFloat();
+  return true;
+}
+
+bool readStringField(const String& line, const char* key, String* out) {
+  String needle = String("\"") + key + "\":\"";
+  int index = line.indexOf(needle);
+  if (index < 0) {
+    needle = String("\"") + key + "\": \"";
+    index = line.indexOf(needle);
+  }
+  if (index < 0) {
+    return false;
+  }
+  const int start = index + needle.length();
+  const int end = line.indexOf('"', start);
+  if (end < 0) {
+    return false;
+  }
+  *out = line.substring(start, end);
   return true;
 }
 
@@ -58,40 +78,47 @@ void ProtocolHandler::emitAck(const char* command, bool ok) {
   Serial.flush();
 }
 
-void ProtocolHandler::emitStatus() {
-  Serial.print("{\"node_id\":");
-  Serial.print(HOTBOX_NODE_ID);
-  Serial.print(",\"type\":\"status\",\"homed\":");
-  Serial.print(mount_->isHomed() ? "true" : "false");
-  Serial.print(",\"azimuth_deg\":");
-  Serial.print(mount_->azimuthDeg(), 3);
-  Serial.print(",\"elevation_deg\":");
-  Serial.print(mount_->elevationDeg(), 3);
-  Serial.print(",\"azimuth_integral\":");
-  Serial.print(mount_->azimuthIntegralTerm(), 4);
-  Serial.print(",\"elevation_integral\":");
-  Serial.print(mount_->elevationIntegralTerm(), 4);
-  Serial.print(",\"pid_kp\":");
-  Serial.print(mount_->pidKp(), 4);
-  Serial.print(",\"pid_ki\":");
-  Serial.print(mount_->pidKi(), 4);
-  Serial.print(",\"pid_kd\":");
-  Serial.print(mount_->pidKd(), 4);
-  Serial.print(",\"mode\":\"");
-  Serial.print(mount_->modeText());
-  Serial.print("\",\"az_hall\":");
-  Serial.print(mount_->azimuthHallTriggered() ? "true" : "false");
-  Serial.print(",\"el_hall\":");
-  Serial.print(mount_->elevationHallTriggered() ? "true" : "false");
-  Serial.print(",\"fault\":");
-  if (mount_->faultText() == nullptr) {
-    Serial.print("null");
-  } else {
-    Serial.print("\"");
-    Serial.print(mount_->faultText());
-    Serial.print("\"");
+int ProtocolHandler::formatStatus(char* buf, size_t buflen) const {
+  if (buf == nullptr || buflen < 32) {
+    return -1;
   }
-  Serial.println("}");
+  const char* fault = mount_->faultText();
+  const int n = snprintf(
+      buf,
+      buflen,
+      "{\"node_id\":%d,\"type\":\"status\",\"azimuth_home\":\"%s\",\"elevation_home\":\"%s\","
+      "\"azimuth_deg\":%.3f,\"elevation_deg\":%.3f,"
+      "\"azimuth_integral\":%.4f,\"elevation_integral\":%.4f,"
+      "\"pid_kp\":%.4f,\"pid_ki\":%.4f,\"pid_kd\":%.4f,"
+      "\"mode\":\"%s\",\"az_hall\":%s,\"el_hall\":%s,\"fault\":%s%s%s}",
+      HOTBOX_NODE_ID,
+      mount_->azimuthHomeState(),
+      mount_->elevationHomeState(),
+      static_cast<double>(mount_->azimuthDeg()),
+      static_cast<double>(mount_->elevationDeg()),
+      static_cast<double>(mount_->azimuthIntegralTerm()),
+      static_cast<double>(mount_->elevationIntegralTerm()),
+      static_cast<double>(mount_->pidKp()),
+      static_cast<double>(mount_->pidKi()),
+      static_cast<double>(mount_->pidKd()),
+      mount_->modeText(),
+      mount_->azimuthHallTriggered() ? "true" : "false",
+      mount_->elevationHallTriggered() ? "true" : "false",
+      fault == nullptr ? "null" : "\"",
+      fault == nullptr ? "" : fault,
+      fault == nullptr ? "" : "\"");
+  if (n < 0 || static_cast<size_t>(n) >= buflen) {
+    return -1;
+  }
+  return n;
+}
+
+void ProtocolHandler::emitStatus() {
+  char buf[768];
+  if (formatStatus(buf, sizeof(buf)) < 0) {
+    return;
+  }
+  Serial.println(buf);
   Serial.flush();
 }
 
@@ -154,9 +181,18 @@ bool ProtocolHandler::handleBinary(const uint8_t* data, size_t len) {
 
 void ProtocolHandler::handleLine(const String& line) {
   if (hasCommand(line, "home")) {
-    mount_->home();
+    String axis = "both";
+    readStringField(line, "axis", &axis);
+    axis.toLowerCase();
+    if (axis == "az" || axis == "azimuth") {
+      mount_->homeAzimuth();
+    } else if (axis == "el" || axis == "elevation") {
+      mount_->homeElevation();
+    } else {
+      mount_->home();
+    }
     // Immediate ack = command accepted / homing started. Completion is
-    // visible via mode "homing" → "idle" and homed=true (status push + polls).
+    // visible via azimuth_home / elevation_home in status.
     emitAck("home", true);
     return;
   }

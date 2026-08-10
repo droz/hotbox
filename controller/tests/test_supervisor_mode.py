@@ -20,7 +20,14 @@ class FakeTransport(MirrorTransport):
 
     def poll_status(self, node_id: int) -> MirrorStatus:
         self.polls.append(int(node_id))
-        return MirrorStatus(node_id=node_id, homed=True, azimuth_deg=10.0, elevation_deg=20.0, mode="idle")
+        return MirrorStatus(
+            node_id=node_id,
+            azimuth_home="homed",
+            elevation_home="homed",
+            azimuth_deg=10.0,
+            elevation_deg=20.0,
+            mode="idle",
+        )
 
 
 def _app() -> tuple[ControllerApplication, FakeTransport]:
@@ -88,14 +95,21 @@ def test_heat_demand_diverts_above_absorber() -> None:
         assert divert_pose != absorber_pose
 
 
-def test_park_is_face_up_identity() -> None:
+def test_park_is_face_up_at_oven_facing() -> None:
+    from hotbox_shared import oven_facing_azimuth_deg
+
     app, transport = _app()
     transport.sent.clear()
     app.set_mode("park")
     parks = [c for c in transport.sent if c.command == CommandName.SET_TARGET]
     assert parks
-    assert all(c.payload.get("azimuth_deg") == 0.0 for c in parks)
-    assert all(c.payload.get("elevation_deg") == 0.0 for c in parks)
+    assert all(c.payload.get("elevation_deg") == 90.0 for c in parks)
+    for c in parks:
+        facing = oven_facing_azimuth_deg(
+            app._mirror_world_for_node(int(c.node_id)),
+            app.absorber_world,
+        )
+        assert abs(((float(c.payload["azimuth_deg"]) - facing + 180.0) % 360.0) - 180.0) < 1e-6
     assert "mode" not in parks[0].payload
     assert all(t["mode"] == "parked" for t in app.current_snapshot()["targets"].values())
 
@@ -160,11 +174,11 @@ def test_send_protocol_command_raw_wire() -> None:
         ProtocolCommandRequest(
             command="set_target",
             node_id=1,
-            azimuth_deg=12.5,
+            azimuth_deg=200.0,
             elevation_deg=34.0,
         )
     )
-    assert target["payload"]["azimuth_deg"] == 12.5
+    assert target["payload"]["azimuth_deg"] == 200.0
     assert target["payload"]["elevation_deg"] == 34.0
     assert "mode" not in target["payload"]
     assert transport.sent[-1].command == CommandName.SET_TARGET

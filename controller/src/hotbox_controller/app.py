@@ -84,6 +84,8 @@ class ProtocolCommandRequest(BaseModel):
     kp: float | None = None
     ki: float | None = None
     kd: float | None = None
+    # home: "both" (default) | "az" | "el" — UI Home button always sends both
+    axis: str | None = None
 
 
 # Canonical modes. ``auto`` → track, ``manual`` → jog.
@@ -236,7 +238,10 @@ class ControllerApplication:
                 mirror_world = self._mirror_world_for_node(node_id)
                 targets[node_id] = track_point(sun, mirror_world, aim, **kwargs)
             else:
-                targets[node_id] = safe_park(self.config.oven)
+                targets[node_id] = safe_park(
+                    self.config.oven,
+                    oven_facing_azimuth_deg=self._oven_facing_deg(node_id),
+                )
         return targets
 
     @staticmethod
@@ -398,15 +403,29 @@ class ControllerApplication:
             return
         if mode == "park":
             self._halt_jog_rates(node_id)
-            self._apply_targets({node_id: safe_park(self.config.oven)})
+            self._apply_targets(
+                {
+                    node_id: safe_park(
+                        self.config.oven,
+                        oven_facing_azimuth_deg=self._oven_facing_deg(node_id),
+                    )
+                }
+            )
         elif mode == "jog" and previous != "jog":
             self._seed_jog_hold(node_id)
         elif mode in {"track", "raw"}:
             self._halt_jog_rates(node_id)
 
     def _apply_park_all(self) -> None:
-        target = safe_park(self.config.oven)
-        self._apply_targets({node_id: target for node_id in self.fleet.nodes()})
+        self._apply_targets(
+            {
+                node_id: safe_park(
+                    self.config.oven,
+                    oven_facing_azimuth_deg=self._oven_facing_deg(node_id),
+                )
+                for node_id in self.fleet.nodes()
+            }
+        )
 
     def _track_aim_point(self) -> np.ndarray:
         """Absorber center when heat is demanded; otherwise the idle dump above it."""
@@ -429,14 +448,17 @@ class ControllerApplication:
         Closed-loop command for one mirror, or None when Jog/Raw (operator owns the axes).
 
         Track + heat demand → aim at absorber. Track without demand → aim above absorber.
-        Park → face-up stow (az/el from config, default 0°/0°).
+        Park → face-up stow (elevation 90°, azimuth at oven-facing).
         Raw → no automatic commands (protocol console only).
         """
         mode = self.node_mode(node_id)
         if mode in {"jog", "raw"}:
             return None
         if mode == "park":
-            return safe_park(self.config.oven)
+            return safe_park(
+                self.config.oven,
+                oven_facing_azimuth_deg=self._oven_facing_deg(node_id),
+            )
         return tracking[node_id]
 
     def _command_targets(
@@ -650,6 +672,14 @@ class ControllerApplication:
                 "ki": float(request.ki if request.ki is not None else 0.0),
                 "kd": float(request.kd if request.kd is not None else 0.0),
             }
+        elif command_name == CommandName.HOME.value:
+            axis = str(request.axis or "both").strip().lower()
+            if axis in {"az", "azimuth"}:
+                payload = {"axis": "az"}
+            elif axis in {"el", "elevation"}:
+                payload = {"axis": "el"}
+            else:
+                payload = {"axis": "both"}
 
         command = MirrorCommand(node_id=node_id, command=CommandName(command_name), payload=payload)
         if command_name == CommandName.GET_STATUS.value:

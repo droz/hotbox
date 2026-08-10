@@ -8,6 +8,16 @@ namespace hotbox {
 // firmware only servos a position, homes, idles, or faults.
 enum class AxisMode { Idle, Homing, Position, Fault };
 
+/** Homing sub-states while AxisMode::Homing. */
+enum class HomingPhase {
+  LeaveSwitch,  // started on hall — reverse until clear, then Search
+  Search,       // fast approach until first hall contact
+  Retract,      // reverse by kHomingBackoffDeg past the contact
+  Creep,        // slow approach to the near hall edge
+  CreepAcross,  // continue slowly to the far hall edge
+  SettleMid,    // move to midpoint of the two edges, then zero
+};
+
 class BrushedAxis {
  public:
   BrushedAxis(int motor_p, int motor_m, int enc_a, int enc_b, int hall_pin);
@@ -26,6 +36,8 @@ class BrushedAxis {
   /** Integral term contribution to duty command (ki * ∫error dt), before clamp. */
   float integralTerm() const { return ki_ * integral_; }
   bool isHomed() const { return homed_; }
+  /** unhomed | homing | homed | fault */
+  const char* homeStateText() const;
   bool hallTriggered() const;
   AxisMode mode() const { return mode_; }
   const char* faultText() const { return fault_text_; }
@@ -34,6 +46,9 @@ class BrushedAxis {
   void driveMotor(float command);
   void setFault(const char* text);
   void finishHoming();
+  void enterHomingPhase(HomingPhase phase);
+  /** Position PID → duty ∈ [-1,1]. When ``apply_position_deadband``, coast+freeze I near zero error. */
+  float computePositionPidDuty(float error_deg, float dt_s, bool apply_position_deadband);
 
   int motor_p_;
   int motor_m_;
@@ -48,12 +63,18 @@ class BrushedAxis {
   float command_velocity_deg_s_ = 0.0f;
   float stall_timer_s_ = 0.0f;
   float homing_phase_s_ = 0.0f;
+  /** Position at which Search hit the hall (Retract measures reverse travel from here). */
+  float homing_mark_deg_ = 0.0f;
+  /** Hall window edges captured during Creep / CreepAcross (encoder degrees). */
+  float homing_edge1_deg_ = 0.0f;
+  float homing_edge2_deg_ = 0.0f;
+  /** Midpoint of the hall window; SettleMid servos here before zeroing. */
+  float homing_mid_deg_ = 0.0f;
   bool homed_ = false;
   // Stall detect only after the encoder has moved at least once — otherwise a
   // missing encoder would immediately fault any open-loop PWM bring-up.
   bool encoder_alive_ = false;
-  // True while leaving an already-asserted hall before the seek toward home.
-  bool homing_backoff_ = false;
+  HomingPhase homing_phase_ = HomingPhase::Search;
   AxisMode mode_ = AxisMode::Idle;
   const char* fault_text_ = nullptr;
 
@@ -70,7 +91,9 @@ class MirrorMount {
   MirrorMount();
 
   void begin();
-  void home();
+  void home();  // both axes
+  void homeAzimuth();
+  void homeElevation();
   void stop();
   void setTarget(float azimuth_deg, float elevation_deg);
   void clearError();
@@ -87,6 +110,8 @@ class MirrorMount {
   float pidKi() const { return pid_ki_; }
   float pidKd() const { return pid_kd_; }
   bool isHomed() const { return azimuth_.isHomed() && elevation_.isHomed(); }
+  const char* azimuthHomeState() const { return azimuth_.homeStateText(); }
+  const char* elevationHomeState() const { return elevation_.homeStateText(); }
   bool azimuthHallTriggered() const { return azimuth_.hallTriggered(); }
   bool elevationHallTriggered() const { return elevation_.hallTriggered(); }
   const char* modeText() const { return mode_text_; }

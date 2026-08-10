@@ -100,7 +100,7 @@ class ControlConstants:
     # When true, aiming solves for mount_offset so the center facet reflects onto the
     # absorber (least squares after the bisector seed). Set false to skip (testing).
     solve_for_mount_offset: bool = True
-    # Physical joint limits. Azimuth is relative to oven-facing (0 = aim at absorber at high el).
+    # Physical joint limits. Azimuth is relative to oven-facing (0 = aim at absorber at el→0).
     elevation_min_deg: float = 0.0
     elevation_max_deg: float = 90.0
     azimuth_min_deg: float = -150.0
@@ -160,9 +160,15 @@ class ActuatorConstants:
     max_accel_deg_s2: float = 120.0
     """Maximum commanded output-shaft angular acceleration [°/s²] (firmware ramp limiter)."""
 
-    # --- Homing ---
-    homing_velocity_deg_s: float = 5.0
-    """Slow creep speed used during hall-sensor homing [°/s]."""
+    # --- Homing (two-stage: fast search → backoff → slow creep) ---
+    homing_search_velocity_deg_s: float = 5.0
+    """Fast approach speed toward first hall contact [°/s]."""
+    homing_creep_velocity_deg_s: float = 0.5
+    """Slow final approach after backoff for an accurate hall edge [°/s]."""
+    homing_backoff_deg: float = 1.0
+    """How far to reverse past the hall after the first contact before creep [°]."""
+    homing_settle_tol_deg: float = 0.05
+    """Absolute error [°] to the hall-window midpoint before zeroing the encoder."""
 
     # --- PID (position loop, output shaft degrees → duty ∈ [-1, 1]) ---
     pid_kp: float = 1.2

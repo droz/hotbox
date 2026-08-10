@@ -23,7 +23,7 @@ class OvenConfig:
     absorber_width_m: float = 0.40
     absorber_panel_height_m: float = 0.40
     # Face-up stow at mount identity (mirror horizontal, normal toward zenith).
-    safe_park_elevation_deg: float = 0.0
+    safe_park_elevation_deg: float = 90.0
     safe_park_azimuth_deg: float = 0.0
     # No-heat divert: aim this far above the absorber center along world +Z.
     idle_aim_height_above_absorber_m: float = 2.0

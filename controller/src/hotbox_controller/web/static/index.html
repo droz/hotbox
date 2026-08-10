@@ -795,8 +795,8 @@
       }
 
       const MODE_HINTS = {
-        track: "All mirrors aim at the absorber when heat demand is on; when off they divert light above it. Park is face-up (0°, 0°).",
-        park: "All mirrors hold face-up stow (azimuth 0°, elevation 0°).",
+        track: "All mirrors aim at the absorber when heat demand is on; when off they divert light above it. Park is face-up (el 90°).",
+        park: "All mirrors hold face-up stow (elevation 90°, azimuth at oven-facing).",
         jog: "Operator control on every mirror. Use each pad, then switch back to Track or Park.",
         raw: "Protocol-only: no automatic get_status / set_target. Send wire commands from each mirror’s Protocol section.",
         mixed: "Mirrors are in different modes. Use All mirrors or a card switcher to unify them.",
@@ -921,6 +921,10 @@
           result.textContent = "Set Kp/Ki/Kd (both axes), then Send.";
           result.classList.add("empty");
           result.classList.remove("error");
+        } else if (command === "home") {
+          result.textContent = "Pick axis (or both), then Send.";
+          result.classList.add("empty");
+          result.classList.remove("error");
         } else {
           result.textContent = "No arguments — Send to run.";
           result.classList.add("empty");
@@ -932,7 +936,8 @@
         if (command === "get_status" && response?.mirror_status) {
           const s = response.mirror_status;
           return [
-            `homed: ${s.homed}`,
+            `az home: ${s.azimuth_home ?? (s.homed ? "homed" : "unhomed")}`,
+            `el home: ${s.elevation_home ?? (s.homed ? "homed" : "unhomed")}`,
             `mode: ${s.mode}`,
             `az: ${Number(s.azimuth_deg).toFixed(3)}°`,
             `el: ${Number(s.elevation_deg).toFixed(3)}°`,
@@ -941,6 +946,9 @@
             `pid: kp=${s.pid_kp ?? "—"} ki=${s.pid_ki ?? "—"} kd=${s.pid_kd ?? "—"}`,
             `fault: ${s.fault ?? "none"}`,
           ].join("\n");
+        }
+        if (command === "home" && response?.payload) {
+          return `ok → home axis=${response.payload.axis || "both"}`;
         }
         if (command === "set_target" && response?.payload) {
           return `ok → az ${Number(response.payload.azimuth_deg).toFixed(3)}° / el ${Number(response.payload.elevation_deg).toFixed(3)}°`;
@@ -1000,6 +1008,9 @@
           body.azimuth_deg = Number(card.querySelector('[data-field="proto-az"]').value);
           body.elevation_deg = Number(card.querySelector('[data-field="proto-el"]').value);
         }
+        if (command === "home") {
+          body.axis = card.querySelector('[data-field="proto-home-axis"]').value;
+        }
         if (command === "set_pid") {
           body.kp = Number(card.querySelector('[data-field="proto-kp"]').value);
           body.ki = Number(card.querySelector('[data-field="proto-ki"]').value);
@@ -1019,6 +1030,7 @@
         card.dataset.protocolBound = "1";
         const commandSelect = card.querySelector('[data-field="proto-command"]');
         commandSelect.addEventListener("change", () => updateProtocolFields(card));
+        updateProtocolFields(card);
         card.querySelector('[data-field="proto-send"]').addEventListener("click", () => {
           sendProtocolCommand(card, nodeId).catch((err) => {
             card.dataset.protoLastCommand = card.querySelector('[data-field="proto-command"]').value;
@@ -1265,6 +1277,7 @@
           </div>
           <div class="mirror-stats" data-field="mirror-stats">
             <span class="stat">fw <strong data-field="fw-mode">…</strong></span>
+            <span class="stat">home <strong data-field="home-state">…</strong></span>
             <span class="stat">az <strong data-field="az">…</strong></span>
             <span class="stat">el <strong data-field="el">…</strong></span>
             <span class="stat">miss <strong data-field="miss">…</strong></span>
@@ -1311,6 +1324,14 @@
                     <option value="get_status">get_status</option>
                     <option value="clear_error">clear_error</option>
                     <option value="reset">reset</option>
+                  </select>
+                </div>
+                <div class="protocol-row proto-field" data-fields="home">
+                  <label>Axis</label>
+                  <select data-field="proto-home-axis">
+                    <option value="both">both</option>
+                    <option value="az">azimuth</option>
+                    <option value="el">elevation</option>
                   </select>
                 </div>
                 <div class="protocol-row proto-field" data-fields="set_target" hidden>
@@ -1402,24 +1423,28 @@
           const statusPill = card.querySelector('[data-field="status-pill"]');
           const demandNote = !state.heat_demand && mirrorMode === "track" ? " (divert)" : "";
           const fwMode = formatFwMode(status);
+          const azHome = status.azimuth_home || (status.homed ? "homed" : "unhomed");
+          const elHome = status.elevation_home || (status.homed ? "homed" : "unhomed");
+          const bothHomed = status.homed === true || (azHome === "homed" && elHome === "homed");
           // Pill: prefer wire/firmware mode when it's an error/diagnostic state.
           if (status.fault) {
             statusPill.textContent = `fault · ${fwMode}`;
           } else if (fwMode === "timeout" || fwMode === "disconnected") {
             statusPill.textContent = fwMode;
-          } else if (!status.homed) {
+          } else if (!bothHomed) {
             statusPill.textContent = `not homed · ${fwMode}`;
           } else {
             statusPill.textContent = `${mirrorMode}${demandNote} · ${fwMode}`;
           }
-          statusPill.className = `pill ${pillClass(status.homed, status.fault, status.mode)}`;
+          statusPill.className = `pill ${pillClass(bothHomed, status.fault, status.mode)}`;
           const tabNote = document.querySelector(`#tab-mirror-${id} [data-field="tab-note"]`);
           if (tabNote) {
             tabNote.textContent = status.fault
               ? "fault"
-              : (fwMode === "timeout" || fwMode === "disconnected" ? fwMode : (status.homed ? mirrorMode : "home?"));
+              : (fwMode === "timeout" || fwMode === "disconnected" ? fwMode : (bothHomed ? mirrorMode : "home?"));
           }
           card.querySelector('[data-field="fw-mode"]').textContent = fwMode;
+          card.querySelector('[data-field="home-state"]').textContent = `az ${azHome} · el ${elHome}`;
           const azNow = Number(status.azimuth_deg).toFixed(3);
           const elNow = Number(status.elevation_deg).toFixed(3);
           if (target) {

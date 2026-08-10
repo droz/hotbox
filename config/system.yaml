@@ -61,16 +61,19 @@ fleet:
       mount_height_m: 1.0
 
 control:
-  # Face-up stow: mount identity (az=0, el=0) → mirror horizontal, normal toward zenith.
+  # Face-up stow: elevation 90° (zenith). Azimuth is filled per-node with oven-facing
+  # at runtime so each mount parks with relative az = 0 (center of travel).
+  # Elevation is astronomical: 0° = horizon, 90° = zenith.
+  # Azimuth is astronomical: 0° = north, 90° = east (CW from north).
   safe_park_azimuth_deg: 0.0
-  safe_park_elevation_deg: 0.0
+  safe_park_elevation_deg: 90.0
   # When the oven is not requesting heat, Track mirrors aim this far above the absorber
   # center (world +Z) instead of focusing on the absorber.
   idle_aim_height_above_absorber_m: 2.0
   # When true, solve for mount_offset_d_m via least squares after the bisector seed.
   # Set false to use the pivot-bisector seed only (useful for A/B testing).
   solve_for_mount_offset: true
-  # Physical mount travel. Azimuth is relative to oven-facing (0 = aim at absorber at high el).
+  # Physical mount travel. Azimuth is relative to oven-facing (0 = aim at absorber at el→0).
   elevation_min_deg: 0.0
   elevation_max_deg: 90.0
   azimuth_min_deg: -150.0
@@ -86,11 +89,17 @@ actuator:
   # Overall gear_ratio = motor_gear_ratio × worm_gear_ratio (derived in code)
 
   # ── Velocity limits ───────────────────────────────────────────────────────────
-  max_velocity_deg_s: 30.0    # Maximum output-shaft speed [°/s]
-  max_accel_deg_s2: 120.0     # Maximum output-shaft acceleration [°/s²] (firmware ramp limiter)
+  max_velocity_deg_s: 5.0    # Maximum output-shaft speed [°/s]
+  max_accel_deg_s2: 10.0     # Maximum output-shaft acceleration [°/s²] (firmware ramp limiter)
 
-  # ── Homing ───────────────────────────────────────────────────────────────────
-  homing_velocity_deg_s: 5.0  # Creep speed toward hall sensor during homing [°/s]
+  # ── Homing (search → retract → creep both edges → settle midpoint) ───────────
+  # Fast search → reverse by backoff_deg → slow creep across both hall edges
+  # → settle to the midpoint and zero the encoder there.
+  # Firmware ramps a position setpoint at each stage rate and tracks it with PID.
+  homing_search_velocity_deg_s: 5.0   # Fast approach to first hall contact [°/s]
+  homing_creep_velocity_deg_s: 1.0    # Slow pass across the hall window [°/s]
+  homing_backoff_deg: 5.0             # Reverse past hall after first contact [°]
+  homing_settle_tol_deg: 0.02         # |pos − midpoint| to finish and zero [°]
 
   # ── PID (duty command u ∈ [-1,1]: kp*error + ki*∫error + kd*derror/dt) ──────
   # Same gains for azimuth and elevation. Override at runtime with set_pid.
@@ -123,11 +132,11 @@ actuator:
 pins:
   can_tx: D10
   can_rx: D9
-  elevation_motor_p: A0
-  elevation_motor_m: A1
+  elevation_motor_p: A1
+  elevation_motor_m: A0
   # A/B swapped vs electrical/pinouts.txt silk (yellow/white) for correct sense.
-  elevation_enc_a: D6
-  elevation_enc_b: D5
+  elevation_enc_a: D5
+  elevation_enc_b: D6
   elevation_hall: D7
   azimuth_motor_p: A2
   azimuth_motor_m: A3

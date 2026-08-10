@@ -27,8 +27,8 @@ endif
 
 all: $(LIB)
 
-$(LIB): firmware_cil.cpp hal.cpp ../src/axis.cpp
-	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ firmware_cil.cpp hal.cpp ../src/axis.cpp
+$(LIB): firmware_cil.cpp hal.cpp ../src/axis.cpp ../src/protocol.cpp
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ firmware_cil.cpp hal.cpp ../src/axis.cpp ../src/protocol.cpp
 
 clean:
 	rm -f $(LIB) *.o

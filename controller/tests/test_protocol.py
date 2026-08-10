@@ -20,7 +20,8 @@ def test_mirror_command_can_roundtrip() -> None:
 def test_mirror_status_wire_roundtrip() -> None:
     status = MirrorStatus(
         node_id=1,
-        homed=True,
+        azimuth_home="homed",
+        elevation_home="homed",
         azimuth_deg=10.5,
         elevation_deg=20.25,
         azimuth_integral=0.1,
@@ -32,12 +33,29 @@ def test_mirror_status_wire_roundtrip() -> None:
     )
     restored = MirrorStatus.from_wire(status.to_wire().strip())
     assert restored.node_id == 1
+    assert restored.azimuth_home == "homed"
+    assert restored.elevation_home == "homed"
     assert restored.homed is True
     assert abs(restored.azimuth_deg - 10.5) < 1e-9
     assert abs(restored.azimuth_integral - 0.1) < 1e-9
     assert abs(restored.elevation_integral - (-0.2)) < 1e-9
     assert restored.pid_kp == 1.2
     assert restored.mode == "position"
+
+
+def test_mirror_status_legacy_homed_bool() -> None:
+    wire = b'{"node_id":0,"type":"status","homed":true,"mode":"idle"}\n'
+    status = MirrorStatus.from_wire(wire)
+    assert status.azimuth_home == "homed"
+    assert status.elevation_home == "homed"
+    assert status.homed is True
+
+
+def test_mirror_status_partial_home() -> None:
+    status = MirrorStatus(node_id=0, azimuth_home="homed", elevation_home="homing", mode="homing")
+    assert status.homed is False
+    assert status.as_dict()["azimuth_home"] == "homed"
+    assert status.as_dict()["elevation_home"] == "homing"
 
 
 def test_set_pid_can_roundtrip() -> None:

@@ -84,10 +84,11 @@ def track_absorber(
     )
 
 
-def safe_park(config: OvenConfig) -> TrackingTarget:
-    """Face-up stow: mount (az, el) from config — default identity (0°, 0°)."""
+def safe_park(config: OvenConfig, *, oven_facing_azimuth_deg: float | None = None) -> TrackingTarget:
+    """Face-up stow at elevation 90°. Use oven-facing az when provided (joints centered)."""
+    az = float(config.safe_park_azimuth_deg if oven_facing_azimuth_deg is None else oven_facing_azimuth_deg)
     return TrackingTarget(
-        azimuth_deg=config.safe_park_azimuth_deg,
+        azimuth_deg=az,
         elevation_deg=config.safe_park_elevation_deg,
         mode="parked",
     )

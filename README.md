@@ -8,8 +8,9 @@ The oven body keeps its original controller panel, but the heating element relay
 
 Each mirror is a faceted spherical mirror mounted on an alt-azimuth mount:
 
-- azimuth rotates first around the world `Z` axis
-- elevation rotates second around the mirror `X` axis
+- angles use the astronomical convention: elevation `0°` = horizon / `90°` = zenith;
+  azimuth `0°` = north, `90°` = east (clockwise from north)
+- body → world rotation is `R_z(−az) @ R_x(el − 90°)` (identity / face-up at `(0, 90)`)
 - each mirror has a local mount frame `Fm`
 - the oven absorber center `O` is the origin of the world frame `Fw`
 

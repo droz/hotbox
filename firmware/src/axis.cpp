@@ -1,6 +1,8 @@
 #include "axis.h"
 
 #include <ESP32Encoder.h>
+#include <cmath>
+#include <cstdio>
 #include <cstring>
 
 namespace hotbox {
@@ -44,9 +46,10 @@ float limited_azimuth_error_deg(float target_deg, float position_deg) {
   return target_rel - position_rel;
 }
 
-constexpr float kHomingPwm = 0.15f;
-constexpr float kHomingBackoffTimeoutS = 8.0f;
+constexpr float kHomingLeaveTimeoutS = 8.0f;
 constexpr float kHomingSeekTimeoutS = 30.0f;
+constexpr float kHomingRetractTimeoutS = 8.0f;
+constexpr float kHomingSettleTimeoutS = 8.0f;
 
 }  // namespace
 
@@ -82,30 +85,56 @@ void BrushedAxis::begin() {
 // Hall sensors are active-low open-collector (pulled up; magnet → LOW).
 bool BrushedAxis::hallTriggered() const { return digitalRead(hall_pin_) == LOW; }
 
+const char* BrushedAxis::homeStateText() const {
+  if (mode_ == AxisMode::Fault) {
+    return "fault";
+  }
+  if (mode_ == AxisMode::Homing) {
+    return "homing";
+  }
+  if (homed_) {
+    return "homed";
+  }
+  return "unhomed";
+}
+
+void BrushedAxis::enterHomingPhase(HomingPhase phase) {
+  homing_phase_ = phase;
+  homing_phase_s_ = 0.0f;
+  target_deg_ = position_deg_;
+  command_velocity_deg_s_ = 0.0f;
+  resetPidState();
+  driveMotor(0.0f);
+}
+
 void BrushedAxis::startHoming() {
   homed_ = false;
   mode_ = AxisMode::Homing;
-  homing_phase_s_ = 0.0f;
-  // If already on the switch (or the pin is stuck low), back off first so we
-  // don't "succeed" instantly with motors never driven.
-  homing_backoff_ = hallTriggered();
-  resetPidState();
   clearFault();
+  // If already on the switch (or the pin is stuck low), leave it first so we
+  // don't "succeed" instantly / skip the accuracy creep.
+  enterHomingPhase(hallTriggered() ? HomingPhase::LeaveSwitch : HomingPhase::Search);
 }
 
 void BrushedAxis::finishHoming() {
-  if (enc_a_ == kHorizEncA) {
-    g_az_encoder.setCount(0);
+  // Astronomical joint frame: azimuth home = 0° (north at el=0; body twist 0 at
+  // zenith), elevation home = 90° (face-up / zenith). Hall zero is that pose.
+  const bool is_azimuth = (enc_a_ == kHorizEncA);
+  const float home_deg = is_azimuth ? 0.0f : 90.0f;
+  const long home_ticks = lroundf(home_deg * kTicksPerDegree);
+  if (is_azimuth) {
+    g_az_encoder.setCount(home_ticks);
   } else {
-    g_el_encoder.setCount(0);
+    g_el_encoder.setCount(home_ticks);
   }
-  encoder_ticks_ = 0;
-  last_encoder_ticks_ = 0;
-  position_deg_ = 0.0f;
+  encoder_ticks_ = home_ticks;
+  last_encoder_ticks_ = home_ticks;
+  position_deg_ = home_deg;
   velocity_deg_s_ = 0.0f;
+  target_deg_ = home_deg;
   homed_ = true;
   mode_ = AxisMode::Idle;
-  homing_backoff_ = false;
+  homing_phase_ = HomingPhase::Search;
   resetPidState();
   driveMotor(0.0f);
 }
@@ -119,7 +148,7 @@ void BrushedAxis::setTargetDeg(float target_deg) {
 void BrushedAxis::stop() {
   mode_ = AxisMode::Idle;
   command_velocity_deg_s_ = 0.0f;
-  homing_backoff_ = false;
+  homing_phase_ = HomingPhase::Search;
   resetPidState();
   driveMotor(0.0f);
 }
@@ -144,7 +173,7 @@ void BrushedAxis::resetPidState() {
 void BrushedAxis::setFault(const char* text) {
   fault_text_ = text;
   mode_ = AxisMode::Fault;
-  homing_backoff_ = false;
+  homing_phase_ = HomingPhase::Search;
   resetPidState();
   driveMotor(0.0f);
 }
@@ -167,6 +196,31 @@ void BrushedAxis::driveMotor(float command) {
   }
 }
 
+float BrushedAxis::computePositionPidDuty(float error_deg, float dt_s, bool apply_position_deadband) {
+  if (apply_position_deadband && kPositionDeadbandDeg > 0.0f &&
+      fabs(error_deg) < kPositionDeadbandDeg) {
+    // Coast near target; freeze I (don't clear) so small re-entries aren't jittery.
+    last_error_deg_ = error_deg;
+    pid_has_last_error_ = false;
+    return 0.0f;
+  }
+
+  float d_error = 0.0f;
+  if (pid_has_last_error_ && dt_s > 1e-6f) {
+    d_error = (error_deg - last_error_deg_) / dt_s;
+  }
+  last_error_deg_ = error_deg;
+  pid_has_last_error_ = true;
+
+  float u = kp_ * error_deg + ki_ * integral_ + kd_ * d_error;
+  const bool saturated = u > 1.0f || u < -1.0f;
+  if (!saturated || (error_deg * integral_ <= 0.0f)) {
+    integral_ += error_deg * dt_s;
+  }
+  u = kp_ * error_deg + ki_ * integral_ + kd_ * d_error;
+  return clampf(u, -1.0f, 1.0f);
+}
+
 void BrushedAxis::update(float dt_s) {
   if (enc_a_ == kHorizEncA) {
     encoder_ticks_ = g_az_encoder.getCount();
@@ -177,41 +231,111 @@ void BrushedAxis::update(float dt_s) {
   const long delta_ticks = encoder_ticks_ - last_encoder_ticks_;
   last_encoder_ticks_ = encoder_ticks_;
   position_deg_ = static_cast<float>(encoder_ticks_) / kTicksPerDegree;
-  velocity_deg_s_ = static_cast<float>(delta_ticks) / kTicksPerDegree / dt_s;
+  velocity_deg_s_ = (dt_s > 1e-6f) ? static_cast<float>(delta_ticks) / kTicksPerDegree / dt_s : 0.0f;
   if (delta_ticks != 0) {
     encoder_alive_ = true;
   }
 
   if (mode_ == AxisMode::Homing) {
     homing_phase_s_ += dt_s;
-    if (homing_backoff_) {
-      // Leave the hall switch (or a stuck-low pin) before searching for home.
-      if (!hallTriggered()) {
-        homing_backoff_ = false;
-        homing_phase_s_ = 0.0f;
-        driveMotor(0.0f);
+
+    switch (homing_phase_) {
+      case HomingPhase::LeaveSwitch:
+        // Leave an already-asserted hall before the fast search.
+        if (!hallTriggered()) {
+          enterHomingPhase(HomingPhase::Search);
+          return;
+        }
+        if (homing_phase_s_ > kHomingLeaveTimeoutS) {
+          setFault("hall_stuck");
+          return;
+        }
+        command_velocity_deg_s_ = kHomingSearchVelocityDegS;
+        break;
+
+      case HomingPhase::Search:
+        if (hallTriggered()) {
+          homing_mark_deg_ = position_deg_;
+          enterHomingPhase(HomingPhase::Retract);
+          return;
+        }
+        if (homing_phase_s_ > kHomingSeekTimeoutS) {
+          setFault("hall_not_found");
+          return;
+        }
+        command_velocity_deg_s_ = -kHomingSearchVelocityDegS;
+        break;
+
+      case HomingPhase::Retract:
+        // Reverse past the first contact by at least backoff_deg and off the hall.
+        if ((position_deg_ - homing_mark_deg_) >= kHomingBackoffDeg && !hallTriggered()) {
+          enterHomingPhase(HomingPhase::Creep);
+          return;
+        }
+        if (homing_phase_s_ > kHomingRetractTimeoutS) {
+          setFault(hallTriggered() ? "hall_stuck" : "hall_not_found");
+          return;
+        }
+        command_velocity_deg_s_ = kHomingSearchVelocityDegS;
+        break;
+
+      case HomingPhase::Creep:
+        // Near edge (rising into the magnet while seeking negative).
+        if (hallTriggered()) {
+          homing_edge1_deg_ = position_deg_;
+          enterHomingPhase(HomingPhase::CreepAcross);
+          return;
+        }
+        if (homing_phase_s_ > kHomingSeekTimeoutS) {
+          setFault("hall_not_found");
+          return;
+        }
+        command_velocity_deg_s_ = -kHomingCreepVelocityDegS;
+        break;
+
+      case HomingPhase::CreepAcross:
+        // Far edge: after latching the near edge, reverse slowly across the
+        // magnet window to capture the opposite edge.
+        if (!hallTriggered()) {
+          homing_edge2_deg_ = position_deg_;
+          homing_mid_deg_ = 0.5f * (homing_edge1_deg_ + homing_edge2_deg_);
+          enterHomingPhase(HomingPhase::SettleMid);
+          target_deg_ = homing_mid_deg_;
+          return;
+        }
+        if (homing_phase_s_ > kHomingSeekTimeoutS) {
+          setFault("hall_not_found");
+          return;
+        }
+        command_velocity_deg_s_ = kHomingCreepVelocityDegS;
+        break;
+
+      case HomingPhase::SettleMid: {
+        // Servo to the window midpoint, then zero the encoder there.
+        const float error_deg = homing_mid_deg_ - position_deg_;
+        if (fabs(error_deg) <= kHomingSettleTolDeg) {
+          finishHoming();
+          return;
+        }
+        if (homing_phase_s_ > kHomingSettleTimeoutS) {
+          setFault("home_settle_timeout");
+          return;
+        }
+        target_deg_ = homing_mid_deg_;
+        const float pwm_command =
+            computePositionPidDuty(error_deg, dt_s, /*apply_position_deadband=*/false);
+        driveMotor(pwm_command);
+        command_velocity_deg_s_ = 0.0f;
         return;
       }
-      if (homing_phase_s_ > kHomingBackoffTimeoutS) {
-        setFault("hall_stuck");
-        return;
-      }
-      command_velocity_deg_s_ = -kHomingVelocityDegS;
-      driveMotor(-kHomingPwm);
-      return;
     }
 
-    // Seek toward the hall edge.
-    if (hallTriggered()) {
-      finishHoming();
-      return;
-    }
-    if (homing_phase_s_ > kHomingSeekTimeoutS) {
-      setFault("hall_not_found");
-      return;
-    }
-    command_velocity_deg_s_ = kHomingVelocityDegS;
-    driveMotor(kHomingPwm);
+    // Constant-velocity stages: ramp a position setpoint and track it with the
+    // shared position PID (no position-deadband coast — that would stall the creep).
+    target_deg_ += command_velocity_deg_s_ * dt_s;
+    const float error_deg = target_deg_ - position_deg_;
+    const float pwm_command = computePositionPidDuty(error_deg, dt_s, /*apply_position_deadband=*/false);
+    driveMotor(pwm_command);
     return;
   }
 
@@ -225,34 +349,7 @@ void BrushedAxis::update(float dt_s) {
     if (enc_a_ == kHorizEncA) {
       error_deg = limited_azimuth_error_deg(target_deg_, position_deg_);
     }
-
-    // Close enough: fully coast. Freeze I (don't clear) so small re-entries
-    // don't have to re-wind the integrator from zero (that felt jittery).
-    // Reset D history only so de/dt isn't a spike when leaving the band.
-    if (kPositionDeadbandDeg > 0.0f && fabs(error_deg) < kPositionDeadbandDeg) {
-      last_error_deg_ = error_deg;
-      pid_has_last_error_ = false;
-      driveMotor(0.0f);
-      command_velocity_deg_s_ = 0.0f;
-      stall_timer_s_ = 0.0f;
-      return;
-    }
-
-    float d_error = 0.0f;
-    if (pid_has_last_error_ && dt_s > 1e-6f) {
-      d_error = (error_deg - last_error_deg_) / dt_s;
-    }
-    last_error_deg_ = error_deg;
-    pid_has_last_error_ = true;
-
-    // Duty fraction u ∈ [-1, 1]: kp*e + ki*∫e + kd*de/dt with integrator anti-windup.
-    float u = kp_ * error_deg + ki_ * integral_ + kd_ * d_error;
-    const bool saturated = u > 1.0f || u < -1.0f;
-    if (!saturated || (error_deg * integral_ <= 0.0f)) {
-      integral_ += error_deg * dt_s;
-    }
-    u = kp_ * error_deg + ki_ * integral_ + kd_ * d_error;
-    const float pwm_command = clampf(u, -1.0f, 1.0f);
+    const float pwm_command = computePositionPidDuty(error_deg, dt_s, /*apply_position_deadband=*/true);
     driveMotor(pwm_command);
     command_velocity_deg_s_ = pwm_command * kMaxVelocityDegS;
     if (kStallTimeoutS > 0.0f) {
@@ -290,12 +387,22 @@ void MirrorMount::applyPidGains() {
 }
 
 void MirrorMount::home() {
+  homeAzimuth();
+  homeElevation();
+}
+
+void MirrorMount::homeAzimuth() {
   azimuth_.startHoming();
+  refreshModeText();
+  Serial.print("{\"hotbox\":\"home_start\",\"axis\":\"az\",\"az_hall\":");
+  Serial.print(azimuth_.hallTriggered() ? "true" : "false");
+  Serial.println("}");
+}
+
+void MirrorMount::homeElevation() {
   elevation_.startHoming();
   refreshModeText();
-  Serial.print("{\"hotbox\":\"home_start\",\"az_hall\":");
-  Serial.print(azimuth_.hallTriggered() ? "true" : "false");
-  Serial.print(",\"el_hall\":");
+  Serial.print("{\"hotbox\":\"home_start\",\"axis\":\"el\",\"el_hall\":");
   Serial.print(elevation_.hallTriggered() ? "true" : "false");
   Serial.println("}");
 }
@@ -363,9 +470,21 @@ void MirrorMount::refreshModeText() {
 }
 
 const char* MirrorMount::faultText() const {
-  if (azimuth_.faultText() != nullptr) return azimuth_.faultText();
-  if (elevation_.faultText() != nullptr) return elevation_.faultText();
-  return nullptr;
+  const char* az = azimuth_.faultText();
+  const char* el = elevation_.faultText();
+  if (az == nullptr && el == nullptr) {
+    return nullptr;
+  }
+  // Single-threaded; emitStatus/CAN readers copy before the next update.
+  static char buf[80];
+  if (az != nullptr && el != nullptr) {
+    snprintf(buf, sizeof(buf), "az:%s;el:%s", az, el);
+  } else if (az != nullptr) {
+    snprintf(buf, sizeof(buf), "az:%s", az);
+  } else {
+    snprintf(buf, sizeof(buf), "el:%s", el);
+  }
+  return buf;
 }
 
 }  // namespace hotbox

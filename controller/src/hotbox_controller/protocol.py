@@ -101,7 +101,8 @@ class MirrorCommand:
 @dataclass(slots=True)
 class MirrorStatus:
     node_id: int
-    homed: bool = False
+    azimuth_home: str = "unhomed"  # unhomed | homing | homed | fault
+    elevation_home: str = "unhomed"
     fault: str | None = None
     azimuth_deg: float = 0.0
     elevation_deg: float = 0.0
@@ -112,9 +113,15 @@ class MirrorStatus:
     pid_kd: float | None = None
     mode: str = "idle"
 
+    @property
+    def homed(self) -> bool:
+        return self.azimuth_home == "homed" and self.elevation_home == "homed"
+
     def as_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {
             "node_id": self.node_id,
+            "azimuth_home": self.azimuth_home,
+            "elevation_home": self.elevation_home,
             "homed": self.homed,
             "fault": self.fault,
             "azimuth_deg": self.azimuth_deg,
@@ -139,9 +146,17 @@ class MirrorStatus:
         raw = json.loads(data.decode("utf-8"))
         if raw.get("type") not in (None, "status"):
             raise ValueError(f"unexpected response type: {raw.get('type')}")
+        # Backward compat: old firmware sent Boolean ``homed`` only.
+        az_home = raw.get("azimuth_home")
+        el_home = raw.get("elevation_home")
+        if az_home is None or el_home is None:
+            both = "homed" if bool(raw.get("homed", False)) else "unhomed"
+            az_home = both if az_home is None else az_home
+            el_home = both if el_home is None else el_home
         return cls(
             node_id=int(raw["node_id"]),
-            homed=bool(raw.get("homed", False)),
+            azimuth_home=str(az_home),
+            elevation_home=str(el_home),
             fault=raw.get("fault"),
             azimuth_deg=float(raw.get("azimuth_deg", 0.0)),
             elevation_deg=float(raw.get("elevation_deg", 0.0)),
@@ -170,9 +185,11 @@ class MirrorStatus:
         if len(data) < 8:
             raise ValueError("status CAN frame too short")
         _, homed, az, el, mode_id = struct.unpack("<BBhhB", data[:8])
+        home = "homed" if homed else "unhomed"
         return cls(
             node_id=node_id,
-            homed=bool(homed),
+            azimuth_home=home,
+            elevation_home=home,
             azimuth_deg=az / 100.0,
             elevation_deg=el / 100.0,
             mode=FIRMWARE_MODE_NAMES.get(mode_id, "idle"),

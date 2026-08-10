@@ -38,7 +38,14 @@ def test_build_target_scene_uses_commanded_targets_not_live_status() -> None:
     assert scene_a["mirrors"][0]["azimuth_deg"] == scene_b["mirrors"][0]["azimuth_deg"]
 
     # Wildly different live status must not move the target overlay.
-    jitter_status = MirrorStatus(node_id=0, homed=True, azimuth_deg=17.0, elevation_deg=83.0, mode="tracking")
+    jitter_status = MirrorStatus(
+        node_id=0,
+        azimuth_home="homed",
+        elevation_home="homed",
+        azimuth_deg=17.0,
+        elevation_deg=83.0,
+        mode="tracking",
+    )
     _ = jitter_status
     scene_jitter = build_target_scene(
         sun=sun,
@@ -56,10 +63,12 @@ def test_build_target_scene_includes_rays() -> None:
         elevation_deg=45.0,
         world_vector=np.array([0.0, -np.sqrt(0.5), np.sqrt(0.5)], dtype=float),
     )
-    target = TrackingTarget(azimuth_deg=30.0, elevation_deg=20.0, mode="tracking")
+    mount = np.array([0.0, 2.5, 1.0], dtype=float)
+    absorber = np.array([0.0, 0.0, 1.0], dtype=float)
+    target = track_absorber(sun, mount, absorber)
     scene = build_target_scene(
         sun=sun,
-        absorber_world=np.array([0.0, 0.0, 1.0]),
+        absorber_world=absorber,
         targets={0: target},
         calibrations={},
         absorber_height_m=1.0,

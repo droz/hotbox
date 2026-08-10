@@ -2,7 +2,7 @@
 Frames (all right-handed, lengths in meters):
 
 - **World** ``W``: ENU fixed to the site — +x east, +y north, +z up.
-- **Assembly / mount body** ``B``: rigid with the mirror. At ``(azimuth_deg, elevation_deg) = (0, 0)``,
+- **Assembly / mount body** ``B``: rigid with the mirror. At ``(azimuth_deg, elevation_deg) = (0, 90)``,
   ``B`` is aligned with ``W`` (same basis vectors). The mount pivot is ``mount_world`` in ``W``.
 - **Facet data** is stored in ``B`` at identity mount: ``_centers_local``, ``_normals_local``, … are
   assembly coordinates (flat grid in ``xy``, ``z = 0``; normals from design).

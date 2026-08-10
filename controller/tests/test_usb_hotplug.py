@@ -116,7 +116,7 @@ def test_usb_reconnect_after_disconnect(monkeypatch: pytest.MonkeyPatch) -> None
     transport._RECONNECT_COOLDOWN_S = 0.0
     transport._known_nodes.add(0)
 
-    status_line = MirrorStatus(node_id=0, mode="idle", homed=True).to_wire()
+    status_line = MirrorStatus(node_id=0, mode="idle", azimuth_home="homed", elevation_home="homed").to_wire()
     new_port = MagicMock()
     new_port.readline.side_effect = [status_line, b""]
 

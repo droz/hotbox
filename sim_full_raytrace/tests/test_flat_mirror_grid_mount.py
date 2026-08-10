@@ -52,34 +52,39 @@ class TestMountAzElAlignBodyNormalToWorld(unittest.TestCase):
 
 
 class TestGridMountRotationMatrix(unittest.TestCase):
-    def test_identity_at_zero(self) -> None:
-        r = grid_mount_rotation_matrix(0.0, 0.0)
+    def test_identity_at_face_up(self) -> None:
+        r = grid_mount_rotation_matrix(0.0, 90.0)
         np.testing.assert_allclose(r, np.eye(3), atol=1e-14)
 
     def test_matches_manual_rz_rx_product(self) -> None:
         for az in (0.0, 17.0, -40.0, 350.0):
             for el in (0.0, 12.5, 45.0, 90.0):
                 got = grid_mount_rotation_matrix(az, el)
-                want = _R_z(az) @ _R_x(el)
+                want = _R_z(-az) @ _R_x(el - 90.0)
                 np.testing.assert_allclose(got, want, atol=1e-12, err_msg=f"az={az} el={el}")
 
-    def test_elevation_tips_north_normal_to_zenith(self) -> None:
-        ey = np.array([0.0, 1.0, 0.0])
-        n = grid_mount_rotation_matrix(0.0, 90.0) @ ey
-        np.testing.assert_allclose(n, np.array([0.0, 0.0, 1.0]), atol=1e-12)
+    def test_horizon_az_matches_astronomical_compass(self) -> None:
+        ez = np.array([0.0, 0.0, 1.0])
+        cases = {
+            0.0: np.array([0.0, 1.0, 0.0]),
+            90.0: np.array([1.0, 0.0, 0.0]),
+            180.0: np.array([0.0, -1.0, 0.0]),
+            270.0: np.array([-1.0, 0.0, 0.0]),
+        }
+        for az, want in cases.items():
+            n = grid_mount_rotation_matrix(az, 0.0) @ ez
+            np.testing.assert_allclose(n, want, atol=1e-12, err_msg=f"az={az}")
 
-    def test_azimuth_at_zero_elevation_rotates_north_normal_in_xy(self) -> None:
-        ey = np.array([0.0, 1.0, 0.0])
-        for az in (30.0, 90.0, 180.0):
-            n = grid_mount_rotation_matrix(az, 0.0) @ ey
-            self.assertAlmostEqual(float(n[2]), 0.0, places=12)
-            self.assertAlmostEqual(float(np.linalg.norm(n[:2])), 1.0, places=12)
+    def test_zenith_is_face_up(self) -> None:
+        ez = np.array([0.0, 0.0, 1.0])
+        n = grid_mount_rotation_matrix(0.0, 90.0) @ ez
+        np.testing.assert_allclose(n, ez, atol=1e-12)
 
     def test_composition_order_is_rx_then_rz_on_body_vectors(self) -> None:
         v = np.array([0.0, 0.0, 1.0], dtype=float)
         az, el = 40.0, 25.0
-        step1 = _R_x(el) @ v
-        step2 = _R_z(az) @ step1
+        step1 = _R_x(el - 90.0) @ v
+        step2 = _R_z(-az) @ step1
         full = grid_mount_rotation_matrix(az, el) @ v
         np.testing.assert_allclose(full, step2, atol=1e-12)
 
@@ -87,7 +92,7 @@ class TestGridMountRotationMatrix(unittest.TestCase):
         v = np.array([1.0, 1.0, 0.3], dtype=float)
         v /= np.linalg.norm(v)
         az, el = 35.0, 20.0
-        wrong = _R_x(el) @ _R_z(az) @ v
+        wrong = _R_x(el - 90.0) @ _R_z(-az) @ v
         right = grid_mount_rotation_matrix(az, el) @ v
         self.assertGreater(np.linalg.norm(wrong - right), 0.05)
 
@@ -121,10 +126,10 @@ class TestAltAzFlatMirrorGridSphericalLayout(unittest.TestCase):
         for c in g._centers_local:
             self.assertAlmostEqual(float(np.dot(c, n_pi)), 0.0, places=10)
 
-    def test_world_positions_at_zero_mount(self) -> None:
+    def test_world_positions_at_face_up_mount(self) -> None:
         g = self._make_grid()
         g.azimuth_deg = 0.0
-        g.elevation_deg = 0.0
+        g.elevation_deg = 90.0
         c_w, _, _, _ = g._world_facets()
         m = g.mount_world.reshape(3)
         np.testing.assert_allclose(c_w, m.reshape(1, 3) + g._centers_local, atol=1e-12)
@@ -160,7 +165,7 @@ class TestFacetGridIncomingBundle(unittest.TestCase):
             sphere_center_offset_m=4.0,
         )
         g.azimuth_deg = 0.0
-        g.elevation_deg = 0.0
+        g.elevation_deg = 90.0
         bundle = g.incoming_ray_bundle_facet_grid(when, samples_u=21, samples_v=21)
         d = normalize(g.sun.ray_direction(when).reshape(1, 3))[0]
         c_w, n_w, _, _ = g._world_facets()
@@ -194,7 +199,7 @@ class TestAssemblyFacetNormalsTowardSphere(unittest.TestCase):
 
 
 class TestWorldFacetNormalsTowardSphere(unittest.TestCase):
-    def test_world_normals_match_assembly_at_zero_mount(self) -> None:
+    def test_world_normals_match_assembly_at_face_up_mount(self) -> None:
         sun = SunModel(latitude_deg=40.7864, longitude_deg=-119.2065, altitude_m=1190.0)
         z_off = -3.0
         m = np.array([2.0, -1.5, 0.9], dtype=float)
@@ -208,7 +213,7 @@ class TestWorldFacetNormalsTowardSphere(unittest.TestCase):
             sun=sun,
         )
         g.azimuth_deg = 0.0
-        g.elevation_deg = 0.0
+        g.elevation_deg = 90.0
         o_w = m + np.array([0.0, 0.0, z_off], dtype=float)
         c_w, n_w, _, _ = g._world_facets()
         for f in range(c_w.shape[0]):
