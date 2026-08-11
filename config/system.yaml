@@ -136,14 +136,14 @@ actuator:
 pins:
   can_tx: D10
   can_rx: D9
-  elevation_motor_p: A1
-  elevation_motor_m: A0
+  elevation_motor_p: A0
+  elevation_motor_m: A1
   # A/B swapped vs electrical/pinouts.txt silk (yellow/white) for correct sense.
   elevation_enc_a: D5
   elevation_enc_b: D6
   elevation_hall: D7
-  azimuth_motor_p: A2
-  azimuth_motor_m: A3
+  azimuth_motor_p: A3
+  azimuth_motor_m: A2
   azimuth_enc_a: D3
   azimuth_enc_b: D2
   azimuth_hall: D4
