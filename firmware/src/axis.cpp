@@ -176,17 +176,12 @@ void BrushedAxis::setPidGains(float kp, float ki, float kd) {
   kp_ = kp;
   ki_ = ki;
   kd_ = kd;
-  syncVelocityGainsFromPosition();
 }
 
-void BrushedAxis::syncVelocityGainsFromPosition() {
-  // Unit-matched derivation (see computeVelocityPidDuty):
-  //   Kp_vel [duty/(deg/s)] ↔ Kd_pos
-  //   Ki_vel [duty/deg]     ↔ Kp_pos
-  //   Kd_vel unused (noise on accel)
-  kp_vel_ = kd_;
-  ki_vel_ = kp_;
-  kd_vel_ = 0.0f;
+void BrushedAxis::setVelocityPidGains(float kp, float ki, float kd) {
+  kp_vel_ = kp;
+  ki_vel_ = ki;
+  kd_vel_ = kd;
 }
 
 void BrushedAxis::resetPidState() {
@@ -436,6 +431,8 @@ void MirrorMount::begin() {
 void MirrorMount::applyPidGains() {
   azimuth_.setPidGains(pid_kp_, pid_ki_, pid_kd_);
   elevation_.setPidGains(pid_kp_, pid_ki_, pid_kd_);
+  azimuth_.setVelocityPidGains(pid_velocity_kp_, pid_velocity_ki_, pid_velocity_kd_);
+  elevation_.setVelocityPidGains(pid_velocity_kp_, pid_velocity_ki_, pid_velocity_kd_);
 }
 
 void MirrorMount::home() {
@@ -498,6 +495,13 @@ void MirrorMount::setPid(float kp, float ki, float kd) {
   pid_kp_ = kp;
   pid_ki_ = ki;
   pid_kd_ = kd;
+  applyPidGains();
+}
+
+void MirrorMount::setVelocityPid(float kp, float ki, float kd) {
+  pid_velocity_kp_ = kp;
+  pid_velocity_ki_ = ki;
+  pid_velocity_kd_ = kd;
   applyPidGains();
 }
 

@@ -68,7 +68,8 @@ class HeatDemandRequest(BaseModel):
 class ProtocolCommandRequest(BaseModel):
     """Low-level wire command for mirror controllers (bypasses supervisor helpers).
 
-    Commands: home, stop, set_target, set_velocity, get_status, clear_error, reset, set_pid, discover.
+    Commands: home, stop, set_target, set_velocity, get_status, clear_error, reset,
+    set_pid_pos, set_pid_vel, discover.
     ``discover`` rediscovers the fleet and ignores ``node_id``.
     Put the mirror in supervisor ``raw`` mode so Track/Park/Jog do not overwrite
     wire commands. Jog stick rates are a host API that streams ``set_velocity``.
@@ -83,7 +84,7 @@ class ProtocolCommandRequest(BaseModel):
     # set_velocity
     azimuth_deg_s: float | None = None
     elevation_deg_s: float | None = None
-    # set_pid (shared gains for both axes)
+    # set_pid_pos / set_pid_vel (shared gains for both axes)
     kp: float | None = None
     ki: float | None = None
     kd: float | None = None
@@ -104,7 +105,8 @@ PROTOCOL_COMMANDS = frozenset(
         CommandName.GET_STATUS.value,
         CommandName.CLEAR_ERROR.value,
         CommandName.RESET.value,
-        CommandName.SET_PID.value,
+        CommandName.SET_PID_POS.value,
+        CommandName.SET_PID_VEL.value,
         CommandName.DISCOVER.value,
     }
 )
@@ -692,7 +694,7 @@ class ControllerApplication:
                 "azimuth_deg_s": float(request.azimuth_deg_s if request.azimuth_deg_s is not None else 0.0),
                 "elevation_deg_s": float(request.elevation_deg_s if request.elevation_deg_s is not None else 0.0),
             }
-        elif command_name == CommandName.SET_PID.value:
+        elif command_name in (CommandName.SET_PID_POS.value, CommandName.SET_PID_VEL.value):
             payload = {
                 "kp": float(request.kp if request.kp is not None else 0.0),
                 "ki": float(request.ki if request.ki is not None else 0.0),

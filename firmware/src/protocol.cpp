@@ -93,6 +93,7 @@ int ProtocolHandler::formatStatus(char* buf, size_t buflen) const {
       "\"azimuth_deg\":%.3f,\"elevation_deg\":%.3f,"
       "\"azimuth_integral\":%.4f,\"elevation_integral\":%.4f,"
       "\"pid_kp\":%.4f,\"pid_ki\":%.4f,\"pid_kd\":%.4f,"
+      "\"pid_velocity_kp\":%.4f,\"pid_velocity_ki\":%.4f,\"pid_velocity_kd\":%.4f,"
       "\"mode\":\"%s\",\"az_hall\":%s,\"el_hall\":%s,\"fault\":%s%s%s}",
       HOTBOX_NODE_ID,
       mount_->azimuthHomeState(),
@@ -104,6 +105,9 @@ int ProtocolHandler::formatStatus(char* buf, size_t buflen) const {
       static_cast<double>(mount_->pidKp()),
       static_cast<double>(mount_->pidKi()),
       static_cast<double>(mount_->pidKd()),
+      static_cast<double>(mount_->pidVelocityKp()),
+      static_cast<double>(mount_->pidVelocityKi()),
+      static_cast<double>(mount_->pidVelocityKd()),
       mount_->modeText(),
       mount_->azimuthHallTriggered() ? "true" : "false",
       mount_->elevationHallTriggered() ? "true" : "false",
@@ -174,8 +178,8 @@ bool ProtocolHandler::handleBinary(const uint8_t* data, size_t len) {
       mount_->setVelocity(az_c / 100.0f, el_c / 100.0f);
       return false;
     }
-    case kCanCmdSetPid: {
-      // kp,ki,kd as int16 milli-units (value * 1000).
+    case kCanCmdSetPidPos: {
+      // Position kp,ki,kd as int16 milli-units (value * 1000).
       if (len < 7) {
         return false;
       }
@@ -183,6 +187,17 @@ bool ProtocolHandler::handleBinary(const uint8_t* data, size_t len) {
       const int16_t ki_m = static_cast<int16_t>(data[3] | (data[4] << 8));
       const int16_t kd_m = static_cast<int16_t>(data[5] | (data[6] << 8));
       mount_->setPid(kp_m / 1000.0f, ki_m / 1000.0f, kd_m / 1000.0f);
+      return false;
+    }
+    case kCanCmdSetPidVel: {
+      // Velocity kp,ki,kd as int16 milli-units (value * 1000).
+      if (len < 7) {
+        return false;
+      }
+      const int16_t kp_m = static_cast<int16_t>(data[1] | (data[2] << 8));
+      const int16_t ki_m = static_cast<int16_t>(data[3] | (data[4] << 8));
+      const int16_t kd_m = static_cast<int16_t>(data[5] | (data[6] << 8));
+      mount_->setVelocityPid(kp_m / 1000.0f, ki_m / 1000.0f, kd_m / 1000.0f);
       return false;
     }
     case kCanCmdGetStatus:
@@ -244,7 +259,7 @@ void ProtocolHandler::handleLine(const String& line) {
     emitAck("set_velocity", mount_->setVelocity(az, el));
     return;
   }
-  if (hasCommand(line, "set_pid")) {
+  if (hasCommand(line, "set_pid_pos")) {
     float kp = mount_->pidKp();
     float ki = mount_->pidKi();
     float kd = mount_->pidKd();
@@ -252,7 +267,18 @@ void ProtocolHandler::handleLine(const String& line) {
     readFloatField(line, "ki", &ki);
     readFloatField(line, "kd", &kd);
     mount_->setPid(kp, ki, kd);
-    emitAck("set_pid", true);
+    emitAck("set_pid_pos", true);
+    return;
+  }
+  if (hasCommand(line, "set_pid_vel")) {
+    float kp = mount_->pidVelocityKp();
+    float ki = mount_->pidVelocityKi();
+    float kd = mount_->pidVelocityKd();
+    readFloatField(line, "kp", &kp);
+    readFloatField(line, "ki", &ki);
+    readFloatField(line, "kd", &kd);
+    mount_->setVelocityPid(kp, ki, kd);
+    emitAck("set_pid_vel", true);
     return;
   }
   emitAck("unknown", false);

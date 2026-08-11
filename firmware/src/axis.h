@@ -28,6 +28,7 @@ class BrushedAxis {
   void update(float dt_s);
 
   void setPidGains(float kp, float ki, float kd);
+  void setVelocityPidGains(float kp, float ki, float kd);
   void resetPidState();
 
   float positionDeg() const { return position_deg_; }
@@ -50,16 +51,8 @@ class BrushedAxis {
   float homeAngleDeg() const;
   /** Position PID → duty ∈ [-1,1]. When ``apply_position_deadband``, coast+freeze I near zero error. */
   float computePositionPidDuty(float error_deg, float dt_s, bool apply_position_deadband);
-  /**
-   * Velocity PID → duty ∈ [-1,1].
-   *
-   * Gains are derived from the position PID by matching SI units:
-   *   kp_vel = kd_pos   [duty / (deg/s)]
-   *   ki_vel = kp_pos   [duty / deg]  (∫ velocity error dt has units deg)
-   *   kd_vel = 0
-   */
+  /** Velocity PID → duty ∈ [-1,1] using ``kp_vel_`` / ``ki_vel_`` / ``kd_vel_``. */
   float computeVelocityPidDuty(float target_velocity_deg_s, float dt_s);
-  void syncVelocityGainsFromPosition();
   /**
    * Zero any velocity that would drive further past joint limits (elevation box
    * or azimuth relative to oven-facing). Homing does not use this.
@@ -90,7 +83,7 @@ class BrushedAxis {
   AxisMode mode_ = AxisMode::Idle;
   const char* fault_text_ = nullptr;
 
-  // Position-loop gains (from config / set_pid).
+  // Position-loop gains (from config / set_pid_pos).
   float kp_ = kPidKp;
   float ki_ = kPidKi;
   float kd_ = kPidKd;
@@ -98,10 +91,10 @@ class BrushedAxis {
   float last_error_deg_ = 0.0f;
   bool pid_has_last_error_ = false;
 
-  // Velocity-loop gains (derived from position gains).
-  float kp_vel_ = kPidKd;
-  float ki_vel_ = kPidKp;
-  float kd_vel_ = 0.0f;
+  // Velocity-loop gains (from config / set_pid_vel).
+  float kp_vel_ = kPidVelocityKp;
+  float ki_vel_ = kPidVelocityKi;
+  float kd_vel_ = kPidVelocityKd;
   float vel_integral_ = 0.0f;
   float last_vel_error_ = 0.0f;
   bool vel_pid_has_last_error_ = false;
@@ -124,6 +117,7 @@ class MirrorMount {
   /** Soft reset: stop, clear faults/PID state. On device also reboots via ESP.restart(). */
   void reset();
   void setPid(float kp, float ki, float kd);
+  void setVelocityPid(float kp, float ki, float kd);
   void update(float dt_s);
 
   float azimuthDeg() const { return azimuth_.positionDeg(); }
@@ -133,6 +127,9 @@ class MirrorMount {
   float pidKp() const { return pid_kp_; }
   float pidKi() const { return pid_ki_; }
   float pidKd() const { return pid_kd_; }
+  float pidVelocityKp() const { return pid_velocity_kp_; }
+  float pidVelocityKi() const { return pid_velocity_ki_; }
+  float pidVelocityKd() const { return pid_velocity_kd_; }
   bool isHomed() const { return azimuth_.isHomed() && elevation_.isHomed(); }
   const char* azimuthHomeState() const { return azimuth_.homeStateText(); }
   const char* elevationHomeState() const { return elevation_.homeStateText(); }
@@ -150,6 +147,9 @@ class MirrorMount {
   float pid_kp_ = kPidKp;
   float pid_ki_ = kPidKi;
   float pid_kd_ = kPidKd;
+  float pid_velocity_kp_ = kPidVelocityKp;
+  float pid_velocity_ki_ = kPidVelocityKi;
+  float pid_velocity_kd_ = kPidVelocityKd;
   const char* mode_text_ = "idle";
 };
 

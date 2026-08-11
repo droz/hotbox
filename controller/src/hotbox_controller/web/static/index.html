@@ -930,8 +930,12 @@
           result.textContent = "Set az/el rates (°/s) above, then Send.";
           result.classList.add("empty");
           result.classList.remove("error");
-        } else if (command === "set_pid") {
-          result.textContent = "Set Kp/Ki/Kd (both axes), then Send.";
+        } else if (command === "set_pid_pos") {
+          result.textContent = "Set position Kp/Ki/Kd (both axes), then Send.";
+          result.classList.add("empty");
+          result.classList.remove("error");
+        } else if (command === "set_pid_vel") {
+          result.textContent = "Set velocity Kp/Ki/Kd (both axes), then Send.";
           result.classList.add("empty");
           result.classList.remove("error");
         } else if (command === "home") {
@@ -956,7 +960,8 @@
             `el: ${Number(s.elevation_deg).toFixed(3)}°`,
             `∫ az: ${Number(s.azimuth_integral ?? 0).toFixed(4)}`,
             `∫ el: ${Number(s.elevation_integral ?? 0).toFixed(4)}`,
-            `pid: kp=${s.pid_kp ?? "—"} ki=${s.pid_ki ?? "—"} kd=${s.pid_kd ?? "—"}`,
+            `pid pos: kp=${s.pid_kp ?? "—"} ki=${s.pid_ki ?? "—"} kd=${s.pid_kd ?? "—"}`,
+            `pid vel: kp=${s.pid_velocity_kp ?? "—"} ki=${s.pid_velocity_ki ?? "—"} kd=${s.pid_velocity_kd ?? "—"}`,
             `fault: ${s.fault ?? "none"}`,
           ].join("\n");
         }
@@ -969,7 +974,7 @@
         if (command === "set_velocity" && response?.payload) {
           return `ok → az ${Number(response.payload.azimuth_deg_s).toFixed(3)}°/s / el ${Number(response.payload.elevation_deg_s).toFixed(3)}°/s`;
         }
-        if (command === "set_pid" && response?.payload) {
+        if ((command === "set_pid_pos" || command === "set_pid_vel") && response?.payload) {
           return `ok → kp ${Number(response.payload.kp).toFixed(3)} / ki ${Number(response.payload.ki).toFixed(3)} / kd ${Number(response.payload.kd).toFixed(3)}`;
         }
         if (response?.status === "ok") {
@@ -1031,10 +1036,15 @@
         if (command === "home") {
           body.axis = card.querySelector('[data-field="proto-home-axis"]').value;
         }
-        if (command === "set_pid") {
+        if (command === "set_pid_pos") {
           body.kp = Number(card.querySelector('[data-field="proto-kp"]').value);
           body.ki = Number(card.querySelector('[data-field="proto-ki"]').value);
           body.kd = Number(card.querySelector('[data-field="proto-kd"]').value);
+        }
+        if (command === "set_pid_vel") {
+          body.kp = Number(card.querySelector('[data-field="proto-vkp"]').value);
+          body.ki = Number(card.querySelector('[data-field="proto-vki"]').value);
+          body.kd = Number(card.querySelector('[data-field="proto-vkd"]').value);
         }
         const response = await post("/api/protocol", body);
         const text = formatProtocolResult(command, response);
@@ -1376,7 +1386,8 @@
                     <option value="stop">stop</option>
                     <option value="set_target">set_target</option>
                     <option value="set_velocity">set_velocity</option>
-                    <option value="set_pid">set_pid</option>
+                    <option value="set_pid_pos">set_pid_pos</option>
+                    <option value="set_pid_vel">set_pid_vel</option>
                     <option value="get_status">get_status</option>
                     <option value="clear_error">clear_error</option>
                     <option value="reset">reset</option>
@@ -1406,17 +1417,29 @@
                   <label>Elevation °/s</label>
                   <input data-field="proto-el-rate" type="number" step="0.1" value="0" />
                 </div>
-                <div class="protocol-row proto-field" data-fields="set_pid" hidden>
+                <div class="protocol-row proto-field" data-fields="set_pid_pos" hidden>
                   <label>Kp</label>
                   <input data-field="proto-kp" type="number" step="0.01" value="1.2" />
                 </div>
-                <div class="protocol-row proto-field" data-fields="set_pid" hidden>
+                <div class="protocol-row proto-field" data-fields="set_pid_pos" hidden>
                   <label>Ki</label>
                   <input data-field="proto-ki" type="number" step="0.01" value="0.5" />
                 </div>
-                <div class="protocol-row proto-field" data-fields="set_pid" hidden>
+                <div class="protocol-row proto-field" data-fields="set_pid_pos" hidden>
                   <label>Kd</label>
                   <input data-field="proto-kd" type="number" step="0.01" value="0.01" />
+                </div>
+                <div class="protocol-row proto-field" data-fields="set_pid_vel" hidden>
+                  <label>Kp</label>
+                  <input data-field="proto-vkp" type="number" step="0.01" value="1.0" />
+                </div>
+                <div class="protocol-row proto-field" data-fields="set_pid_vel" hidden>
+                  <label>Ki</label>
+                  <input data-field="proto-vki" type="number" step="0.01" value="0" />
+                </div>
+                <div class="protocol-row proto-field" data-fields="set_pid_vel" hidden>
+                  <label>Kd</label>
+                  <input data-field="proto-vkd" type="number" step="0.01" value="0" />
                 </div>
                 <div class="protocol-actions">
                   <button type="button" class="tiny" data-field="proto-send">Send</button>
@@ -1531,7 +1554,7 @@
           const elI = Number(status.elevation_integral ?? 0);
           card.querySelector('[data-field="integral"]').textContent =
             `az ${azI.toFixed(3)} · el ${elI.toFixed(3)}`;
-          // Prefill Kp/Ki/Kd once from firmware status — never overwrite while editing
+          // Prefill PID gains once from firmware status — never overwrite while editing
           // (state polls would otherwise clobber values as soon as the input blurs).
           if (status.pid_kp != null && card.dataset.pidPrefill !== "1") {
             card.dataset.pidPrefill = "1";
@@ -1541,6 +1564,15 @@
             if (kpInput) kpInput.value = Number(status.pid_kp);
             if (kiInput) kiInput.value = Number(status.pid_ki ?? 0);
             if (kdInput) kdInput.value = Number(status.pid_kd ?? 0);
+          }
+          if (status.pid_velocity_kp != null && card.dataset.pidVelPrefill !== "1") {
+            card.dataset.pidVelPrefill = "1";
+            const vkpInput = card.querySelector('[data-field="proto-vkp"]');
+            const vkiInput = card.querySelector('[data-field="proto-vki"]');
+            const vkdInput = card.querySelector('[data-field="proto-vkd"]');
+            if (vkpInput) vkpInput.value = Number(status.pid_velocity_kp);
+            if (vkiInput) vkiInput.value = Number(status.pid_velocity_ki ?? 0);
+            if (vkdInput) vkdInput.value = Number(status.pid_velocity_kd ?? 0);
           }
           const faultWrap = card.querySelector('[data-field="fault-wrap"]');
           const faultEl = card.querySelector('[data-field="fault"]');

@@ -15,8 +15,9 @@ enum CanCommandId : uint8_t {
   kCanCmdGetStatus = 4,
   kCanCmdReset = 5,
   kCanCmdClearError = 6,
-  kCanCmdSetPid = 7,
+  kCanCmdSetPidPos = 7,
   kCanCmdSetVelocity = 8,
+  kCanCmdSetPidVel = 9,
 };
 
 constexpr uint32_t kCanCmdBaseId = 0x100;

@@ -99,17 +99,18 @@ actuator:
   homing_velocity_deg_s: 4.0   # Constant home seek speed [°/s] — tune as needed
 
   # ── PID (duty command u ∈ [-1,1]: kp*error + ki*∫error + kd*derror/dt) ──────
-  # Same gains for azimuth and elevation. Override at runtime with set_pid.
-  # Velocity loop gains are derived (no extra knobs):
-  #   kp_vel = kd    [duty / (deg/s)]
-  #   ki_vel = kp    [duty / deg]   because ∫(deg/s) dt has units deg
-  #   kd_vel = 0
+  # Same gains for azimuth and elevation. Override at runtime with set_pid_pos / set_pid_vel.
   pid_kp: 5.0
   pid_ki: 50.0
   pid_kd: 1.0
+  # Velocity loop (set_velocity / jog / home seek). Separate knobs; initial kp matches
+  # the old unit derivation (≈ position kd). Ki left at 0 until tuned.
+  pid_velocity_kp: 2.0
+  pid_velocity_ki: 10.0
+  pid_velocity_kd: 0.0
   # Cap |ki·∫e| so the integrator cannot own more than this fraction of full duty.
-  # Keeps windup from large slews from overshooting once the error reverses.
-  pid_integral_limit: 0.1
+  # Applies to both position and velocity integrators.
+  pid_integral_limit: 1.0
   # Duty below this is forced to 0 (both H-bridge legs off) to save power near target.
   pwm_deadband: 0.05
   # |position error| below this → PWM off and freeze I (no integrate; keep value).

@@ -262,6 +262,9 @@ class FirmwareMirrorNode:
             pid_kp=fw.pid_kp,
             pid_ki=fw.pid_ki,
             pid_kd=fw.pid_kd,
+            pid_velocity_kp=fw.pid_velocity_kp,
+            pid_velocity_ki=fw.pid_velocity_ki,
+            pid_velocity_kd=fw.pid_velocity_kd,
             mode=fw.mode,
         )
 

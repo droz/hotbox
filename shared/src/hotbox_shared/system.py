@@ -171,6 +171,12 @@ class ActuatorConstants:
     """Integral gain: contribution ki * ∫error_deg dt to motor duty."""
     pid_kd: float = 0.01
     """Derivative gain: contribution kd * d(error_deg)/dt to motor duty."""
+    pid_velocity_kp: float = 0.01
+    """Velocity-loop P: duty per (deg/s) of rate error."""
+    pid_velocity_ki: float = 0.0
+    """Velocity-loop I: duty per deg of ∫ rate error (0 until tuned)."""
+    pid_velocity_kd: float = 0.0
+    """Velocity-loop D: duty per (deg/s²) of rate-error derivative."""
     pid_integral_limit: float = 0.25
     """Max |ki · ∫error dt| contribution to duty (anti-windup ceiling in [-1, 1] units)."""
     pwm_deadband: float = 0.05

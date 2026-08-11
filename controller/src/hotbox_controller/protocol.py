@@ -15,7 +15,8 @@ class CommandName(StrEnum):
     GET_STATUS = "get_status"
     RESET = "reset"
     CLEAR_ERROR = "clear_error"
-    SET_PID = "set_pid"
+    SET_PID_POS = "set_pid_pos"
+    SET_PID_VEL = "set_pid_vel"
     SET_VELOCITY = "set_velocity"
 
 
@@ -26,8 +27,9 @@ class CommandId(IntEnum):
     GET_STATUS = 4
     RESET = 5
     CLEAR_ERROR = 6
-    SET_PID = 7
+    SET_PID_POS = 7
     SET_VELOCITY = 8
+    SET_PID_VEL = 9
 
 
 _COMMAND_TO_ID = {
@@ -37,8 +39,9 @@ _COMMAND_TO_ID = {
     CommandName.GET_STATUS: CommandId.GET_STATUS,
     CommandName.RESET: CommandId.RESET,
     CommandName.CLEAR_ERROR: CommandId.CLEAR_ERROR,
-    CommandName.SET_PID: CommandId.SET_PID,
+    CommandName.SET_PID_POS: CommandId.SET_PID_POS,
     CommandName.SET_VELOCITY: CommandId.SET_VELOCITY,
+    CommandName.SET_PID_VEL: CommandId.SET_PID_VEL,
 }
 _ID_TO_COMMAND = {value: name for name, value in _COMMAND_TO_ID.items()}
 
@@ -82,7 +85,7 @@ class MirrorCommand:
             az = int(round(float(self.payload.get("azimuth_deg_s", 0.0)) * 100.0))
             el = int(round(float(self.payload.get("elevation_deg_s", 0.0)) * 100.0))
             return struct.pack("<Bhh", cmd_id, az, el)
-        if self.command == CommandName.SET_PID:
+        if self.command in (CommandName.SET_PID_POS, CommandName.SET_PID_VEL):
             kp = int(round(float(self.payload.get("kp", 0.0)) * 1000.0))
             ki = int(round(float(self.payload.get("ki", 0.0)) * 1000.0))
             kd = int(round(float(self.payload.get("kd", 0.0)) * 1000.0))
@@ -102,7 +105,7 @@ class MirrorCommand:
         elif command == CommandName.SET_VELOCITY and len(data) >= 5:
             az, el = struct.unpack("<hh", data[1:5])
             payload = {"azimuth_deg_s": az / 100.0, "elevation_deg_s": el / 100.0}
-        elif command == CommandName.SET_PID and len(data) >= 7:
+        elif command in (CommandName.SET_PID_POS, CommandName.SET_PID_VEL) and len(data) >= 7:
             kp, ki, kd = struct.unpack("<hhh", data[1:7])
             payload = {"kp": kp / 1000.0, "ki": ki / 1000.0, "kd": kd / 1000.0}
         return cls(node_id=node_id, command=command, payload=payload)
@@ -121,6 +124,9 @@ class MirrorStatus:
     pid_kp: float | None = None
     pid_ki: float | None = None
     pid_kd: float | None = None
+    pid_velocity_kp: float | None = None
+    pid_velocity_ki: float | None = None
+    pid_velocity_kd: float | None = None
     mode: str = "idle"
 
     @property
@@ -146,6 +152,12 @@ class MirrorStatus:
             out["pid_ki"] = self.pid_ki
         if self.pid_kd is not None:
             out["pid_kd"] = self.pid_kd
+        if self.pid_velocity_kp is not None:
+            out["pid_velocity_kp"] = self.pid_velocity_kp
+        if self.pid_velocity_ki is not None:
+            out["pid_velocity_ki"] = self.pid_velocity_ki
+        if self.pid_velocity_kd is not None:
+            out["pid_velocity_kd"] = self.pid_velocity_kd
         return out
 
     def to_wire(self) -> bytes:
@@ -175,6 +187,9 @@ class MirrorStatus:
             pid_kp=float(raw["pid_kp"]) if raw.get("pid_kp") is not None else None,
             pid_ki=float(raw["pid_ki"]) if raw.get("pid_ki") is not None else None,
             pid_kd=float(raw["pid_kd"]) if raw.get("pid_kd") is not None else None,
+            pid_velocity_kp=float(raw["pid_velocity_kp"]) if raw.get("pid_velocity_kp") is not None else None,
+            pid_velocity_ki=float(raw["pid_velocity_ki"]) if raw.get("pid_velocity_ki") is not None else None,
+            pid_velocity_kd=float(raw["pid_velocity_kd"]) if raw.get("pid_velocity_kd") is not None else None,
             mode=str(raw.get("mode", "idle")),
         )
 

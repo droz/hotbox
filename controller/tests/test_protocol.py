@@ -28,6 +28,9 @@ def test_mirror_status_wire_roundtrip() -> None:
         pid_kp=1.2,
         pid_ki=0.5,
         pid_kd=0.01,
+        pid_velocity_kp=1.0,
+        pid_velocity_ki=0.0,
+        pid_velocity_kd=0.0,
         mode="position",
     )
     restored = MirrorStatus.from_wire(status.to_wire().strip())
@@ -39,6 +42,7 @@ def test_mirror_status_wire_roundtrip() -> None:
     assert abs(restored.azimuth_integral - 0.1) < 1e-9
     assert abs(restored.elevation_integral - (-0.2)) < 1e-9
     assert restored.pid_kp == 1.2
+    assert restored.pid_velocity_kp == 1.0
     assert restored.mode == "position"
 
 
@@ -57,17 +61,30 @@ def test_mirror_status_partial_home() -> None:
     assert status.as_dict()["elevation_home"] == "homing"
 
 
-def test_set_pid_can_roundtrip() -> None:
+def test_set_pid_pos_can_roundtrip() -> None:
     command = MirrorCommand(
         node_id=0,
-        command=CommandName.SET_PID,
+        command=CommandName.SET_PID_POS,
         payload={"kp": 1.25, "ki": 0.5, "kd": 0.01},
     )
     frame = command.to_can_frame()
     restored = MirrorCommand.from_can_frame(0, frame)
-    assert restored.command == CommandName.SET_PID
+    assert restored.command == CommandName.SET_PID_POS
     assert abs(restored.payload["kp"] - 1.25) < 0.002
     assert abs(restored.payload["ki"] - 0.5) < 0.002
+
+
+def test_set_pid_vel_can_roundtrip() -> None:
+    command = MirrorCommand(
+        node_id=0,
+        command=CommandName.SET_PID_VEL,
+        payload={"kp": 1.0, "ki": 0.0, "kd": 0.0},
+    )
+    frame = command.to_can_frame()
+    restored = MirrorCommand.from_can_frame(0, frame)
+    assert restored.command == CommandName.SET_PID_VEL
+    assert abs(restored.payload["kp"] - 1.0) < 0.002
+    assert abs(restored.payload["ki"] - 0.0) < 0.002
 
 
 def test_mirror_command_usb_wire_is_compact() -> None:
