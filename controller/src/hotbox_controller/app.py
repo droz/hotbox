@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+import logging
 from pathlib import Path
+import threading
 import time
 from typing import Any
 
@@ -27,6 +29,8 @@ from .scene import build_mirror_scene_entry, build_target_scene, default_mount_w
 from .sun import SunService, SunVector
 from .tracking import TrackingTarget, idle_dump_world, safe_park, track_point
 from .transport import LoggingMirrorTransport, MirrorTransport, ProtocolTrafficLog, build_transport
+
+logger = logging.getLogger(__name__)
 
 
 class JogRequest(BaseModel):
@@ -145,10 +149,51 @@ class ControllerApplication:
         self._jog_rates: dict[int, tuple[float, float]] = {}
         self._jog_pose: dict[int, tuple[float, float]] = {}
         self._jog_last_mono: dict[int, float] = {}
+        # Last set_target angles actually written to the wire (skip no-op repeats).
+        self._last_sent_wire_targets: dict[int, tuple[float, float]] = {}
+        self._control_stop = threading.Event()
+        self._control_thread: threading.Thread | None = None
         self.fastapi = self._build_fastapi()
 
     def node_mode(self, node_id: int) -> str:
         return self._node_modes.get(int(node_id), "track")
+
+    def start_control_loop(self, period_s: float | None = None) -> None:
+        """Run ``control_tick`` in a background thread (real hardware / USB).
+
+        SITL drives ``control_tick`` from its physics loop instead — do not start
+        this there or Track/Park will be commanded twice per step.
+
+        Host period is intentionally slower than the firmware control loop: USB
+        cannot sustain firmware-rate set_target/start/get_status without hanging.
+        """
+        if self._control_thread is not None and self._control_thread.is_alive():
+            return
+        # ~4 Hz is enough for sun tracking; 50 Hz firmware period is local only.
+        if period_s is None:
+            period_s = 0.25
+        period_s = max(0.1, float(period_s))
+        self._control_stop.clear()
+
+        def _loop() -> None:
+            while not self._control_stop.wait(period_s):
+                try:
+                    self.control_tick()
+                except Exception:
+                    logger.exception("control_tick failed")
+
+        self._control_thread = threading.Thread(
+            target=_loop, name="hotbox-control", daemon=True
+        )
+        self._control_thread.start()
+        logger.info("control loop started (period=%.3fs)", period_s)
+
+    def stop_control_loop(self) -> None:
+        self._control_stop.set()
+        thread = self._control_thread
+        if thread is not None:
+            thread.join(timeout=1.0)
+        self._control_thread = None
 
     @property
     def mode(self) -> str:
@@ -275,7 +320,15 @@ class ControllerApplication:
             for node_id, prev in previous.items():
                 if prev != "jog":
                     self._seed_jog_hold(node_id)
-        elif normalized in {"track", "raw"}:
+        elif normalized == "track":
+            for node_id, prev in previous.items():
+                if prev == "jog":
+                    self._halt_jog_rates(node_id)
+            # Force a fresh set_target on mode entry (skip-cache would suppress it).
+            for node_id in self.fleet.nodes():
+                self._last_sent_wire_targets.pop(int(node_id), None)
+            self.control_tick()
+        elif normalized == "raw":
             for node_id, prev in previous.items():
                 if prev == "jog":
                     self._halt_jog_rates(node_id)
@@ -288,6 +341,9 @@ class ControllerApplication:
         self._set_node_mode(node_id, normalized, apply_immediate=True)
         if normalized in {"track", "raw"} and previous == "jog":
             self._halt_jog_rates(node_id)
+        if normalized == "track":
+            self._last_sent_wire_targets.pop(node_id, None)
+            self.control_tick()
 
     def _joint_limits(self) -> MountJointLimits:
         if self.config.system is not None:
@@ -333,17 +389,49 @@ class ControllerApplication:
         except ConnectionError:
             return
 
-    def _apply_targets(self, targets: dict[int, TrackingTarget], *, allow_dual: bool = True) -> None:
+    def _apply_targets(
+        self,
+        targets: dict[int, TrackingTarget],
+        *,
+        allow_dual: bool = True,
+        statuses: dict[int, Any] | None = None,
+    ) -> None:
+        """Send set_target (+ start when needed). Skips no-op repeats to protect USB."""
         clamped = {
             int(node_id): self._clamp_target(int(node_id), target, allow_dual=allow_dual)
             for node_id, target in targets.items()
         }
+        to_send: dict[int, TrackingTarget] = {}
+        start_nodes: list[int] = []
+        for node_id, target in clamped.items():
+            last = self._last_sent_wire_targets.get(node_id)
+            changed = (
+                last is None
+                or abs(last[0] - float(target.azimuth_deg)) > 0.05
+                or abs(last[1] - float(target.elevation_deg)) > 0.05
+            )
+            status = None if statuses is None else statuses.get(node_id)
+            mode = str(getattr(status, "mode", "") or "")
+            # Only engage PID when not already position-servoing.
+            need_start = mode not in {"position"}
+            if not changed and not need_start:
+                continue
+            if changed:
+                to_send[node_id] = target
+            if need_start:
+                start_nodes.append(node_id)
+        if not to_send and not start_nodes:
+            return
         try:
-            self.fleet.apply_targets(clamped)
+            self.fleet.apply_targets(to_send, start_nodes=start_nodes)
         except ConnectionError:
             # USB hot-unplug during a command cycle — next poll reconnects.
             return
-
+        for node_id, target in to_send.items():
+            self._last_sent_wire_targets[node_id] = (
+                float(target.azimuth_deg),
+                float(target.elevation_deg),
+            )
     def home_all(self) -> None:
         self.set_mode("jog")
         try:
@@ -594,7 +682,7 @@ class ControllerApplication:
             )
             if desired is None:
                 continue
-            self._apply_targets({node_id: desired})
+            self._apply_targets({node_id: desired}, statuses=statuses)
 
     def current_snapshot(self) -> dict[str, Any]:
         fix = self.gps.current_fix()

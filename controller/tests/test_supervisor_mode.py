@@ -60,6 +60,46 @@ def _app() -> tuple[ControllerApplication, FakeTransport]:
     return app, transport
 
 
+def test_set_mode_track_applies_targets_immediately() -> None:
+    """Track must send set_target without waiting for a background loop."""
+    app, transport = _app()
+    app.set_mode("park")
+    # Park leaves firmware in position mode; Track only needs a new setpoint.
+    for nid in transport.node_ids:
+        transport._mode[nid] = "position"
+    transport.sent.clear()
+    app.set_mode("track")
+    assert any(c.command == CommandName.SET_TARGET for c in transport.sent)
+    # Already position-servoing → no redundant start.
+    assert not any(c.command == CommandName.START for c in transport.sent)
+
+
+def test_control_tick_skips_unchanged_track_targets() -> None:
+    """Settled Track must not flood USB with identical set_target/start every tick."""
+    app, transport = _app()
+    app.set_mode("track")
+    # Pretend firmware is already position-servoing the last target.
+    for nid in transport.node_ids:
+        transport._mode[nid] = "position"
+        if nid in app._last_sent_wire_targets:
+            transport._target[nid] = app._last_sent_wire_targets[nid]
+    transport.sent.clear()
+    app.control_tick()
+    assert not any(c.command == CommandName.SET_TARGET for c in transport.sent)
+    assert not any(c.command == CommandName.START for c in transport.sent)
+
+
+def test_track_sends_start_when_idle() -> None:
+    app, transport = _app()
+    for nid in transport.node_ids:
+        transport._mode[nid] = "idle"
+    app._last_sent_wire_targets.clear()
+    transport.sent.clear()
+    app.set_mode("track")
+    assert any(c.command == CommandName.SET_TARGET for c in transport.sent)
+    assert any(c.command == CommandName.START for c in transport.sent)
+
+
 def test_fleet_and_mirror_modes() -> None:
     app, transport = _app()
     assert app.mode == "track"
@@ -335,6 +375,8 @@ def test_raw_mode_skips_control_loop() -> None:
 
     transport.sent.clear()
     transport.polls.clear()
+    # Force a new wire command for the track node (otherwise skip-cache suppresses it).
+    app._last_sent_wire_targets.pop(1, None)
     app.control_tick()
     # Raw node is not polled or commanded; track node still is.
     assert 0 not in transport.polls
@@ -369,6 +411,7 @@ def test_raw_mode_skips_control_loop() -> None:
     app.set_mode("track")
     transport.sent.clear()
     transport.polls.clear()
+    app._last_sent_wire_targets.clear()
     app.control_tick()
     assert any(c.command == CommandName.SET_TARGET for c in transport.sent)
     assert transport.polls

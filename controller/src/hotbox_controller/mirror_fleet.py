@@ -65,7 +65,22 @@ class MirrorFleet:
             out[node_id] = status
         return out
 
-    def apply_targets(self, targets: dict[int, TrackingTarget], *, start: bool = True) -> None:
+    def apply_targets(
+        self,
+        targets: dict[int, TrackingTarget],
+        *,
+        start: bool = True,
+        start_nodes: list[int] | None = None,
+    ) -> None:
+        """Send set_target for ``targets``. Optionally start position PID.
+
+        ``start_nodes`` selects which nodes get ``start`` (overrides ``start`` when set).
+        """
+        start_ids = (
+            {int(n) for n in start_nodes}
+            if start_nodes is not None
+            else ({int(n) for n in targets} if start else set())
+        )
         for node_id, target in targets.items():
             self._transport.send(
                 MirrorCommand(
@@ -77,8 +92,8 @@ class MirrorFleet:
                     },
                 )
             )
-            if start:
-                self._transport.send(MirrorCommand(node_id=node_id, command=CommandName.START))
+        for node_id in start_ids:
+            self._transport.send(MirrorCommand(node_id=int(node_id), command=CommandName.START))
 
     def hold_current(self, node_id: int, *, start: bool = False) -> None:
         """set_target with hold_current; optionally engage position PID."""
