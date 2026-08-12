@@ -88,6 +88,7 @@ class BrushedAxis {
   float velocity_deg_s_ = 0.0f;
   float target_deg_ = 0.0f;
   float command_velocity_deg_s_ = 0.0f;
+  unsigned long last_velocity_cmd_ms_ = 0;
   float stall_timer_s_ = 0.0f;
   float homing_phase_s_ = 0.0f;
   /** Hall window edges captured during Seek / Across (encoder degrees). */

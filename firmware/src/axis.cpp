@@ -247,9 +247,12 @@ void BrushedAxis::startPosition() {
 
 void BrushedAxis::setVelocityDegS(float velocity_deg_s) {
   command_velocity_deg_s_ = velocity_deg_s;
-  mode_ = AxisMode::Velocity;
-  resetPidState();
-  clearFault();
+  last_velocity_cmd_ms_ = millis();
+  if (mode_ != AxisMode::Velocity) {
+    mode_ = AxisMode::Velocity;
+    resetPidState();
+    clearFault();
+  }
 }
 
 void BrushedAxis::stop() {
@@ -504,6 +507,15 @@ void BrushedAxis::update(float dt_s) {
   }
 
   if (mode_ == AxisMode::Velocity) {
+    // Host must refresh set_velocity; if USB/host stalls, coast instead of running away.
+    if (kVelocityCommandTimeoutS > 0.0f) {
+      const unsigned long timeout_ms =
+          static_cast<unsigned long>(kVelocityCommandTimeoutS * 1000.0f);
+      if ((millis() - last_velocity_cmd_ms_) > timeout_ms) {
+        stop();
+        return;
+      }
+    }
     float limited_cmd = limitAwareVelocityCommand(command_velocity_deg_s_);
     if (fabs(limited_cmd) < 1e-6f && fabs(command_velocity_deg_s_) > 1e-6f) {
       // Hard stop: don't wind the velocity integrator into the bumper.

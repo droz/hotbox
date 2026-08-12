@@ -100,7 +100,8 @@ void ProtocolHandler::emitAck(const char* command, bool ok) {
   Serial.print("\",\"ok\":");
   Serial.print(ok ? "true" : "false");
   Serial.println("}");
-  Serial.flush();
+  // Do not Serial.flush() here: USB CDC flush can block the control loop when the
+  // host is slow (jog streams set_velocity + get_status at ~20 Hz).
 }
 
 int ProtocolHandler::formatStatus(char* buf, size_t buflen) const {
@@ -169,7 +170,7 @@ void ProtocolHandler::emitStatus() {
     return;
   }
   Serial.println(buf);
-  Serial.flush();
+  // No flush — see emitAck.
 }
 
 void ProtocolHandler::fillStatusCan(uint8_t out[8]) const {
@@ -311,7 +312,8 @@ void ProtocolHandler::handleLine(const String& line) {
     float el = 0.0f;
     readFloatField(line, "azimuth_deg_s", &az);
     readFloatField(line, "elevation_deg_s", &el);
-    emitAck("set_velocity", mount_->setVelocity(az, el));
+    // High-rate jog path: apply without an ack to keep USB/control responsive.
+    mount_->setVelocity(az, el);
     return;
   }
   if (hasCommand(line, "set_pid_pos")) {

@@ -58,6 +58,8 @@ constexpr float kPwmDeadband            = HOTBOX_PWM_DEADBAND;
 constexpr float kPositionDeadbandDeg    = HOTBOX_POSITION_DEADBAND_DEG;
 constexpr float kStallVelocityThreshDegS = HOTBOX_STALL_VELOCITY_THRESHOLD_DEG_S;
 constexpr float kStallTimeoutS          = HOTBOX_STALL_TIMEOUT_S;
+/** If no set_velocity refresh arrives while in Velocity mode, coast (host lost / USB stall). */
+constexpr float kVelocityCommandTimeoutS = 0.30f;
 
 // Joint limits (from config/system.yaml). Azimuth limits are relative to oven-facing.
 constexpr float kElevationMinDeg = HOTBOX_ELEVATION_MIN_DEG;
