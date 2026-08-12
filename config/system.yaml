@@ -93,10 +93,12 @@ actuator:
   max_accel_deg_s2: 10.0     # Maximum output-shaft acceleration [°/s²] (firmware ramp limiter)
 
   # ── Homing (single speed across both hall edges) ─────────────────────────────
-  # If already on the hall, back up (−encoder) until clear. Then move at constant
-  # speed in the +encoder direction, capture rising + falling edges, redefine zero
-  # at the midpoint, and set_target to home so the axis drives back to center.
-  homing_velocity_deg_s: 4.0   # Constant home seek speed [°/s] — tune as needed
+  # If already on the hall, back up (−encoder) until clear, then continue for
+  # homing_clear_distance_deg so Seek approaches with established +velocity.
+  # Then move at constant speed in the +encoder direction, capture rising +
+  # falling edges, redefine zero at the midpoint, and set_target to home.
+  homing_velocity_deg_s: 4.0      # Constant home seek / leave speed [°/s]
+  homing_clear_distance_deg: 5.0  # Extra −encoder travel after hall clears [°]
 
   # ── PID (duty command u ∈ [-1,1]: kp*error + ki*∫error + kd*derror/dt) ──────
   # Same gains for azimuth and elevation. Override at runtime with set_pid_pos / set_pid_vel.
@@ -127,7 +129,7 @@ actuator:
   stall_timeout_s: 0.0                  # 0 = disabled; e.g. 1.0 to re-enable after bring-up [s]
 
   # ── Control loop ─────────────────────────────────────────────────────────────
-  control_period_s: 0.02  # Firmware ISR / control loop period (50 Hz) [s]
+  control_period_s: 0.02  # Control loop period (50 Hz); hall edges latched via GPIO ISR [s]
 
 # Arduino Nano ESP32 pin roles for firmware.
 # Labels are Arduino D#/A# names (firmware remaps them to ESP32 GPIO numbers).

@@ -10,7 +10,7 @@ enum class AxisMode { Idle, Homing, Position, Velocity, Fault };
 
 /** Homing sub-states while AxisMode::Homing. */
 enum class HomingPhase {
-  LeaveSwitch,  // started on hall — reverse until clear, then Seek
+  LeaveSwitch,  // started on hall — reverse until clear + clear-distance, then Seek
   Seek,         // constant-speed (positive encoder) until rising hall edge
   Across,       // continue until falling hall edge, then zero + go home
 };
@@ -41,6 +41,12 @@ class BrushedAxis {
   bool hallTriggered() const;
   AxisMode mode() const { return mode_; }
   const char* faultText() const { return fault_text_; }
+  /** Hall-window width from last successful home [°]; <0 if unknown. */
+  float hallWidthDeg() const { return hall_width_deg_; }
+  bool hasHallWidth() const { return hall_width_deg_ >= 0.0f; }
+
+  /** GPIO CHANGE ISR trampoline target — latch encoder ticks on hall edge. */
+  void onHallEdgeIsr();
 
  private:
   void driveMotor(float command);
@@ -59,6 +65,13 @@ class BrushedAxis {
    */
   float limitAwareVelocityCommand(float commanded_deg_s) const;
 
+  void clearHallEdgeLatches();
+  /** Consume ISR assert latch (magnet entry). Returns false if none pending. */
+  bool takeHallAssertEdge(long* ticks_out);
+  /** Consume ISR clear latch (magnet exit). Returns false if none pending. */
+  bool takeHallClearEdge(long* ticks_out);
+  long encoderCountNow() const;
+
   int motor_p_;
   int motor_m_;
   int enc_a_;
@@ -75,13 +88,24 @@ class BrushedAxis {
   /** Hall window edges captured during Seek / Across (encoder degrees). */
   float homing_edge1_deg_ = 0.0f;
   float homing_edge2_deg_ = 0.0f;
+  /** LeaveSwitch: true once hall has cleared; clear mark is that pose. */
+  bool homing_leave_cleared_ = false;
+  float homing_leave_clear_deg_ = 0.0f;
   bool homed_ = false;
+  /** Last measured magnet window width [°]; -1 = not measured yet. */
+  float hall_width_deg_ = -1.0f;
   // Stall detect only after the encoder has moved at least once — otherwise a
   // missing encoder would immediately fault any open-loop PWM bring-up.
   bool encoder_alive_ = false;
   HomingPhase homing_phase_ = HomingPhase::Seek;
   AxisMode mode_ = AxisMode::Idle;
   const char* fault_text_ = nullptr;
+
+  // Hall GPIO ISR latches (encoder ticks at edge). Written in ISR, read in update().
+  volatile bool hall_assert_pending_ = false;
+  volatile bool hall_clear_pending_ = false;
+  volatile long hall_assert_ticks_ = 0;
+  volatile long hall_clear_ticks_ = 0;
 
   // Position-loop gains (from config / set_pid_pos).
   float kp_ = kPidKp;
@@ -135,6 +159,10 @@ class MirrorMount {
   const char* elevationHomeState() const { return elevation_.homeStateText(); }
   bool azimuthHallTriggered() const { return azimuth_.hallTriggered(); }
   bool elevationHallTriggered() const { return elevation_.hallTriggered(); }
+  bool azimuthHasHallWidth() const { return azimuth_.hasHallWidth(); }
+  bool elevationHasHallWidth() const { return elevation_.hasHallWidth(); }
+  float azimuthHallWidthDeg() const { return azimuth_.hallWidthDeg(); }
+  float elevationHallWidthDeg() const { return elevation_.hallWidthDeg(); }
   const char* modeText() const { return mode_text_; }
   const char* faultText() const;
 

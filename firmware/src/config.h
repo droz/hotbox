@@ -45,6 +45,7 @@ constexpr float kControlPeriodS         = HOTBOX_CONTROL_PERIOD_S;
 constexpr float kMaxVelocityDegS        = HOTBOX_MAX_VELOCITY_DEG_S;
 constexpr float kMaxAccelDegS2          = HOTBOX_MAX_ACCEL_DEG_S2;
 constexpr float kHomingVelocityDegS     = HOTBOX_HOMING_VELOCITY_DEG_S;
+constexpr float kHomingClearDistanceDeg = HOTBOX_HOMING_CLEAR_DISTANCE_DEG;
 constexpr float kTicksPerDegree         = HOTBOX_TICKS_PER_DEGREE;
 constexpr float kPidKp                  = HOTBOX_PID_KP;
 constexpr float kPidKi                  = HOTBOX_PID_KI;

@@ -57,6 +57,7 @@ def render_firmware_header(system: SystemConstants) -> str:
         f"#define HOTBOX_MAX_VELOCITY_DEG_S ({system.actuator.max_velocity_deg_s:.6f}f)",
         f"#define HOTBOX_MAX_ACCEL_DEG_S2 ({system.actuator.max_accel_deg_s2:.6f}f)",
         f"#define HOTBOX_HOMING_VELOCITY_DEG_S ({system.actuator.homing_velocity_deg_s:.6f}f)",
+        f"#define HOTBOX_HOMING_CLEAR_DISTANCE_DEG ({system.actuator.homing_clear_distance_deg:.6f}f)",
         f"#define HOTBOX_PID_KP ({system.actuator.pid_kp:.6f}f)",
         f"#define HOTBOX_PID_KI ({system.actuator.pid_ki:.6f}f)",
         f"#define HOTBOX_PID_KD ({system.actuator.pid_kd:.6f}f)",

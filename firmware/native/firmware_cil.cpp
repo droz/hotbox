@@ -67,7 +67,8 @@ void hotbox_cil_set_encoder(int axis, long ticks) {
 
 void hotbox_cil_set_hall(int axis, int triggered) {
     const int pin = (axis == 0) ? hotbox::kHorizHall : hotbox::kVertHall;
-    g_hal_digital_in[pin] = triggered ? 0 : 1;
+    // Active-low halls: triggered → pin LOW. Fires native change ISR on edges.
+    hotbox_hal_set_digital_in(pin, triggered ? 0 : 1);
 }
 
 /** USB-wire JSON command line (with or without trailing newline). */
@@ -99,8 +100,8 @@ void hotbox_cil_step(
 ) {
     g_encoder_counts[0] = az_ticks;
     g_encoder_counts[1] = el_ticks;
-    g_hal_digital_in[hotbox::kHorizHall] = az_hall ? 0 : 1;
-    g_hal_digital_in[hotbox::kVertHall] = el_hall ? 0 : 1;
+    hotbox_hal_set_digital_in(hotbox::kHorizHall, az_hall ? 0 : 1);
+    hotbox_hal_set_digital_in(hotbox::kVertHall, el_hall ? 0 : 1);
     g_mount.update(dt_s);
     if (pwm_az != nullptr) {
         *pwm_az = _read_signed_pwm(hotbox::kHorizMotorP, hotbox::kHorizMotorM);

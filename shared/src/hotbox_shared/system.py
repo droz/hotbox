@@ -163,6 +163,8 @@ class ActuatorConstants:
     # --- Homing (single constant-speed pass across both hall edges) ---
     homing_velocity_deg_s: float = 2.0
     """Constant home seek speed [°/s] (leave hall negative, seek both edges positive)."""
+    homing_clear_distance_deg: float = 5.0
+    """Extra −encoder travel [°] after hall clears before Seek (settle approach velocity)."""
 
     # --- PID (position loop, output shaft degrees → duty ∈ [-1, 1]) ---
     pid_kp: float = 1.2

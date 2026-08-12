@@ -11,6 +11,10 @@ namespace {
 ESP32Encoder g_az_encoder;
 ESP32Encoder g_el_encoder;
 
+void hallGpioIsr(void* arg) {
+  static_cast<BrushedAxis*>(arg)->onHallEdgeIsr();
+}
+
 float clampf(float value, float min_value, float max_value) {
   if (value < min_value) return min_value;
   if (value > max_value) return max_value;
@@ -46,8 +50,17 @@ float limited_azimuth_error_deg(float target_deg, float position_deg) {
   return target_rel - position_rel;
 }
 
-constexpr float kHomingLeaveTimeoutS = 8.0f;
 constexpr float kHomingSeekTimeoutS = 30.0f;
+/** Generous upper bound on magnet window width for leave-time budgeting [°]. */
+constexpr float kHomingLeaveMaxWindowDeg = 20.0f;
+/** Extra wall-clock slack on top of (window + clear) / velocity [s]. */
+constexpr float kHomingLeaveTimeoutMarginS = 5.0f;
+
+float homingLeaveTimeoutS() {
+  const float v = fmaxf(kHomingVelocityDegS, 0.25f);
+  return (kHomingLeaveMaxWindowDeg + kHomingClearDistanceDeg) / v +
+         kHomingLeaveTimeoutMarginS;
+}
 
 }  // namespace
 
@@ -78,10 +91,65 @@ void BrushedAxis::begin() {
   }
   last_encoder_ticks_ = encoder_ticks_;
   position_deg_ = static_cast<float>(encoder_ticks_) / kTicksPerDegree;
+
+  // Latch encoder count on hall edges so homing edges are not delayed by the
+  // 50 Hz control poll. Active-low: LOW = magnet present.
+  clearHallEdgeLatches();
+  attachInterruptArg(
+      digitalPinToInterrupt(hall_pin_), hallGpioIsr, this, CHANGE);
 }
 
 // Hall sensors are active-low open-collector (pulled up; magnet → LOW).
 bool BrushedAxis::hallTriggered() const { return digitalRead(hall_pin_) == LOW; }
+
+long BrushedAxis::encoderCountNow() const {
+  return (enc_a_ == kHorizEncA) ? static_cast<long>(g_az_encoder.getCount())
+                                : static_cast<long>(g_el_encoder.getCount());
+}
+
+void BrushedAxis::onHallEdgeIsr() {
+  const long ticks = encoderCountNow();
+  if (digitalRead(hall_pin_) == LOW) {
+    hall_assert_ticks_ = ticks;
+    hall_assert_pending_ = true;
+  } else {
+    hall_clear_ticks_ = ticks;
+    hall_clear_pending_ = true;
+  }
+}
+
+void BrushedAxis::clearHallEdgeLatches() {
+  noInterrupts();
+  hall_assert_pending_ = false;
+  hall_clear_pending_ = false;
+  interrupts();
+}
+
+bool BrushedAxis::takeHallAssertEdge(long* ticks_out) {
+  noInterrupts();
+  const bool pending = hall_assert_pending_;
+  const long ticks = hall_assert_ticks_;
+  hall_assert_pending_ = false;
+  interrupts();
+  if (!pending || ticks_out == nullptr) {
+    return false;
+  }
+  *ticks_out = ticks;
+  return true;
+}
+
+bool BrushedAxis::takeHallClearEdge(long* ticks_out) {
+  noInterrupts();
+  const bool pending = hall_clear_pending_;
+  const long ticks = hall_clear_ticks_;
+  hall_clear_pending_ = false;
+  interrupts();
+  if (!pending || ticks_out == nullptr) {
+    return false;
+  }
+  *ticks_out = ticks;
+  return true;
+}
 
 const char* BrushedAxis::homeStateText() const {
   if (mode_ == AxisMode::Fault) {
@@ -99,6 +167,10 @@ const char* BrushedAxis::homeStateText() const {
 void BrushedAxis::enterHomingPhase(HomingPhase phase) {
   homing_phase_ = phase;
   homing_phase_s_ = 0.0f;
+  homing_leave_cleared_ = false;
+  homing_leave_clear_deg_ = 0.0f;
+  // Drop stale edges so Seek/Across/Leave only see transitions in this phase.
+  clearHallEdgeLatches();
   target_deg_ = position_deg_;
   command_velocity_deg_s_ = 0.0f;
   resetPidState();
@@ -107,6 +179,7 @@ void BrushedAxis::enterHomingPhase(HomingPhase phase) {
 
 void BrushedAxis::startHoming() {
   homed_ = false;
+  hall_width_deg_ = -1.0f;
   mode_ = AxisMode::Homing;
   clearFault();
   // If already on the switch, leave it first so the rising edge is a true edge.
@@ -123,6 +196,8 @@ float BrushedAxis::homeAngleDeg() const {
 void BrushedAxis::finishHoming(float mid_deg) {
   // Redefine the encoder so the hall-window midpoint maps to home_deg, without
   // physically jumping: current pose becomes home + (pos − mid). Then servo home.
+  const float width_deg = fabs(homing_edge2_deg_ - homing_edge1_deg_);
+  hall_width_deg_ = width_deg;
   const float home_deg = homeAngleDeg();
   const float new_pos = home_deg + (position_deg_ - mid_deg);
   const long home_at_mid_ticks = lroundf(new_pos * kTicksPerDegree);
@@ -139,6 +214,11 @@ void BrushedAxis::finishHoming(float mid_deg) {
   homed_ = true;
   homing_phase_ = HomingPhase::Seek;
   resetPidState();
+  Serial.print("{\"hotbox\":\"home_done\",\"axis\":\"");
+  Serial.print(is_azimuth ? "az" : "el");
+  Serial.print("\",\"hall_width_deg\":");
+  Serial.print(width_deg, 3);
+  Serial.println("}");
   // Drive back to the new zero (hall midpoint).
   setTargetDeg(home_deg);
 }
@@ -311,23 +391,53 @@ void BrushedAxis::update(float dt_s) {
     homing_phase_s_ += dt_s;
 
     switch (homing_phase_) {
-      case HomingPhase::LeaveSwitch:
-        // Leave an already-asserted hall before seeking for a rising edge.
-        if (!hallTriggered()) {
+      case HomingPhase::LeaveSwitch: {
+        // Leave an already-asserted hall, then continue clear-distance so Seek
+        // approaches with established +velocity (not from a dead stop on the edge).
+        long clear_ticks = 0;
+        if (!homing_leave_cleared_) {
+          if (takeHallClearEdge(&clear_ticks)) {
+            if (!hallTriggered()) {
+              homing_leave_cleared_ = true;
+              homing_leave_clear_deg_ =
+                  static_cast<float>(clear_ticks) / kTicksPerDegree;
+            }
+            // else bounce/noise — wait for a stable clear
+          } else if (!hallTriggered()) {
+            // Poll fallback if the clear edge ISR was missed.
+            homing_leave_cleared_ = true;
+            homing_leave_clear_deg_ = position_deg_;
+          }
+        }
+        if (homing_leave_cleared_ &&
+            fabs(position_deg_ - homing_leave_clear_deg_) >=
+                kHomingClearDistanceDeg) {
           enterHomingPhase(HomingPhase::Seek);
           return;
         }
-        if (homing_phase_s_ > kHomingLeaveTimeoutS) {
-          setFault("hall_stuck");
+        if (homing_phase_s_ > homingLeaveTimeoutS()) {
+          // Still on hall → true stuck; after clear this is usually too-slow leave.
+          setFault(homing_leave_cleared_ ? "homing_timeout" : "hall_stuck");
           return;
         }
         // Opposite of Seek so we clear the magnet before driving back through it.
         command_velocity_deg_s_ = -kHomingVelocityDegS;
         break;
+      }
 
-      case HomingPhase::Seek:
+      case HomingPhase::Seek: {
         // Rising edge into the magnet while seeking more-positive encoder.
-        if (hallTriggered()) {
+        long assert_ticks = 0;
+        if (takeHallAssertEdge(&assert_ticks)) {
+          if (hallTriggered()) {
+            homing_edge1_deg_ =
+                static_cast<float>(assert_ticks) / kTicksPerDegree;
+            enterHomingPhase(HomingPhase::Across);
+            return;
+          }
+          // else bounce/noise — ignore
+        } else if (hallTriggered()) {
+          // Poll fallback if the assert edge ISR was missed.
           homing_edge1_deg_ = position_deg_;
           enterHomingPhase(HomingPhase::Across);
           return;
@@ -338,10 +448,22 @@ void BrushedAxis::update(float dt_s) {
         }
         command_velocity_deg_s_ = kHomingVelocityDegS;
         break;
+      }
 
-      case HomingPhase::Across:
+      case HomingPhase::Across: {
         // Falling edge: continue the same way across the magnet window.
-        if (!hallTriggered()) {
+        long clear_ticks = 0;
+        if (takeHallClearEdge(&clear_ticks)) {
+          if (!hallTriggered()) {
+            homing_edge2_deg_ =
+                static_cast<float>(clear_ticks) / kTicksPerDegree;
+            const float mid_deg = 0.5f * (homing_edge1_deg_ + homing_edge2_deg_);
+            finishHoming(mid_deg);
+            return;
+          }
+          // else bounce/noise — ignore
+        } else if (!hallTriggered()) {
+          // Poll fallback if the clear edge ISR was missed.
           homing_edge2_deg_ = position_deg_;
           const float mid_deg = 0.5f * (homing_edge1_deg_ + homing_edge2_deg_);
           finishHoming(mid_deg);
@@ -353,6 +475,7 @@ void BrushedAxis::update(float dt_s) {
         }
         command_velocity_deg_s_ = kHomingVelocityDegS;
         break;
+      }
     }
 
     // Constant-speed stages: regulate measured shaft rate with the velocity PID.

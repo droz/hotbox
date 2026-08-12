@@ -88,6 +88,9 @@ constexpr int OUTPUT = 1;
 constexpr int INPUT_PULLUP = 2;
 constexpr int HIGH   = 1;
 constexpr int LOW    = 0;
+constexpr int CHANGE = 1;
+constexpr int RISING = 2;
+constexpr int FALLING = 3;
 
 // Pin aliases used by config.h (map to arbitrary ints for native)
 constexpr int A0 = 14, A1 = 15, A2 = 16, A3 = 17;
@@ -107,6 +110,14 @@ int  digitalRead(int pin);
 void digitalWrite(int pin, int value);
 void delay(unsigned long ms);
 unsigned long millis();
+void noInterrupts();
+void interrupts();
+
+inline int digitalPinToInterrupt(int pin) { return pin; }
+using HalIsrCb = void (*)(void*);
+void attachInterruptArg(int pin, HalIsrCb cb, void* arg, int mode);
+/** Set input level and fire simulated GPIO ISRs on edges (native CIL). */
+void hotbox_hal_set_digital_in(int pin, int level);
 
 // Serial stub — discarded in native mode (acks / debug). Defined inhal.cpp.
 struct _SerialStub {

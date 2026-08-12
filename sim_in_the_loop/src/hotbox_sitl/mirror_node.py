@@ -22,6 +22,8 @@ class _AxisHomeState:
     phase: str = "seek"  # leave | seek | across
     edge1_deg: float = 0.0
     edge2_deg: float = 0.0
+    leave_cleared: bool = False
+    leave_clear_deg: float = 0.0
 
 
 @dataclass(slots=True)
@@ -31,8 +33,8 @@ class SimulatedMirrorNode:
     Wire commands: home, stop, set_target, get_status, clear_error.
     Status modes: idle | homing | position | fault.
     Home states per axis: unhomed | homing | homed | fault.
-    Homing: optional leave → constant-speed seek both hall edges → remap zero →
-    drive to home.
+    Homing: optional leave (+ clear distance) → constant-speed seek both hall
+    edges → remap zero → drive to home.
     """
 
     node_id: int
@@ -46,6 +48,7 @@ class SimulatedMirrorNode:
     target_elevation_deg: float = 0.0
     oven_facing_azimuth_deg: float = 0.0
     homing_velocity_deg_s: float = 2.0
+    homing_clear_distance_deg: float = 5.0
     _home_az: _AxisHomeState = field(default_factory=_AxisHomeState)
     _home_el: _AxisHomeState = field(default_factory=_AxisHomeState)
     _vel_az: float = 0.0
@@ -78,6 +81,7 @@ class SimulatedMirrorNode:
             target_azimuth_deg=of,
             target_elevation_deg=90.0,
             homing_velocity_deg_s=float(ac.homing_velocity_deg_s),
+            homing_clear_distance_deg=float(ac.homing_clear_distance_deg),
         )
 
     def handle_command(self, command: MirrorCommand) -> None:
@@ -226,10 +230,14 @@ class SimulatedMirrorNode:
 
         if home.phase == "leave":
             if not axis.state.hall_triggered:
-                home.phase = "seek"
-            else:
-                # Opposite of Seek so we clear the magnet before driving back through it.
-                axis.step(-pwm, dt_s)
+                if not home.leave_cleared:
+                    home.leave_cleared = True
+                    home.leave_clear_deg = axis.state.angle_deg
+                if abs(axis.state.angle_deg - home.leave_clear_deg) >= self.homing_clear_distance_deg:
+                    home.phase = "seek"
+                    return False
+            # Opposite of Seek so we clear the magnet before driving back through it.
+            axis.step(-pwm, dt_s)
             return False
 
         if home.phase == "seek":

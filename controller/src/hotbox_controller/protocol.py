@@ -127,6 +127,8 @@ class MirrorStatus:
     pid_velocity_kp: float | None = None
     pid_velocity_ki: float | None = None
     pid_velocity_kd: float | None = None
+    az_hall_width_deg: float | None = None
+    el_hall_width_deg: float | None = None
     mode: str = "idle"
 
     @property
@@ -145,6 +147,8 @@ class MirrorStatus:
             "azimuth_integral": self.azimuth_integral,
             "elevation_integral": self.elevation_integral,
             "mode": self.mode,
+            "az_hall_width_deg": self.az_hall_width_deg,
+            "el_hall_width_deg": self.el_hall_width_deg,
         }
         if self.pid_kp is not None:
             out["pid_kp"] = self.pid_kp
@@ -175,6 +179,13 @@ class MirrorStatus:
             both = "homed" if bool(raw.get("homed", False)) else "unhomed"
             az_home = both if az_home is None else az_home
             el_home = both if el_home is None else el_home
+
+        def _opt_float(key: str) -> float | None:
+            value = raw.get(key)
+            if value is None:
+                return None
+            return float(value)
+
         return cls(
             node_id=int(raw["node_id"]),
             azimuth_home=str(az_home),
@@ -190,6 +201,8 @@ class MirrorStatus:
             pid_velocity_kp=float(raw["pid_velocity_kp"]) if raw.get("pid_velocity_kp") is not None else None,
             pid_velocity_ki=float(raw["pid_velocity_ki"]) if raw.get("pid_velocity_ki") is not None else None,
             pid_velocity_kd=float(raw["pid_velocity_kd"]) if raw.get("pid_velocity_kd") is not None else None,
+            az_hall_width_deg=_opt_float("az_hall_width_deg"),
+            el_hall_width_deg=_opt_float("el_hall_width_deg"),
             mode=str(raw.get("mode", "idle")),
         )
 

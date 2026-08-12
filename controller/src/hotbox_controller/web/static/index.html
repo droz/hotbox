@@ -960,6 +960,8 @@
             `el: ${Number(s.elevation_deg).toFixed(3)}°`,
             `∫ az: ${Number(s.azimuth_integral ?? 0).toFixed(4)}`,
             `∫ el: ${Number(s.elevation_integral ?? 0).toFixed(4)}`,
+            `hall width az: ${s.az_hall_width_deg == null ? "—" : `${Number(s.az_hall_width_deg).toFixed(3)}°`}`,
+            `hall width el: ${s.el_hall_width_deg == null ? "—" : `${Number(s.el_hall_width_deg).toFixed(3)}°`}`,
             `pid pos: kp=${s.pid_kp ?? "—"} ki=${s.pid_ki ?? "—"} kd=${s.pid_kd ?? "—"}`,
             `pid vel: kp=${s.pid_velocity_kp ?? "—"} ki=${s.pid_velocity_ki ?? "—"} kd=${s.pid_velocity_kd ?? "—"}`,
             `fault: ${s.fault ?? "none"}`,
@@ -1343,6 +1345,7 @@
           <div class="mirror-stats" data-field="mirror-stats">
             <span class="stat">fw <strong data-field="fw-mode">…</strong></span>
             <span class="stat">home <strong data-field="home-state">…</strong></span>
+            <span class="stat">hall width <strong data-field="hall-width">—</strong></span>
             <span class="stat">az <strong data-field="az">…</strong></span>
             <span class="stat">el <strong data-field="el">…</strong></span>
             <span class="stat">miss <strong data-field="miss">…</strong></span>
@@ -1536,6 +1539,14 @@
           }
           card.querySelector('[data-field="fw-mode"]').textContent = fwMode;
           card.querySelector('[data-field="home-state"]').textContent = `az ${azHome} · el ${elHome}`;
+          const azHallW = status.az_hall_width_deg;
+          const elHallW = status.el_hall_width_deg;
+          const hallWidthEl = card.querySelector('[data-field="hall-width"]');
+          if (hallWidthEl) {
+            const azTxt = azHallW == null ? "—" : `${Number(azHallW).toFixed(3)}°`;
+            const elTxt = elHallW == null ? "—" : `${Number(elHallW).toFixed(3)}°`;
+            hallWidthEl.textContent = `az ${azTxt} · el ${elTxt}`;
+          }
           const azNow = Number(status.azimuth_deg).toFixed(3);
           const elNow = Number(status.elevation_deg).toFixed(3);
           if (target) {

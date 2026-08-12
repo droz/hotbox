@@ -86,6 +86,20 @@ int ProtocolHandler::formatStatus(char* buf, size_t buflen) const {
     return -1;
   }
   const char* fault = mount_->faultText();
+  char az_width[24];
+  char el_width[24];
+  if (mount_->azimuthHasHallWidth()) {
+    snprintf(az_width, sizeof(az_width), "%.3f",
+             static_cast<double>(mount_->azimuthHallWidthDeg()));
+  } else {
+    snprintf(az_width, sizeof(az_width), "null");
+  }
+  if (mount_->elevationHasHallWidth()) {
+    snprintf(el_width, sizeof(el_width), "%.3f",
+             static_cast<double>(mount_->elevationHallWidthDeg()));
+  } else {
+    snprintf(el_width, sizeof(el_width), "null");
+  }
   const int n = snprintf(
       buf,
       buflen,
@@ -94,7 +108,9 @@ int ProtocolHandler::formatStatus(char* buf, size_t buflen) const {
       "\"azimuth_integral\":%.4f,\"elevation_integral\":%.4f,"
       "\"pid_kp\":%.4f,\"pid_ki\":%.4f,\"pid_kd\":%.4f,"
       "\"pid_velocity_kp\":%.4f,\"pid_velocity_ki\":%.4f,\"pid_velocity_kd\":%.4f,"
-      "\"mode\":\"%s\",\"az_hall\":%s,\"el_hall\":%s,\"fault\":%s%s%s}",
+      "\"mode\":\"%s\",\"az_hall\":%s,\"el_hall\":%s,"
+      "\"az_hall_width_deg\":%s,\"el_hall_width_deg\":%s,"
+      "\"fault\":%s%s%s}",
       HOTBOX_NODE_ID,
       mount_->azimuthHomeState(),
       mount_->elevationHomeState(),
@@ -111,6 +127,8 @@ int ProtocolHandler::formatStatus(char* buf, size_t buflen) const {
       mount_->modeText(),
       mount_->azimuthHallTriggered() ? "true" : "false",
       mount_->elevationHallTriggered() ? "true" : "false",
+      az_width,
+      el_width,
       fault == nullptr ? "null" : "\"",
       fault == nullptr ? "" : fault,
       fault == nullptr ? "" : "\"");

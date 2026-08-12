@@ -46,6 +46,21 @@ def test_mirror_status_wire_roundtrip() -> None:
     assert restored.mode == "position"
 
 
+def test_mirror_status_hall_width_roundtrip() -> None:
+    status = MirrorStatus(
+        node_id=0,
+        azimuth_home="homed",
+        elevation_home="homed",
+        az_hall_width_deg=1.25,
+        el_hall_width_deg=2.5,
+        mode="position",
+    )
+    restored = MirrorStatus.from_wire(status.to_wire().strip())
+    assert restored.az_hall_width_deg == 1.25
+    assert restored.el_hall_width_deg == 2.5
+    assert restored.as_dict()["az_hall_width_deg"] == 1.25
+
+
 def test_mirror_status_legacy_homed_bool() -> None:
     wire = b'{"node_id":0,"type":"status","homed":true,"mode":"idle"}\n'
     status = MirrorStatus.from_wire(wire)
