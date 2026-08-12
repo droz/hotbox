@@ -98,13 +98,14 @@ Current module split:
 
 ## `sim_in_the_loop/`
 
-Fast simulation for controller and firmware development.
+Fast SITL for controller and firmware development: real firmware C-in-the-loop
+(`axis`/`protocol` as per-node native libraries) plus a Python plant
+(motors/encoders/halls) and the same JSON protocol as USB.
 
 Purpose:
 
-- compile or shim the mirror firmware logic on a laptop
+- run the same control code as the ESP32 on a laptop
 - simulate motors, encoders, and hall sensors
-- run the same command protocol used by the real system
 - visualize simplified aiming geometry
 - debug calibration and mirror pointing
 
@@ -175,7 +176,7 @@ Custom code should stay focused on:
 - project-specific geometry
 - transport-neutral mirror protocol
 - calibration math
-- virtual actuator and sensor models
+- plant models for SITL (encoders/halls/PWM), with firmware C-in-the-loop
 
 ## Repository Layout
 
@@ -241,7 +242,7 @@ The controller supports three mirror transports:
 
 - `usb` — JSON lines over USB serial (`pyserial`); default for bench bring-up
 - `can` — compact binary frames over SocketCAN (`python-can`); typical on a Pi in the field
-- `sim` — in-process simulated mirror nodes (used by `sim_in_the_loop/`)
+- `sim` — in-process firmware-CIL mirror nodes (used by `sim_in_the_loop/`)
 
 Override transport with `HOTBOX_TRANSPORT=usb|can|sim` (default `usb`).
 

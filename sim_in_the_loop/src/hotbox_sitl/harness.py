@@ -7,7 +7,7 @@ from typing import Any
 
 import numpy as np
 import uvicorn
-from hotbox_shared import SystemConstants, load_system_constants, utc_now
+from hotbox_shared import SystemConstants, load_system_constants, oven_facing_azimuth_deg, utc_now
 
 from hotbox_controller.app import ControllerApplication, build_true_geometry_from_layouts
 from hotbox_controller.config import TransportConfig, app_config_from_system
@@ -16,9 +16,7 @@ from hotbox_controller.protocol import CommandName, MirrorCommand
 from hotbox_controller.sun import SunService
 from hotbox_controller.transport import SimTransport
 
-from hotbox_shared import oven_facing_azimuth_deg
-from .firmware_axis import FirmwareMirrorNode
-from .mirror_node import SimulatedMirrorNode
+from .mirror_node import MirrorNode
 
 
 @dataclass(slots=True)
@@ -54,7 +52,10 @@ def _calibration_from_layout(layout: TrueMirrorLayout, oa_bearing_from_north_deg
         mirror_offset_d_m=layout.mirror_offset_d_m,
     )
 
+
 class SitlHarness:
+    """Controller + firmware-CIL mirror nodes + plant physics + live UI."""
+
     def __init__(
         self,
         node_ids: tuple[int, ...] | None = None,
@@ -63,22 +64,8 @@ class SitlHarness:
         port: int = 8000,
         dt_s: float = 0.05,
         system: SystemConstants | None = None,
-        firmware_cil_node_id: int | None = None,
     ) -> None:
-        """Create the SITL harness.
-
-        Parameters
-        ----------
-        firmware_cil_node_id:
-            If set, that node is simulated using the native firmware CIL shared
-            library (real C++ control code) instead of the pure-Python
-            ``SimulatedMirrorNode``.  All other nodes use the Python model.
-            Requires the library to have been built first::
-
-                cd firmware/native && make
-        """
         self.system = system or load_system_constants()
-        self.firmware_cil_node_id = firmware_cil_node_id
         if node_ids is None:
             node_ids = tuple(mount.node_id for mount in self.system.fleet.mounts)
         self.host = host
@@ -88,23 +75,16 @@ class SitlHarness:
         self._thread: threading.Thread | None = None
         self._lock = threading.RLock()
         self._latest: dict[str, Any] = {}
-        self.nodes: dict[int, SimulatedMirrorNode | FirmwareMirrorNode] = {}
+        self.nodes: dict[int, MirrorNode] = {}
         for node_id in node_ids:
             facing = oven_facing_azimuth_deg(
                 self.system.mount_world(node_id), self.system.absorber.center_world
             )
-            if node_id == firmware_cil_node_id:
-                self.nodes[node_id] = FirmwareMirrorNode.from_constants(
-                    node_id,
-                    self.system.actuator,
-                    oven_facing_azimuth_deg=facing,
-                )
-            else:
-                self.nodes[node_id] = SimulatedMirrorNode.from_constants(
-                    node_id,
-                    self.system.actuator,
-                    oven_facing_azimuth_deg=facing,
-                )
+            self.nodes[node_id] = MirrorNode.from_constants(
+                node_id,
+                self.system.actuator,
+                oven_facing_azimuth_deg=facing,
+            )
         self.true_layouts = {
             node_id: layout
             for node_id, layout in _layouts_from_system(self.system).items()
@@ -155,16 +135,15 @@ class SitlHarness:
 
             self.controller.control_tick()
             snapshot = self.controller.current_snapshot()
+            target_miss = {
+                str(m["node_id"]): m["miss_m"] for m in snapshot["geometry"]["target"]["mirrors"]
+            }
             self._latest = {
                 "mirrors": snapshot["mirrors"],
                 "geometry": snapshot["geometry"],
                 "true_miss_m": {str(m["node_id"]): m["miss_m"] for m in true_geometry["mirrors"]},
-                "target_miss_m": {
-                    str(m["node_id"]): m["miss_m"] for m in snapshot["geometry"]["target"]["mirrors"]
-                },
-                "estimated_miss_m": {
-                    str(m["node_id"]): m["miss_m"] for m in snapshot["geometry"]["target"]["mirrors"]
-                },
+                "target_miss_m": target_miss,
+                "estimated_miss_m": target_miss,
             }
             return self._latest
 
@@ -184,13 +163,9 @@ class SitlHarness:
         self._stop.clear()
         self._thread = threading.Thread(target=self._sim_loop, name="sitl-sim", daemon=True)
         self._thread.start()
-        print("Hot-Box sim-in-the-loop running")
+        print("Hot-Box sim-in-the-loop running (firmware CIL on all nodes)")
         print(f"Open the UI at http://{self.host}:{self.port}/")
         print(f"Plant constants from config/system.yaml ({self.system.fleet.assembly_count} mirrors)")
-        if self.firmware_cil_node_id is None:
-            print("Control path: pure-Python simulator on all nodes")
-        else:
-            print(f"Control path: compiled firmware CIL on node {self.firmware_cil_node_id}, Python simulator on others")
         print("Current pose (blue) and firmware target setpoint (yellow) are overlaid.")
         print("Use Home / Park / Auto / Jog in the UI to interact with the simulated mirrors.")
         try:

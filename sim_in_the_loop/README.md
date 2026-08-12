@@ -1,11 +1,18 @@
 # hotbox sim in the loop
 
-Fast development simulator for:
+Controller + **firmware C-in-the-loop** (real `axis`/`protocol` C++) + Python plant,
+talking the same JSON protocol as USB, with a live web UI.
 
-- controller + simulated mirrors talking over the same protocol
-- continuous physics with a live web UI
-- simplified single-ray-per-facet geometry checks
-- current pose vs commanded target geometry overlay
+## Prerequisites
+
+Native CIL libraries (autobuild on first run, or explicitly):
+
+```bash
+cd firmware/native && make
+```
+
+This produces `libfirmware_cil_node{0,1,2}.dylib` (macOS) or `.so` (Linux) — one
+library per mirror so multi-node sims do not share HAL state.
 
 ## Live interactive mode (default)
 

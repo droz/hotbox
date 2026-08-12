@@ -10,7 +10,7 @@
 // + MirrorMount). This file is only transport + plant plumbing.
 //
 // Build:  see platformio.ini [env:native_cil]  or the Makefile in this folder.
-// Python: see sim_in_the_loop/src/hotbox_sitl/firmware_axis.py
+// Python: see sim_in_the_loop/src/hotbox_sitl/mirror_node.py
 
 #include <cstring>
 

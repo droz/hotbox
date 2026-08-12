@@ -1,59 +1,20 @@
 from __future__ import annotations
 
+from hotbox_controller.protocol import CommandName, MirrorCommand
+from hotbox_controller.transport import SimTransport
+from hotbox_shared import load_system_constants
 from hotbox_sitl.harness import SitlHarness
-from hotbox_sitl.mirror_node import SimulatedMirrorNode
+from hotbox_sitl.mirror_node import MirrorNode
 
 
-def test_sim_transport_home_and_status() -> None:
-    from hotbox_controller.protocol import CommandName, MirrorCommand
-    from hotbox_controller.transport import SimTransport
-
-    nodes = {0: SimulatedMirrorNode(node_id=0)}
-    transport = SimTransport(nodes)
+def test_cil_home_and_status() -> None:
+    system = load_system_constants()
+    node = MirrorNode.from_constants(0, system.actuator, oven_facing_azimuth_deg=180.0)
+    transport = SimTransport({0: node})
 
     discovered = list(transport.discover())
     assert len(discovered) == 1
 
-    transport.send(MirrorCommand(node_id=0, command=CommandName.HOME))
-    for _ in range(300):
-        nodes[0].step(0.05)
-
-    status = transport.poll_status(0)
-    assert status.azimuth_home == "homed"
-    assert status.elevation_home == "homed"
-    assert status.homed is True
-
-
-def test_sim_transport_home_single_axis() -> None:
-    from hotbox_controller.protocol import CommandName, MirrorCommand
-    from hotbox_controller.transport import SimTransport
-
-    nodes = {0: SimulatedMirrorNode(node_id=0)}
-    transport = SimTransport(nodes)
-
-    transport.send(MirrorCommand(node_id=0, command=CommandName.HOME, payload={"axis": "az"}))
-    for _ in range(300):
-        nodes[0].step(0.05)
-
-    status = transport.poll_status(0)
-    assert status.azimuth_home == "homed"
-    assert status.elevation_home == "unhomed"
-    assert status.homed is False
-
-
-def test_firmware_cil_home_and_status() -> None:
-    from hotbox_controller.protocol import CommandName, MirrorCommand
-    from hotbox_controller.transport import SimTransport
-    from hotbox_shared import load_system_constants
-    from hotbox_sitl.firmware_axis import FirmwareMirrorNode
-
-    system = load_system_constants()
-    node = FirmwareMirrorNode.from_constants(
-        0,
-        system.actuator,
-        oven_facing_azimuth_deg=180.0,
-    )
-    transport = SimTransport({0: node})
     transport.send(MirrorCommand(node_id=0, command=CommandName.HOME))
     for _ in range(800):
         node.step(0.02)
@@ -68,6 +29,44 @@ def test_firmware_cil_home_and_status() -> None:
     assert status.homed is True
     assert abs(status.azimuth_deg - 180.0) < 5.0
     assert abs(status.elevation_deg - 90.0) < 5.0
+
+
+def test_cil_home_single_axis() -> None:
+    system = load_system_constants()
+    node = MirrorNode.from_constants(0, system.actuator, oven_facing_azimuth_deg=180.0)
+    transport = SimTransport({0: node})
+
+    transport.send(MirrorCommand(node_id=0, command=CommandName.HOME, payload={"axis": "az"}))
+    for _ in range(800):
+        node.step(0.02)
+        status = transport.poll_status(0)
+        if status.azimuth_home == "homed":
+            break
+
+    status = transport.poll_status(0)
+    assert status.fault is None, status.fault
+    assert status.azimuth_home == "homed"
+    assert status.elevation_home == "unhomed"
+    assert status.homed is False
+
+
+def test_cil_multi_node_independent() -> None:
+    """Each node loads its own CIL library (separate HAL / oven-facing)."""
+    system = load_system_constants()
+    nodes = {
+        0: MirrorNode.from_constants(0, system.actuator, oven_facing_azimuth_deg=180.0),
+        1: MirrorNode.from_constants(1, system.actuator, oven_facing_azimuth_deg=210.0),
+    }
+    transport = SimTransport(nodes)
+    transport.send(MirrorCommand(node_id=0, command=CommandName.HOME, payload={"axis": "az"}))
+    for _ in range(800):
+        nodes[0].step(0.02)
+        nodes[1].step(0.02)
+        if transport.poll_status(0).azimuth_home == "homed":
+            break
+
+    assert transport.poll_status(0).azimuth_home == "homed"
+    assert transport.poll_status(1).azimuth_home == "unhomed"
 
 
 def test_sitl_harness_runs() -> None:

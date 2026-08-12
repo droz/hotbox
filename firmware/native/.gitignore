@@ -1,0 +1,9 @@
+# Native CIL build outputs
+libfirmware_cil*.dylib
+libfirmware_cil*.so
+firmware_cil*.dll
+*.o
+*.dSYM/
+test_cil*
+test_hal*
+test_link*

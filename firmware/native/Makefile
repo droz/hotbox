@@ -1,34 +1,39 @@
-# Build the native CIL shared library without PlatformIO.
+# Build native C-in-the-loop (CIL) shared libraries — one per mirror node.
+# Each dylib/so has its own HAL + firmware statics so multi-node SITL works.
+#
 # Usage:
 #   cd firmware/native && make
+#   cd firmware/native && make NODE_IDS="0 1"   # subset
 #   cd firmware/native && make clean
 #
-# Output: libfirmware_cil.dylib (macOS) or libfirmware_cil.so (Linux)
-# The Python harness looks for it in the same directory as this Makefile,
-# OR in firmware/.pio/build/native_cil/ (PlatformIO output).
+# Output: libfirmware_cil_node{N}.dylib (macOS) or .so (Linux)
 
 CXX      ?= g++
-CXXFLAGS  = -std=c++17 -O3 -DNDEBUG -fPIC \
+NODE_IDS ?= 0 1 2
+
+CXXFLAGS_COMMON = -std=c++17 -O3 -DNDEBUG -fPIC \
             -I include \
             -I ../include \
-            -D HOTBOX_NODE_ID=0 \
             -D NATIVE_CIL
 
 UNAME := $(shell uname)
 ifeq ($(UNAME), Darwin)
-    LIB      = libfirmware_cil.dylib
+    LIB_EXT  = .dylib
     LDFLAGS  = -dynamiclib
 else
-    LIB      = libfirmware_cil.so
+    LIB_EXT  = .so
     LDFLAGS  = -shared
 endif
 
+LIBS = $(foreach id,$(NODE_IDS),libfirmware_cil_node$(id)$(LIB_EXT))
+SRCS = firmware_cil.cpp hal.cpp ../src/axis.cpp ../src/protocol.cpp
+
 .PHONY: all clean
 
-all: $(LIB)
+all: $(LIBS)
 
-$(LIB): firmware_cil.cpp hal.cpp ../src/axis.cpp ../src/protocol.cpp
-	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ firmware_cil.cpp hal.cpp ../src/axis.cpp ../src/protocol.cpp
+libfirmware_cil_node%$(LIB_EXT): $(SRCS)
+	$(CXX) $(CXXFLAGS_COMMON) -D HOTBOX_NODE_ID=$* $(LDFLAGS) -o $@ $(SRCS)
 
 clean:
-	rm -f $(LIB) *.o
+	rm -f libfirmware_cil_node*$(LIB_EXT) libfirmware_cil$(LIB_EXT) *.o
