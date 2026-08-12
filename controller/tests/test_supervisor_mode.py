@@ -6,12 +6,15 @@ from hotbox_controller.transport import DiscoveredNode, MirrorTransport
 
 
 class FakeTransport(MirrorTransport):
+    """Speaks the wire protocol: azimuth is joint-relative to oven-facing."""
+
     def __init__(self, node_ids: list[int] | None = None) -> None:
         self.node_ids = node_ids or [0]
         self.sent: list[MirrorCommand] = []
         self.polls: list[int] = []
+        # Joint-relative az, absolute el (same as firmware/wire).
         self._pose: dict[int, tuple[float, float]] = {
-            int(n): (10.0, 20.0) for n in (node_ids or [0])
+            int(n): (0.0, 20.0) for n in (node_ids or [0])
         }
         self._target: dict[int, tuple[float, float]] = dict(self._pose)
         self._mode: dict[int, str] = {int(n): "idle" for n in (node_ids or [0])}
@@ -162,20 +165,14 @@ def test_heat_demand_diverts_above_absorber() -> None:
 
 
 def test_park_is_face_up_at_oven_facing() -> None:
-    from hotbox_shared import oven_facing_azimuth_deg
-
     app, transport = _app()
     transport.sent.clear()
     app.set_mode("park")
     parks = [c for c in transport.sent if c.command == CommandName.SET_TARGET]
     assert parks
     assert all(c.payload.get("elevation_deg") == 90.0 for c in parks)
-    for c in parks:
-        facing = oven_facing_azimuth_deg(
-            app._mirror_world_for_node(int(c.node_id)),
-            app.absorber_world,
-        )
-        assert abs(((float(c.payload["azimuth_deg"]) - facing + 180.0) % 360.0) - 180.0) < 1e-6
+    # Wire azimuth is joint-relative: oven-facing ↔ 0°.
+    assert all(abs(float(c.payload["azimuth_deg"])) < 1e-6 for c in parks)
     assert "mode" not in parks[0].payload
     assert all(t["mode"] == "parked" for t in app.current_snapshot()["targets"].values())
 
@@ -230,9 +227,11 @@ def test_geometry_target_uses_hardware_setpoint_not_supervisor() -> None:
     from hotbox_controller.app import ProtocolCommandRequest
 
     app, transport = _app()
+    facing = app._oven_facing_deg(0)
     # Seed status cache while still auto-polling, then switch to raw.
     app.current_snapshot()
     app.set_mirror_mode(0, "raw")
+    # Protocol API takes joint-relative azimuth; firmware/geometry use absolute.
     app.send_protocol_command(
         ProtocolCommandRequest(
             command="set_target",
@@ -244,12 +243,14 @@ def test_geometry_target_uses_hardware_setpoint_not_supervisor() -> None:
 
     snap = app.current_snapshot()
     mirror = next(m for m in snap["geometry"]["target"]["mirrors"] if m["node_id"] == 0)
-    assert abs(mirror["azimuth_deg"] - 55.0) < 1e-6
+    assert abs(mirror["azimuth_deg"] - (facing + 55.0)) < 1e-6
     assert abs(mirror["elevation_deg"] - 66.0) < 1e-6
     live = next(m for m in snap["geometry"]["live"]["mirrors"] if m["node_id"] == 0)
-    assert abs(live["azimuth_deg"] - 10.0) < 1e-6
+    assert abs(live["azimuth_deg"] - facing) < 1e-6  # wire rel 0 → abs oven-facing
     assert abs(live["elevation_deg"] - 20.0) < 1e-6
     assert abs(snap["mirrors"]["0"]["target_azimuth_deg"] - 55.0) < 1e-6
+    assert abs(snap["mirrors"]["0"]["target_azimuth_rel_deg"] - 55.0) < 1e-6
+    assert abs(snap["mirrors"]["0"]["target_azimuth_abs_deg"] - (facing + 55.0)) < 1e-6
     assert abs(snap["mirrors"]["0"]["target_elevation_deg"] - 66.0) < 1e-6
 
 
@@ -268,14 +269,15 @@ def test_send_protocol_command_raw_wire() -> None:
         ProtocolCommandRequest(
             command="set_target",
             node_id=1,
-            azimuth_deg=200.0,
+            azimuth_deg=20.0,
             elevation_deg=34.0,
         )
     )
-    assert target["payload"]["azimuth_deg"] == 200.0
+    assert target["payload"]["azimuth_deg"] == 20.0
     assert target["payload"]["elevation_deg"] == 34.0
     assert "mode" not in target["payload"]
     assert transport.sent[-1].command == CommandName.SET_TARGET
+    assert float(transport.sent[-1].payload["azimuth_deg"]) == 20.0  # wire is relative
 
     status = app.send_protocol_command(ProtocolCommandRequest(command="get_status", node_id=0))
     assert status["mirror_status"]["node_id"] == 0
@@ -328,7 +330,7 @@ def test_protocol_traffic_is_recorded() -> None:
 
 
 def test_protocol_set_target_is_passthrough() -> None:
-    """Protocol set_target must not rewrite/clamp az/el (firmware defends itself)."""
+    """Protocol set_target sends joint-relative az and does not clamp to joint limits."""
     from hotbox_controller.app import ProtocolCommandRequest
 
     app, transport = _app()
@@ -336,13 +338,13 @@ def test_protocol_set_target_is_passthrough() -> None:
         ProtocolCommandRequest(
             command="set_target",
             node_id=0,
-            azimuth_deg=350.0,
+            azimuth_deg=170.0,  # outside ±100 travel — still not clamped here
             elevation_deg=97.0,
         )
     )
     cmd = transport.sent[-1]
     assert cmd.command == CommandName.SET_TARGET
-    assert float(cmd.payload["azimuth_deg"]) == 350.0
+    assert float(cmd.payload["azimuth_deg"]) == 170.0
     assert float(cmd.payload["elevation_deg"]) == 97.0
 
 

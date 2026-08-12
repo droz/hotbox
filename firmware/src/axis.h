@@ -10,9 +10,9 @@ enum class AxisMode { Idle, Homing, Position, Velocity, Fault };
 
 /** Homing sub-states while AxisMode::Homing. */
 enum class HomingPhase {
-  LeaveSwitch,  // started on hall — reverse until clear + clear-distance, then Seek
-  Seek,         // constant-speed (positive encoder) until rising hall edge
-  Across,       // continue until falling hall edge, then zero + go home
+  LeaveSwitch,  // started on hall — opposite seek until clear + clear-distance, then Seek
+  Seek,         // constant-speed in configured seek direction until hall assert edge
+  Across,       // continue until hall clear edge, then zero + go home
 };
 
 class BrushedAxis {
@@ -58,15 +58,15 @@ class BrushedAxis {
   void setFault(const char* text);
   void finishHoming(float mid_deg);
   void enterHomingPhase(HomingPhase phase);
-  /** Home joint angle for this axis (az = oven-facing, el = 90°). */
+  /** Home joint angle (az = kHomeAzimuthDeg relative, el = kHomeElevationDeg). */
   float homeAngleDeg() const;
   /** Position PID → duty ∈ [-1,1]. When ``apply_position_deadband``, coast+freeze I near zero error. */
   float computePositionPidDuty(float error_deg, float dt_s, bool apply_position_deadband);
   /** Velocity PID → duty ∈ [-1,1] using ``kp_vel_`` / ``ki_vel_`` / ``kd_vel_``. */
   float computeVelocityPidDuty(float target_velocity_deg_s, float dt_s);
   /**
-   * Zero any velocity that would drive further past joint limits (elevation box
-   * or azimuth relative to oven-facing). Homing does not use this.
+   * Zero any velocity that would drive further past joint limits.
+   * Homing does not use this.
    */
   float limitAwareVelocityCommand(float commanded_deg_s) const;
 

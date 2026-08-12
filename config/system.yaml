@@ -4,15 +4,15 @@
 
 default_site:
   # Diemoz, France
-  latitude_deg: 45.5885
-  longitude_deg: 5.0904
-  altitude_m: 380.0
-  timezone_id: Europe/Paris
-#  # Berkeley, California
-#  latitude_deg: 37.8716
-#  longitude_deg: -122.2585
-#  altitude_m: 186.0
-#  timezone_id: America/Los_Angeles
+#  latitude_deg: 45.5885
+#  longitude_deg: 5.0904
+#  altitude_m: 380.0
+#  timezone_id: Europe/Paris
+  # Berkeley, California
+  latitude_deg: 37.8716
+  longitude_deg: -122.2585
+  altitude_m: 186.0
+  timezone_id: America/Los_Angeles
 #  # Gerlach, Nevada
 #  latitude_deg: 40.6518
 #  longitude_deg: -119.3562
@@ -76,8 +76,8 @@ control:
   # Physical mount travel. Azimuth is relative to oven-facing (0 = aim at absorber at el→0).
   elevation_min_deg: 0.0
   elevation_max_deg: 90.0
-  azimuth_min_deg: -150.0
-  azimuth_max_deg: 150.0
+  azimuth_min_deg: -100.0
+  azimuth_max_deg: 100.0
 
 actuator:
   # ── Encoder / gearbox ────────────────────────────────────────────────────────
@@ -93,12 +93,30 @@ actuator:
   max_accel_deg_s2: 10.0     # Maximum output-shaft acceleration [°/s²] (firmware ramp limiter)
 
   # ── Homing (single speed across both hall edges) ─────────────────────────────
-  # If already on the hall, back up (−encoder) until clear, then continue for
-  # homing_clear_distance_deg so Seek approaches with established +velocity.
-  # Then move at constant speed in the +encoder direction, capture rising +
-  # falling edges, redefine zero at the midpoint, and set_target to home.
+  # If already on the hall, leave opposite the seek direction until clear, then
+  # continue for homing_clear_distance_deg so Seek approaches with established
+  # velocity. Then seek across both hall edges, remap the midpoint to home, and
+  # set_target to home.
+  # Home pose after a successful home (hall midpoint remapped to these angles).
+  # Firmware and the wire protocol use this joint frame directly:
+  #   azimuth relative to oven-facing (same as azimuth_min/max_deg);
+  #   elevation absolute (0° = horizon, 90° = zenith).
+  # The Pi converts to/from absolute azimuth for sun / geometry.
+  home_azimuth_deg: -100.0
+  home_elevation_deg: 90.0
+  # Seek direction in encoder space: +1 = +encoder, -1 = −encoder.
+  # Leave runs the opposite way. Pick the sign that approaches the hall from
+  # inside the travel window (az home at −100 → seek −1; el home at 90 → seek +1).
+  homing_direction_azimuth: -1
+  homing_direction_elevation: 1
   homing_velocity_deg_s: 4.0      # Constant home seek / leave speed [°/s]
-  homing_clear_distance_deg: 5.0  # Extra −encoder travel after hall clears [°]
+  homing_clear_distance_deg: 5.0  # Extra leave-direction travel after hall clears [°]
+  # Hall magnet window width [°] (edge-to-edge). SITL asserts hall while
+  # |angle − magnet| ≤ half of this. After home, firmware checks the measured
+  # edge-to-edge width against this nominal (± hall_window_tolerance_deg) and
+  # faults with "hall_width" if outside.
+  hall_window_width_deg: 8.0
+  hall_window_tolerance_deg: 0.5
 
   # ── PID (duty command u ∈ [-1,1]: kp*error + ki*∫error + kd*derror/dt) ──────
   # Same gains for azimuth and elevation. Override at runtime with set_pid_pos / set_pid_vel.

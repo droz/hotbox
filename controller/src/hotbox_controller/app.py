@@ -16,6 +16,7 @@ from hotbox_shared import (
     apply_mount_joint_limits,
     clamp_to_mount_joint_limits,
     oven_facing_azimuth_deg,
+    relative_azimuth_deg,
     utc_now,
 )
 from pydantic import BaseModel
@@ -248,7 +249,9 @@ class ControllerApplication:
                 out[node_id] = node.status
             else:
                 try:
-                    status = self.transport.poll_status(node_id)
+                    status = self._status_from_wire(
+                        int(node_id), self.transport.poll_status(node_id)
+                    )
                 except ConnectionError:
                     status = MirrorStatus(node_id=int(node_id), mode="disconnected")
                 node.status = status
@@ -353,6 +356,63 @@ class ControllerApplication:
     def _oven_facing_deg(self, node_id: int) -> float:
         return oven_facing_azimuth_deg(self._mirror_world_for_node(node_id), self.absorber_world)
 
+    def _absolute_azimuth_deg(self, node_id: int, relative_deg: float) -> float:
+        """Joint-relative → absolute (host/geometry frame)."""
+        return float(self._oven_facing_deg(node_id)) + float(relative_deg)
+
+    def _relative_azimuth_deg(self, node_id: int, absolute_deg: float) -> float:
+        """Absolute → joint-relative (firmware/wire frame)."""
+        return relative_azimuth_deg(float(absolute_deg), self._oven_facing_deg(node_id))
+
+    def _status_from_wire(self, node_id: int, wire: MirrorStatus) -> MirrorStatus:
+        """Convert firmware joint-relative azimuth fields to absolute for the host."""
+        abs_az = self._absolute_azimuth_deg(node_id, wire.azimuth_deg)
+        abs_taz = (
+            None
+            if wire.target_azimuth_deg is None
+            else self._absolute_azimuth_deg(node_id, wire.target_azimuth_deg)
+        )
+        return MirrorStatus(
+            node_id=wire.node_id,
+            azimuth_home=wire.azimuth_home,
+            elevation_home=wire.elevation_home,
+            fault=wire.fault,
+            azimuth_deg=abs_az,
+            elevation_deg=wire.elevation_deg,
+            target_azimuth_deg=abs_taz,
+            target_elevation_deg=wire.target_elevation_deg,
+            azimuth_integral=wire.azimuth_integral,
+            elevation_integral=wire.elevation_integral,
+            pid_kp=wire.pid_kp,
+            pid_ki=wire.pid_ki,
+            pid_kd=wire.pid_kd,
+            pid_velocity_kp=wire.pid_velocity_kp,
+            pid_velocity_ki=wire.pid_velocity_ki,
+            pid_velocity_kd=wire.pid_velocity_kd,
+            az_hall_width_deg=wire.az_hall_width_deg,
+            el_hall_width_deg=wire.el_hall_width_deg,
+            mode=wire.mode,
+        )
+
+    def _mirror_status_dict(self, node_id: int, status: MirrorStatus) -> dict[str, Any]:
+        """Status dict for UI/API with both joint-relative and absolute azimuth.
+
+        ``status`` is host-absolute (after ``_status_from_wire``).
+        """
+        facing = self._oven_facing_deg(node_id)
+        rel = self._relative_azimuth_deg(node_id, status.azimuth_deg)
+        out = status.as_dict()
+        out["oven_facing_azimuth_deg"] = facing
+        out["azimuth_rel_deg"] = rel
+        out["azimuth_abs_deg"] = float(status.azimuth_deg)
+        out["azimuth_deg"] = rel
+        if status.target_azimuth_deg is not None:
+            t_rel = self._relative_azimuth_deg(node_id, status.target_azimuth_deg)
+            out["target_azimuth_rel_deg"] = t_rel
+            out["target_azimuth_abs_deg"] = float(status.target_azimuth_deg)
+            out["target_azimuth_deg"] = t_rel
+        return out
+
     def _clamp_target(
         self,
         node_id: int,
@@ -422,8 +482,17 @@ class ControllerApplication:
                 start_nodes.append(node_id)
         if not to_send and not start_nodes:
             return
+        # Firmware/wire use joint-relative azimuth; host tracking stays absolute.
+        wire_targets = {
+            int(node_id): TrackingTarget(
+                azimuth_deg=self._relative_azimuth_deg(int(node_id), float(target.azimuth_deg)),
+                elevation_deg=float(target.elevation_deg),
+                mode=target.mode,
+            )
+            for node_id, target in to_send.items()
+        }
         try:
-            self.fleet.apply_targets(to_send, start_nodes=start_nodes)
+            self.fleet.apply_targets(wire_targets, start_nodes=start_nodes)
         except ConnectionError:
             # USB hot-unplug during a command cycle — next poll reconnects.
             return
@@ -762,7 +831,10 @@ class ControllerApplication:
                 "world_vector": sun.world_vector.tolist(),
             },
             "transport": self.config.transport.mode,
-            "mirrors": {str(node_id): status.as_dict() for node_id, status in statuses.items()},
+            "mirrors": {
+                str(node_id): self._mirror_status_dict(node_id, status)
+                for node_id, status in statuses.items()
+            },
             "targets": {str(node_id): asdict(target) for node_id, target in targets.items()},
             "protocol_traffic": self.protocol_traffic.snapshot(limit=200),
             "calibration_count": len(self.calibrations),
@@ -893,14 +965,18 @@ class ControllerApplication:
 
         payload: dict[str, Any] = {}
         if command_name == CommandName.SET_TARGET.value:
-            # Thin client: pass angles through unchanged unless hold_current.
+            # Thin client: joint-relative azimuth on the wire (same as firmware).
             hold_current = bool(request.hold_current)
             if hold_current:
                 payload = {"hold_current": True}
             else:
                 payload = {
-                    "azimuth_deg": float(request.azimuth_deg if request.azimuth_deg is not None else 0.0),
-                    "elevation_deg": float(request.elevation_deg if request.elevation_deg is not None else 0.0),
+                    "azimuth_deg": float(
+                        request.azimuth_deg if request.azimuth_deg is not None else 0.0
+                    ),
+                    "elevation_deg": float(
+                        request.elevation_deg if request.elevation_deg is not None else 0.0
+                    ),
                 }
         elif command_name == CommandName.SET_VELOCITY.value:
             payload = {
@@ -924,7 +1000,7 @@ class ControllerApplication:
 
         command = MirrorCommand(node_id=node_id, command=CommandName(command_name), payload=payload)
         if command_name == CommandName.GET_STATUS.value:
-            status = self.transport.poll_status(node_id)
+            status = self._status_from_wire(node_id, self.transport.poll_status(node_id))
             node = self.fleet.nodes().get(node_id)
             if node is not None:
                 node.status = status
@@ -933,7 +1009,7 @@ class ControllerApplication:
                 "command": command_name,
                 "node_id": node_id,
                 "payload": payload,
-                "mirror_status": status.as_dict(),
+                "mirror_status": self._mirror_status_dict(node_id, status),
             }
 
         self.transport.send(command)
@@ -948,7 +1024,8 @@ class ControllerApplication:
                     taz = float(prev.azimuth_deg)
                     tel = float(prev.elevation_deg)
                 else:
-                    taz = float(payload["azimuth_deg"])
+                    # Payload is joint-relative; host cache stores absolute.
+                    taz = self._absolute_azimuth_deg(node_id, float(payload["azimuth_deg"]))
                     tel = float(payload["elevation_deg"])
                 node.status = MirrorStatus(
                     node_id=prev.node_id,

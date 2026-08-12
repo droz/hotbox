@@ -7,7 +7,7 @@ from typing import Any
 
 import numpy as np
 import uvicorn
-from hotbox_shared import SystemConstants, load_system_constants, oven_facing_azimuth_deg, utc_now
+from hotbox_shared import SystemConstants, load_system_constants, utc_now
 
 from hotbox_controller.app import ControllerApplication, build_true_geometry_from_layouts
 from hotbox_controller.config import TransportConfig, app_config_from_system
@@ -77,14 +77,7 @@ class SitlHarness:
         self._latest: dict[str, Any] = {}
         self.nodes: dict[int, MirrorNode] = {}
         for node_id in node_ids:
-            facing = oven_facing_azimuth_deg(
-                self.system.mount_world(node_id), self.system.absorber.center_world
-            )
-            self.nodes[node_id] = MirrorNode.from_constants(
-                node_id,
-                self.system.actuator,
-                oven_facing_azimuth_deg=facing,
-            )
+            self.nodes[node_id] = MirrorNode.from_constants(node_id, self.system.actuator)
         self.true_layouts = {
             node_id: layout
             for node_id, layout in _layouts_from_system(self.system).items()
@@ -121,7 +114,11 @@ class SitlHarness:
 
             when = utc_now()
             sun = self.sun.sun_vector(when)
-            statuses = {node_id: node.status() for node_id, node in self.nodes.items()}
+            # Node status is wire/joint-relative; true geometry needs absolute.
+            statuses = {
+                node_id: self.controller._status_from_wire(node_id, node.status())
+                for node_id, node in self.nodes.items()
+            }
 
             true_geometry = build_true_geometry_from_layouts(
                 sun=sun,

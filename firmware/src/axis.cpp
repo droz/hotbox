@@ -21,33 +21,15 @@ float clampf(float value, float min_value, float max_value) {
   return value;
 }
 
-float wrap360(float deg) {
-  while (deg < 0.0f) deg += 360.0f;
-  while (deg >= 360.0f) deg -= 360.0f;
-  return deg;
-}
-
-float wrap180(float deg) {
-  while (deg > 180.0f) deg -= 360.0f;
-  while (deg <= -180.0f) deg += 360.0f;
-  return deg;
-}
-
 void clamp_joint_targets(float* azimuth_deg, float* elevation_deg) {
+  // Azimuth is joint-relative to oven-facing (−travel…+travel). Elevation is absolute.
   *elevation_deg = clampf(*elevation_deg, kElevationMinDeg, kElevationMaxDeg);
-  const float rel = wrap180(*azimuth_deg - kOvenFacingAzimuthDeg);
-  const float rel_clamped = clampf(rel, kAzimuthMinDeg, kAzimuthMaxDeg);
-  // Keep continuous oven+rel (may be outside [0,360)) so the servo can travel
-  // through 0° inside the valid window instead of the forbidden back side.
-  *azimuth_deg = kOvenFacingAzimuthDeg + rel_clamped;
+  *azimuth_deg = clampf(*azimuth_deg, kAzimuthMinDeg, kAzimuthMaxDeg);
 }
 
-// Azimuth error that stays inside the joint travel window (no shortest-path wrap
-// through ±180° relative to oven-facing).
+// Azimuth error in joint frame (no wrap through the forbidden back side).
 float limited_azimuth_error_deg(float target_deg, float position_deg) {
-  const float target_rel = wrap180(target_deg - kOvenFacingAzimuthDeg);
-  const float position_rel = wrap180(position_deg - kOvenFacingAzimuthDeg);
-  return target_rel - position_rel;
+  return target_deg - position_deg;
 }
 
 constexpr float kHomingSeekTimeoutS = 30.0f;
@@ -187,10 +169,8 @@ void BrushedAxis::startHoming() {
 }
 
 float BrushedAxis::homeAngleDeg() const {
-  // Elevation home = 90° (face-up). Azimuth home = oven-facing so relative az is
-  // 0° (center of the ±150° travel window) — not absolute north (0°), which sits
-  // on the relative ±180° discontinuity and makes the post-home servo flee.
-  return (enc_a_ == kHorizEncA) ? kOvenFacingAzimuthDeg : 90.0f;
+  // Joint frame: az relative to oven-facing, el absolute (from system.yaml).
+  return (enc_a_ == kHorizEncA) ? kHomeAzimuthDeg : kHomeElevationDeg;
 }
 
 void BrushedAxis::finishHoming(float mid_deg) {
@@ -198,10 +178,21 @@ void BrushedAxis::finishHoming(float mid_deg) {
   // physically jumping: current pose becomes home + (pos − mid). Then servo home.
   const float width_deg = fabs(homing_edge2_deg_ - homing_edge1_deg_);
   hall_width_deg_ = width_deg;
+  const bool is_azimuth = (enc_a_ == kHorizEncA);
+  if (fabs(width_deg - kHallWindowWidthDeg) > kHallWindowToleranceDeg) {
+    Serial.print("{\"hotbox\":\"home_fail\",\"axis\":\"");
+    Serial.print(is_azimuth ? "az" : "el");
+    Serial.print("\",\"hall_width_deg\":");
+    Serial.print(width_deg, 3);
+    Serial.print(",\"expected_deg\":");
+    Serial.print(kHallWindowWidthDeg, 3);
+    Serial.println("}");
+    setFault("hall_width");
+    return;
+  }
   const float home_deg = homeAngleDeg();
   const float new_pos = home_deg + (position_deg_ - mid_deg);
   const long home_at_mid_ticks = lroundf(new_pos * kTicksPerDegree);
-  const bool is_azimuth = (enc_a_ == kHorizEncA);
   if (is_azimuth) {
     g_az_encoder.setCount(home_at_mid_ticks);
   } else {
@@ -371,11 +362,11 @@ float BrushedAxis::computeVelocityPidDuty(float target_velocity_deg_s, float dt_
 
 float BrushedAxis::limitAwareVelocityCommand(float commanded_deg_s) const {
   if (enc_a_ == kHorizEncA) {
-    const float rel = wrap180(position_deg_ - kOvenFacingAzimuthDeg);
-    if (rel >= kAzimuthMaxDeg && commanded_deg_s > 0.0f) {
+    // position_deg_ is already joint-relative.
+    if (position_deg_ >= kAzimuthMaxDeg && commanded_deg_s > 0.0f) {
       return 0.0f;
     }
-    if (rel <= kAzimuthMinDeg && commanded_deg_s < 0.0f) {
+    if (position_deg_ <= kAzimuthMinDeg && commanded_deg_s < 0.0f) {
       return 0.0f;
     }
     return commanded_deg_s;
@@ -406,11 +397,14 @@ void BrushedAxis::update(float dt_s) {
 
   if (mode_ == AxisMode::Homing) {
     homing_phase_s_ += dt_s;
+    const float seek_sign =
+        (enc_a_ == kHorizEncA) ? kHomingDirectionAzimuth : kHomingDirectionElevation;
+    const float seek_vel = seek_sign * kHomingVelocityDegS;
 
     switch (homing_phase_) {
       case HomingPhase::LeaveSwitch: {
         // Leave an already-asserted hall, then continue clear-distance so Seek
-        // approaches with established +velocity (not from a dead stop on the edge).
+        // approaches with established velocity (not from a dead stop on the edge).
         long clear_ticks = 0;
         if (!homing_leave_cleared_) {
           if (takeHallClearEdge(&clear_ticks)) {
@@ -438,12 +432,12 @@ void BrushedAxis::update(float dt_s) {
           return;
         }
         // Opposite of Seek so we clear the magnet before driving back through it.
-        command_velocity_deg_s_ = -kHomingVelocityDegS;
+        command_velocity_deg_s_ = -seek_vel;
         break;
       }
 
       case HomingPhase::Seek: {
-        // Rising edge into the magnet while seeking more-positive encoder.
+        // Entering the magnet while moving in the configured seek direction.
         long assert_ticks = 0;
         if (takeHallAssertEdge(&assert_ticks)) {
           if (hallTriggered()) {
@@ -463,12 +457,12 @@ void BrushedAxis::update(float dt_s) {
           setFault("hall_not_found");
           return;
         }
-        command_velocity_deg_s_ = kHomingVelocityDegS;
+        command_velocity_deg_s_ = seek_vel;
         break;
       }
 
       case HomingPhase::Across: {
-        // Falling edge: continue the same way across the magnet window.
+        // Leaving the magnet: continue the same way across the hall window.
         long clear_ticks = 0;
         if (takeHallClearEdge(&clear_ticks)) {
           if (!hallTriggered()) {
@@ -490,7 +484,7 @@ void BrushedAxis::update(float dt_s) {
           setFault("hall_stuck");
           return;
         }
-        command_velocity_deg_s_ = kHomingVelocityDegS;
+        command_velocity_deg_s_ = seek_vel;
         break;
       }
     }

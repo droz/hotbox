@@ -9,7 +9,7 @@ from hotbox_sitl.mirror_node import MirrorNode
 
 def test_cil_home_and_status() -> None:
     system = load_system_constants()
-    node = MirrorNode.from_constants(0, system.actuator, oven_facing_azimuth_deg=180.0)
+    node = MirrorNode.from_constants(0, system.actuator)
     transport = SimTransport({0: node})
 
     discovered = list(transport.discover())
@@ -27,13 +27,18 @@ def test_cil_home_and_status() -> None:
     assert status.azimuth_home == "homed"
     assert status.elevation_home == "homed"
     assert status.homed is True
-    assert abs(status.azimuth_deg - 180.0) < 5.0
-    assert abs(status.elevation_deg - 90.0) < 5.0
+    # Wire/firmware joint frame: home_azimuth_deg / home_elevation_deg.
+    assert abs(status.azimuth_deg - system.actuator.home_azimuth_deg) < 5.0
+    assert abs(status.elevation_deg - system.actuator.home_elevation_deg) < 5.0
+    assert status.az_hall_width_deg is not None
+    assert status.el_hall_width_deg is not None
+    assert abs(float(status.az_hall_width_deg) - 8.0) < 1.5
+    assert abs(float(status.el_hall_width_deg) - 8.0) < 1.5
 
 
 def test_cil_home_single_axis() -> None:
     system = load_system_constants()
-    node = MirrorNode.from_constants(0, system.actuator, oven_facing_azimuth_deg=180.0)
+    node = MirrorNode.from_constants(0, system.actuator)
     transport = SimTransport({0: node})
 
     transport.send(MirrorCommand(node_id=0, command=CommandName.HOME, payload={"axis": "az"}))
@@ -51,11 +56,11 @@ def test_cil_home_single_axis() -> None:
 
 
 def test_cil_multi_node_independent() -> None:
-    """Each node loads its own CIL library (separate HAL / oven-facing)."""
+    """Each node loads its own CIL library (separate HAL)."""
     system = load_system_constants()
     nodes = {
-        0: MirrorNode.from_constants(0, system.actuator, oven_facing_azimuth_deg=180.0),
-        1: MirrorNode.from_constants(1, system.actuator, oven_facing_azimuth_deg=210.0),
+        0: MirrorNode.from_constants(0, system.actuator),
+        1: MirrorNode.from_constants(1, system.actuator),
     }
     transport = SimTransport(nodes)
     transport.send(MirrorCommand(node_id=0, command=CommandName.HOME, payload={"axis": "az"}))

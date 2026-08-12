@@ -46,6 +46,19 @@ constexpr float kMaxVelocityDegS        = HOTBOX_MAX_VELOCITY_DEG_S;
 constexpr float kMaxAccelDegS2          = HOTBOX_MAX_ACCEL_DEG_S2;
 constexpr float kHomingVelocityDegS     = HOTBOX_HOMING_VELOCITY_DEG_S;
 constexpr float kHomingClearDistanceDeg = HOTBOX_HOMING_CLEAR_DISTANCE_DEG;
+/** Post-home azimuth relative to oven-facing (same frame as kAzimuthMin/MaxDeg). */
+constexpr float kHomeAzimuthDeg         = HOTBOX_HOME_AZIMUTH_DEG;
+/** Post-home elevation absolute (0° = horizon, 90° = zenith). */
+constexpr float kHomeElevationDeg       = HOTBOX_HOME_ELEVATION_DEG;
+/** Encoder-space seek sign for azimuth/elevation (+1 or -1). Leave uses opposite. */
+constexpr float kHomingDirectionAzimuth =
+    (HOTBOX_HOMING_DIRECTION_AZIMUTH < 0) ? -1.0f : 1.0f;
+constexpr float kHomingDirectionElevation =
+    (HOTBOX_HOMING_DIRECTION_ELEVATION < 0) ? -1.0f : 1.0f;
+/** Expected hall magnet window width [°] (edge-to-edge). */
+constexpr float kHallWindowWidthDeg = HOTBOX_HALL_WINDOW_WIDTH_DEG;
+/** Allowed |measured − expected| hall width after home [°]. */
+constexpr float kHallWindowToleranceDeg = HOTBOX_HALL_WINDOW_TOLERANCE_DEG;
 constexpr float kTicksPerDegree         = HOTBOX_TICKS_PER_DEGREE;
 constexpr float kPidKp                  = HOTBOX_PID_KP;
 constexpr float kPidKi                  = HOTBOX_PID_KI;
@@ -61,20 +74,10 @@ constexpr float kStallTimeoutS          = HOTBOX_STALL_TIMEOUT_S;
 /** If no set_velocity refresh arrives while in Velocity mode, coast (host lost / USB stall). */
 constexpr float kVelocityCommandTimeoutS = 0.30f;
 
-// Joint limits (from config/system.yaml). Azimuth limits are relative to oven-facing.
+// Joint limits (from config/system.yaml). Azimuth is joint-relative to oven-facing.
 constexpr float kElevationMinDeg = HOTBOX_ELEVATION_MIN_DEG;
 constexpr float kElevationMaxDeg = HOTBOX_ELEVATION_MAX_DEG;
 constexpr float kAzimuthMinDeg = HOTBOX_AZIMUTH_MIN_DEG;
 constexpr float kAzimuthMaxDeg = HOTBOX_AZIMUTH_MAX_DEG;
-
-#if HOTBOX_NODE_ID == 0
-constexpr float kOvenFacingAzimuthDeg = HOTBOX_OVEN_FACING_AZIMUTH_DEG_NODE_0;
-#elif HOTBOX_NODE_ID == 1
-constexpr float kOvenFacingAzimuthDeg = HOTBOX_OVEN_FACING_AZIMUTH_DEG_NODE_1;
-#elif HOTBOX_NODE_ID == 2
-constexpr float kOvenFacingAzimuthDeg = HOTBOX_OVEN_FACING_AZIMUTH_DEG_NODE_2;
-#else
-constexpr float kOvenFacingAzimuthDeg = 0.0f;
-#endif
 
 }  // namespace hotbox

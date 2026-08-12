@@ -57,6 +57,12 @@ def test_actuator_two_stage_gear_ratio() -> None:
     assert abs(system.actuator.ticks_per_degree - expected_tpd) < 1e-6
     assert system.actuator.pwm_deadband == 0.05
     header = render_firmware_header(system)
+    assert "HOTBOX_HOME_AZIMUTH_DEG (-100.000000f)" in header
+    assert "HOTBOX_HOME_ELEVATION_DEG (90.000000f)" in header
+    assert "HOTBOX_HOMING_DIRECTION_AZIMUTH (-1)" in header
+    assert "HOTBOX_HOMING_DIRECTION_ELEVATION (1)" in header
+    assert "HOTBOX_HALL_WINDOW_WIDTH_DEG (8.000000f)" in header
+    assert "HOTBOX_HALL_WINDOW_TOLERANCE_DEG (0.500000f)" in header
     assert "HOTBOX_MOTOR_GEAR_RATIO (70.000000f)" in header
     assert "HOTBOX_WORM_GEAR_RATIO (120.000000f)" in header
     assert "HOTBOX_PWM_DEADBAND (0.050000f)" in header

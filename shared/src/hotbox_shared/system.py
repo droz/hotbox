@@ -161,10 +161,22 @@ class ActuatorConstants:
     """Maximum commanded output-shaft angular acceleration [°/s²] (firmware ramp limiter)."""
 
     # --- Homing (single constant-speed pass across both hall edges) ---
+    home_azimuth_deg: float = 0.0
+    """Post-home azimuth [°] relative to oven-facing (same frame as joint az limits)."""
+    home_elevation_deg: float = 90.0
+    """Post-home elevation [°] absolute (0° = horizon, 90° = zenith)."""
+    homing_direction_azimuth: int = 1
+    """Azimuth home seek sign in encoder space (+1 or -1). Leave uses the opposite."""
+    homing_direction_elevation: int = 1
+    """Elevation home seek sign in encoder space (+1 or -1). Leave uses the opposite."""
     homing_velocity_deg_s: float = 2.0
-    """Constant home seek speed [°/s] (leave hall negative, seek both edges positive)."""
+    """Constant home seek speed [°/s] (leave opposite seek, then seek across both edges)."""
     homing_clear_distance_deg: float = 5.0
-    """Extra −encoder travel [°] after hall clears before Seek (settle approach velocity)."""
+    """Extra leave-direction travel [°] after hall clears before Seek (settle approach velocity)."""
+    hall_window_width_deg: float = 8.0
+    """Hall magnet window width [°] edge-to-edge (SITL plant; firmware home check)."""
+    hall_window_tolerance_deg: float = 0.5
+    """Allowed |measured − hall_window_width_deg| after home before ``hall_width`` fault [°]."""
 
     # --- PID (position loop, output shaft degrees → duty ∈ [-1, 1]) ---
     pid_kp: float = 1.2

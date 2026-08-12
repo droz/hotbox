@@ -976,7 +976,8 @@
             `az home: ${s.azimuth_home ?? (s.homed ? "homed" : "unhomed")}`,
             `el home: ${s.elevation_home ?? (s.homed ? "homed" : "unhomed")}`,
             `mode: ${s.mode}`,
-            `az: ${Number(s.azimuth_deg).toFixed(3)}°`,
+            `az rel: ${Number(s.azimuth_rel_deg ?? s.azimuth_deg).toFixed(3)}°`,
+            `az abs: ${Number(s.azimuth_abs_deg ?? s.azimuth_deg).toFixed(3)}°`,
             `el: ${Number(s.elevation_deg).toFixed(3)}°`,
             `∫ az: ${Number(s.azimuth_integral ?? 0).toFixed(4)}`,
             `∫ el: ${Number(s.elevation_integral ?? 0).toFixed(4)}`,
@@ -994,7 +995,7 @@
           if (response.payload.hold_current) {
             return "ok → hold_current (setpoint = live pose)";
           }
-          return `ok → az ${Number(response.payload.azimuth_deg).toFixed(3)}° / el ${Number(response.payload.elevation_deg).toFixed(3)}°`;
+          return `ok → az ${Number(response.payload.azimuth_deg).toFixed(3)}° (rel) / el ${Number(response.payload.elevation_deg).toFixed(3)}°`;
         }
         if (command === "set_velocity" && response?.payload) {
           return `ok → az ${Number(response.payload.azimuth_deg_s).toFixed(3)}°/s / el ${Number(response.payload.elevation_deg_s).toFixed(3)}°/s`;
@@ -1495,7 +1496,7 @@
                   <input data-field="proto-hold-current" type="checkbox" />
                 </div>
                 <div class="protocol-row proto-field" data-fields="set_target" hidden>
-                  <label>Azimuth °</label>
+                  <label>Azimuth ° (rel)</label>
                   <input data-field="proto-az" type="number" step="0.1" value="0" />
                 </div>
                 <div class="protocol-row proto-field" data-fields="set_target" hidden>
@@ -1605,8 +1606,14 @@
         const missById = Object.fromEntries(targetMirrors.map((m) => [String(m.node_id), m.miss_m]));
         Object.keys(mirrors).sort((a, b) => Number(a) - Number(b)).forEach((id) => {
           const status = mirrors[id];
-          const targetAz =
-            status.target_azimuth_deg != null ? Number(status.target_azimuth_deg) : null;
+          const targetAzRel =
+            status.target_azimuth_rel_deg != null
+              ? Number(status.target_azimuth_rel_deg)
+              : status.target_azimuth_deg != null
+                ? Number(status.target_azimuth_deg)
+                : null;
+          const targetAzAbs =
+            status.target_azimuth_abs_deg != null ? Number(status.target_azimuth_abs_deg) : null;
           const targetEl =
             status.target_elevation_deg != null ? Number(status.target_elevation_deg) : null;
           const mirrorMode = normalizeMode(mirrorModes[id] || "track");
@@ -1663,15 +1670,19 @@
             const elTxt = elHallW == null ? "—" : `${Number(elHallW).toFixed(3)}°`;
             hallWidthEl.textContent = `az ${azTxt} · el ${elTxt}`;
           }
-          const azNow = Number(status.azimuth_deg).toFixed(3);
+          const azRel = Number(status.azimuth_rel_deg ?? status.azimuth_deg).toFixed(3);
+          const azAbs = Number(status.azimuth_abs_deg ?? status.azimuth_deg).toFixed(3);
           const elNow = Number(status.elevation_deg).toFixed(3);
-          if (targetAz != null && targetEl != null) {
+          if (targetAzRel != null && targetEl != null) {
+            const tAbs =
+              targetAzAbs != null ? ` / ${targetAzAbs.toFixed(3)}° abs` : "";
             card.querySelector('[data-field="az"]').innerHTML =
-              `${azNow}° <span class="tgt">→ ${targetAz.toFixed(3)}°</span>`;
+              `${azRel}° rel / ${azAbs}° abs <span class="tgt">→ ${targetAzRel.toFixed(3)}° rel${tAbs}</span>`;
             card.querySelector('[data-field="el"]').innerHTML =
               `${elNow}° <span class="tgt">→ ${targetEl.toFixed(3)}°</span>`;
           } else {
-            card.querySelector('[data-field="az"]').textContent = `${azNow}°`;
+            card.querySelector('[data-field="az"]').textContent =
+              `${azRel}° rel / ${azAbs}° abs`;
             card.querySelector('[data-field="el"]').textContent = `${elNow}°`;
           }
           const miss = missById[id];

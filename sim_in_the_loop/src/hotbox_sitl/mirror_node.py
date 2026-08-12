@@ -149,7 +149,9 @@ class MirrorNode:
         velocity_time_constant_s: float = 0.2,
         control_period_s: float = 0.02,
         *,
-        oven_facing_azimuth_deg: float = 0.0,
+        home_azimuth_deg: float = 0.0,
+        home_elevation_deg: float = 90.0,
+        hall_window_width_deg: float = 8.0,
         lib_path: Path | str | None = None,
     ) -> None:
         self.node_id = node_id
@@ -157,14 +159,14 @@ class MirrorNode:
         self.max_velocity_deg_s = max_velocity_deg_s
         self.velocity_time_constant_s = velocity_time_constant_s
         self.control_period_s = control_period_s
-        self.oven_facing_azimuth_deg = float(oven_facing_azimuth_deg)
+        self.hall_half_width_deg = max(0.05, float(hall_window_width_deg) * 0.5)
 
         self._lib = load_cil_library(node_id, lib_path=lib_path)
         self._lib.hotbox_cil_reset()
 
-        # Hall at oven-facing (az) / 90° (el); start on magnets for quick Leave→Seek.
-        self._az_hall_deg: float = self.oven_facing_azimuth_deg
-        self._el_hall_deg: float = 90.0
+        # Plant + firmware share joint frame: az relative to oven-facing, el absolute.
+        self._az_hall_deg: float = float(home_azimuth_deg)
+        self._el_hall_deg: float = float(home_elevation_deg)
         self._az_angle_deg: float = self._az_hall_deg
         self._el_angle_deg: float = self._el_hall_deg
         self._az_vel_deg_s: float = 0.0
@@ -177,7 +179,6 @@ class MirrorNode:
         node_id: int,
         ac: "hotbox_shared.ActuatorConstants",  # type: ignore[name-defined]
         *,
-        oven_facing_azimuth_deg: float = 0.0,
         lib_path: Path | str | None = None,
     ) -> "MirrorNode":
         return cls(
@@ -186,7 +187,9 @@ class MirrorNode:
             max_velocity_deg_s=ac.max_velocity_deg_s,
             velocity_time_constant_s=ac.velocity_time_constant_s,
             control_period_s=ac.control_period_s,
-            oven_facing_azimuth_deg=oven_facing_azimuth_deg,
+            home_azimuth_deg=ac.home_azimuth_deg,
+            home_elevation_deg=ac.home_elevation_deg,
+            hall_window_width_deg=ac.hall_window_width_deg,
             lib_path=lib_path,
         )
 
@@ -195,8 +198,8 @@ class MirrorNode:
         el_ticks = int(round(self._el_angle_deg * self.ticks_per_degree))
         self._lib.hotbox_cil_set_encoder(0, az_ticks)
         self._lib.hotbox_cil_set_encoder(1, el_ticks)
-        az_hall = abs(self._az_angle_deg - self._az_hall_deg) <= 1.0
-        el_hall = abs(self._el_angle_deg - self._el_hall_deg) <= 1.0
+        az_hall = abs(self._az_angle_deg - self._az_hall_deg) <= self.hall_half_width_deg
+        el_hall = abs(self._el_angle_deg - self._el_hall_deg) <= self.hall_half_width_deg
         self._lib.hotbox_cil_set_hall(0, int(az_hall))
         self._lib.hotbox_cil_set_hall(1, int(el_hall))
 
@@ -212,8 +215,8 @@ class MirrorNode:
     def _substep_once(self, dt_s: float) -> None:
         az_ticks = int(round(self._az_angle_deg * self.ticks_per_degree))
         el_ticks = int(round(self._el_angle_deg * self.ticks_per_degree))
-        az_hall = int(abs(self._az_angle_deg - self._az_hall_deg) <= 1.0)
-        el_hall = int(abs(self._el_angle_deg - self._el_hall_deg) <= 1.0)
+        az_hall = int(abs(self._az_angle_deg - self._az_hall_deg) <= self.hall_half_width_deg)
+        el_hall = int(abs(self._el_angle_deg - self._el_hall_deg) <= self.hall_half_width_deg)
         pwm_az = ctypes.c_float()
         pwm_el = ctypes.c_float()
         self._lib.hotbox_cil_step(
@@ -263,6 +266,8 @@ class MirrorNode:
             pid_velocity_kp=fw.pid_velocity_kp,
             pid_velocity_ki=fw.pid_velocity_ki,
             pid_velocity_kd=fw.pid_velocity_kd,
+            az_hall_width_deg=fw.az_hall_width_deg,
+            el_hall_width_deg=fw.el_hall_width_deg,
             mode=fw.mode,
         )
 
