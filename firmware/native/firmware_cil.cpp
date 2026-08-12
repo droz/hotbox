@@ -47,7 +47,8 @@ void hotbox_cil_reset(void) {
     g_initialised = false;
     for (int i = 0; i < 32; ++i) {
         g_hal_analog_out[i] = 0;
-        g_hal_digital_in[i] = 0;
+        // Active-low halls: idle HIGH (not triggered).
+        g_hal_digital_in[i] = 1;
         g_hal_digital_out[i] = 0;
     }
     for (int i = 0; i < 2; ++i) {
@@ -63,6 +64,13 @@ void hotbox_cil_set_encoder(int axis, long ticks) {
     if (axis >= 0 && axis < 2) {
         g_encoder_counts[axis] = ticks;
     }
+}
+
+long hotbox_cil_get_encoder(int axis) {
+    if (axis >= 0 && axis < 2) {
+        return g_encoder_counts[axis];
+    }
+    return 0;
 }
 
 void hotbox_cil_set_hall(int axis, int triggered) {

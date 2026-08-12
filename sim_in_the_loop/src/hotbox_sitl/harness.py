@@ -90,12 +90,16 @@ class SitlHarness:
         self._latest: dict[str, Any] = {}
         self.nodes: dict[int, SimulatedMirrorNode | FirmwareMirrorNode] = {}
         for node_id in node_ids:
+            facing = oven_facing_azimuth_deg(
+                self.system.mount_world(node_id), self.system.absorber.center_world
+            )
             if node_id == firmware_cil_node_id:
-                self.nodes[node_id] = FirmwareMirrorNode.from_constants(node_id, self.system.actuator)
-            else:
-                facing = oven_facing_azimuth_deg(
-                    self.system.mount_world(node_id), self.system.absorber.center_world
+                self.nodes[node_id] = FirmwareMirrorNode.from_constants(
+                    node_id,
+                    self.system.actuator,
+                    oven_facing_azimuth_deg=facing,
                 )
+            else:
                 self.nodes[node_id] = SimulatedMirrorNode.from_constants(
                     node_id,
                     self.system.actuator,

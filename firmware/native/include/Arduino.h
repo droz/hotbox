@@ -51,6 +51,14 @@ class String {
     return v;
   }
 
+  bool startsWith(const char* prefix) const {
+    if (prefix == nullptr) {
+      return false;
+    }
+    return s.rfind(prefix, 0) == 0;
+  }
+  bool startsWith(const String& prefix) const { return startsWith(prefix.s.c_str()); }
+
   void toLowerCase() {
     for (char& c : s) {
       c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));

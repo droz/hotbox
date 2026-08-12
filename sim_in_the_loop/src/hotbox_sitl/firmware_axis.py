@@ -19,7 +19,7 @@ import os
 from pathlib import Path
 import subprocess
 
-from hotbox_controller.protocol import CommandName, MirrorCommand, MirrorStatus
+from hotbox_controller.protocol import MirrorCommand, MirrorStatus
 
 
 _LIB_NAMES = ("libfirmware_cil.dylib", "libfirmware_cil.so", "firmware_cil.dll")
@@ -112,6 +112,9 @@ def load_cil_library(path: Path | str | None = None) -> ctypes.CDLL:
     lib.hotbox_cil_set_encoder.argtypes = [ctypes.c_int, ctypes.c_long]
     lib.hotbox_cil_set_encoder.restype = None
 
+    lib.hotbox_cil_get_encoder.argtypes = [ctypes.c_int]
+    lib.hotbox_cil_get_encoder.restype = ctypes.c_long
+
     lib.hotbox_cil_set_hall.argtypes = [ctypes.c_int, ctypes.c_int]
     lib.hotbox_cil_set_hall.restype = None
 
@@ -159,6 +162,8 @@ class FirmwareMirrorNode:
         max_velocity_deg_s: float = 30.0,
         velocity_time_constant_s: float = 0.2,
         control_period_s: float = 0.02,
+        *,
+        oven_facing_azimuth_deg: float = 0.0,
         lib_path: Path | str | None = None,
     ) -> None:
         self.node_id = node_id
@@ -166,22 +171,28 @@ class FirmwareMirrorNode:
         self.max_velocity_deg_s = max_velocity_deg_s
         self.velocity_time_constant_s = velocity_time_constant_s
         self.control_period_s = control_period_s
+        self.oven_facing_azimuth_deg = float(oven_facing_azimuth_deg)
 
         self._lib = load_cil_library(lib_path)
         self._lib.hotbox_cil_reset()
 
-        self._az_angle_deg: float = 0.0
-        self._el_angle_deg: float = 0.0
+        # Match SimulatedMirrorNode / firmware: hall at oven-facing (az) and 90° (el),
+        # start on the magnets so LeaveSwitch → Seek completes quickly.
+        self._az_hall_deg: float = self.oven_facing_azimuth_deg
+        self._el_hall_deg: float = 90.0
+        self._az_angle_deg: float = self._az_hall_deg
+        self._el_angle_deg: float = self._el_hall_deg
         self._az_vel_deg_s: float = 0.0
         self._el_vel_deg_s: float = 0.0
-        self._az_hall_deg: float = 0.0
-        self._el_hall_deg: float = 0.0
+        self._inject_plant_state()
 
     @classmethod
     def from_constants(
         cls,
         node_id: int,
         ac: "hotbox_shared.ActuatorConstants",  # type: ignore[name-defined]
+        *,
+        oven_facing_azimuth_deg: float = 0.0,
         lib_path: Path | str | None = None,
     ) -> "FirmwareMirrorNode":
         return cls(
@@ -190,6 +201,7 @@ class FirmwareMirrorNode:
             max_velocity_deg_s=ac.max_velocity_deg_s,
             velocity_time_constant_s=ac.velocity_time_constant_s,
             control_period_s=ac.control_period_s,
+            oven_facing_azimuth_deg=oven_facing_azimuth_deg,
             lib_path=lib_path,
         )
 
@@ -228,21 +240,21 @@ class FirmwareMirrorNode:
             ctypes.byref(pwm_az),
             ctypes.byref(pwm_el),
         )
+        # finishHoming remaps encoder counts in firmware; keep the plant in that frame
+        # or the next inject undoes the zero and the post-home servo flees.
+        az_after = int(self._lib.hotbox_cil_get_encoder(0))
+        el_after = int(self._lib.hotbox_cil_get_encoder(1))
+        if az_after != az_ticks:
+            self._az_angle_deg = az_after / self.ticks_per_degree
+            self._az_vel_deg_s = 0.0
+        if el_after != el_ticks:
+            self._el_angle_deg = el_after / self.ticks_per_degree
+            self._el_vel_deg_s = 0.0
         self._apply_pwm_to_plant(pwm_az.value, pwm_el.value, dt_s)
 
     def handle_command(self, command: MirrorCommand) -> None:
         if command.node_id != self.node_id:
             return
-        # Harness convenience only: start near the hall so a home finishes in sim time.
-        if command.command == CommandName.HOME:
-            axis = str(command.payload.get("axis", "both")).strip().lower()
-            if axis in {"az", "azimuth", "both"}:
-                self._az_angle_deg = self._az_hall_deg + 5.0
-                self._az_vel_deg_s = 0.0
-            if axis in {"el", "elevation", "both"}:
-                self._el_angle_deg = self._el_hall_deg + 5.0
-                self._el_vel_deg_s = 0.0
-            self._inject_plant_state()
         line = command.to_wire().decode("utf-8").strip()
         self._lib.hotbox_cil_handle_line(line.encode("utf-8"))
 
@@ -250,13 +262,14 @@ class FirmwareMirrorNode:
         raw = self._lib.hotbox_cil_status_json()
         text = (raw.decode("utf-8") if raw else "") + "\n"
         fw = MirrorStatus.from_wire(text.encode("utf-8"))
+        # Prefer firmware pose (same frame as targets / home remap).
         return MirrorStatus(
             node_id=self.node_id,
             azimuth_home=fw.azimuth_home,
             elevation_home=fw.elevation_home,
             fault=fw.fault,
-            azimuth_deg=self._az_angle_deg,
-            elevation_deg=self._el_angle_deg,
+            azimuth_deg=fw.azimuth_deg,
+            elevation_deg=fw.elevation_deg,
             target_azimuth_deg=fw.target_azimuth_deg,
             target_elevation_deg=fw.target_elevation_deg,
             azimuth_integral=fw.azimuth_integral,
