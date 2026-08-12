@@ -11,6 +11,7 @@ class CommandName(StrEnum):
     DISCOVER = "discover"
     HOME = "home"
     STOP = "stop"
+    START = "start"
     SET_TARGET = "set_target"
     GET_STATUS = "get_status"
     RESET = "reset"
@@ -30,6 +31,7 @@ class CommandId(IntEnum):
     SET_PID_POS = 7
     SET_VELOCITY = 8
     SET_PID_VEL = 9
+    START = 10
 
 
 _COMMAND_TO_ID = {
@@ -42,6 +44,7 @@ _COMMAND_TO_ID = {
     CommandName.SET_PID_POS: CommandId.SET_PID_POS,
     CommandName.SET_VELOCITY: CommandId.SET_VELOCITY,
     CommandName.SET_PID_VEL: CommandId.SET_PID_VEL,
+    CommandName.START: CommandId.START,
 }
 _ID_TO_COMMAND = {value: name for name, value in _COMMAND_TO_ID.items()}
 
@@ -78,9 +81,11 @@ class MirrorCommand:
     def to_can_frame(self) -> bytes:
         cmd_id = int(_COMMAND_TO_ID[self.command])
         if self.command == CommandName.SET_TARGET:
+            hold_current = bool(self.payload.get("hold_current", False))
             az = int(round(float(self.payload.get("azimuth_deg", 0.0)) * 100.0))
             el = int(round(float(self.payload.get("elevation_deg", 0.0)) * 100.0))
-            return struct.pack("<Bhh", cmd_id, az, el)
+            flags = 0x01 if hold_current else 0
+            return struct.pack("<BhhB", cmd_id, az, el, flags)
         if self.command == CommandName.SET_VELOCITY:
             az = int(round(float(self.payload.get("azimuth_deg_s", 0.0)) * 100.0))
             el = int(round(float(self.payload.get("elevation_deg_s", 0.0)) * 100.0))
@@ -101,7 +106,12 @@ class MirrorCommand:
         payload: dict[str, Any] = {}
         if command == CommandName.SET_TARGET and len(data) >= 5:
             az, el = struct.unpack("<hh", data[1:5])
-            payload = {"azimuth_deg": az / 100.0, "elevation_deg": el / 100.0}
+            hold_current = bool(len(data) >= 6 and (data[5] & 0x01))
+            payload = {
+                "azimuth_deg": az / 100.0,
+                "elevation_deg": el / 100.0,
+                "hold_current": hold_current,
+            }
         elif command == CommandName.SET_VELOCITY and len(data) >= 5:
             az, el = struct.unpack("<hh", data[1:5])
             payload = {"azimuth_deg_s": az / 100.0, "elevation_deg_s": el / 100.0}
@@ -119,6 +129,9 @@ class MirrorStatus:
     fault: str | None = None
     azimuth_deg: float = 0.0
     elevation_deg: float = 0.0
+    # Last position setpoint from set_target (USB/JSON status). None on old firmware / CAN.
+    target_azimuth_deg: float | None = None
+    target_elevation_deg: float | None = None
     azimuth_integral: float = 0.0
     elevation_integral: float = 0.0
     pid_kp: float | None = None
@@ -150,6 +163,10 @@ class MirrorStatus:
             "az_hall_width_deg": self.az_hall_width_deg,
             "el_hall_width_deg": self.el_hall_width_deg,
         }
+        if self.target_azimuth_deg is not None:
+            out["target_azimuth_deg"] = self.target_azimuth_deg
+        if self.target_elevation_deg is not None:
+            out["target_elevation_deg"] = self.target_elevation_deg
         if self.pid_kp is not None:
             out["pid_kp"] = self.pid_kp
         if self.pid_ki is not None:
@@ -193,6 +210,8 @@ class MirrorStatus:
             fault=raw.get("fault"),
             azimuth_deg=float(raw.get("azimuth_deg", 0.0)),
             elevation_deg=float(raw.get("elevation_deg", 0.0)),
+            target_azimuth_deg=_opt_float("target_azimuth_deg"),
+            target_elevation_deg=_opt_float("target_elevation_deg"),
             azimuth_integral=float(raw.get("azimuth_integral", 0.0)),
             elevation_integral=float(raw.get("elevation_integral", 0.0)),
             pid_kp=float(raw["pid_kp"]) if raw.get("pid_kp") is not None else None,

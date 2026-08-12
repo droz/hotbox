@@ -11,8 +11,8 @@
         --text: #e8eef4;
         --muted: #9aa7b5;
         --accent: #f08a4b;
-        --est: #7ec8ff;
-        --true: #ffd166;
+        --live: #7ec8ff;
+        --target: #ffd166;
         --gap: 0.75rem;
       }
       * { box-sizing: border-box; }
@@ -278,6 +278,15 @@
       }
       button:hover { border-color: var(--accent); }
       button.tiny { padding: 0.28rem 0.45rem; font-size: 0.75rem; }
+      button.tiny.playstop {
+        min-width: 2rem;
+        font-size: 0.85rem;
+        line-height: 1;
+        padding: 0.28rem 0.4rem;
+      }
+      button.tiny.playstop[data-running="1"] {
+        border-color: #c07060;
+      }
       button:disabled {
         opacity: 0.45;
         cursor: not-allowed;
@@ -358,8 +367,8 @@
         gap: 0.35rem;
       }
       .swatch { display: inline-block; width: 0.7rem; height: 0.7rem; border-radius: 2px; margin-right: 0.25rem; vertical-align: middle; }
-      .swatch.est { background: var(--est); }
-      .swatch.true { background: var(--true); }
+      .swatch.live { background: var(--live); }
+      .swatch.target { background: var(--target); }
       pre {
         margin: 0.4rem 0 0;
         max-height: 12vh;
@@ -477,6 +486,13 @@
         border-radius: 8px;
         padding: 0.3rem 0.45rem;
         font-size: 0.78rem;
+      }
+      .protocol-form input[type="checkbox"] {
+        width: auto;
+        justify-self: start;
+        margin: 0;
+        padding: 0;
+        accent-color: var(--accent);
       }
       .protocol-actions {
         display: flex;
@@ -631,7 +647,7 @@
   <body>
     <header>
       <h1>Hot-Box Controller</h1>
-      <p>World frame: +X east, +Y north, +Z up · live status vs true (sim) geometry</p>
+      <p>World frame: +X east, +Y north, +Z up · current pose (blue) vs firmware target (yellow)</p>
     </header>
     <main class="app">
       <section class="viewport">
@@ -640,8 +656,8 @@
         </div>
         <div class="viewport-meta">
           <span id="scene-status">Loading 3D viewer…</span>
-          <span><span class="swatch est"></span>live</span>
-          <span><span class="swatch true"></span>true (sim)</span>
+          <span><span class="swatch live"></span>current</span>
+          <span><span class="swatch target"></span>target</span>
         </div>
       </section>
       <div
@@ -923,7 +939,11 @@
           result.classList.add("empty");
           result.classList.remove("error");
         } else if (command === "set_target") {
-          result.textContent = "Set az/el above, then Send.";
+          result.textContent = "Set az/el (or hold current), then Send. Does not start PID.";
+          result.classList.add("empty");
+          result.classList.remove("error");
+        } else if (command === "start") {
+          result.textContent = "Engage position PID toward the current setpoint.";
           result.classList.add("empty");
           result.classList.remove("error");
         } else if (command === "set_velocity") {
@@ -971,6 +991,9 @@
           return `ok → home axis=${response.payload.axis || "both"}`;
         }
         if (command === "set_target" && response?.payload) {
+          if (response.payload.hold_current) {
+            return "ok → hold_current (setpoint = live pose)";
+          }
           return `ok → az ${Number(response.payload.azimuth_deg).toFixed(3)}° / el ${Number(response.payload.elevation_deg).toFixed(3)}°`;
         }
         if (command === "set_velocity" && response?.payload) {
@@ -1028,8 +1051,12 @@
         const command = card.querySelector('[data-field="proto-command"]').value;
         const body = { command, node_id: Number(nodeId) };
         if (command === "set_target") {
-          body.azimuth_deg = Number(card.querySelector('[data-field="proto-az"]').value);
-          body.elevation_deg = Number(card.querySelector('[data-field="proto-el"]').value);
+          const hold = !!card.querySelector('[data-field="proto-hold-current"]')?.checked;
+          body.hold_current = hold;
+          if (!hold) {
+            body.azimuth_deg = Number(card.querySelector('[data-field="proto-az"]').value);
+            body.elevation_deg = Number(card.querySelector('[data-field="proto-el"]').value);
+          }
         }
         if (command === "set_velocity") {
           body.azimuth_deg_s = Number(card.querySelector('[data-field="proto-az-rate"]').value);
@@ -1062,6 +1089,16 @@
         card.dataset.protocolBound = "1";
         const commandSelect = card.querySelector('[data-field="proto-command"]');
         commandSelect.addEventListener("change", () => updateProtocolFields(card));
+        const holdBox = card.querySelector('[data-field="proto-hold-current"]');
+        if (holdBox) {
+          holdBox.addEventListener("change", () => {
+            const disabled = !!holdBox.checked;
+            const az = card.querySelector('[data-field="proto-az"]');
+            const el = card.querySelector('[data-field="proto-el"]');
+            if (az) az.disabled = disabled;
+            if (el) el.disabled = disabled;
+          });
+        }
         updateProtocolFields(card);
         card.querySelector('[data-field="proto-send"]').addEventListener("click", () => {
           sendProtocolCommand(card, nodeId).catch((err) => {
@@ -1118,6 +1155,8 @@
 
       const JOG_MAX_RATE_DEG_S = 8;
       const JOG_DEADZONE = 0.18; // normalized stick radius ignored near center
+      const JOG_RAMP_DOWN_MS = 200;
+      const JOG_RAMP_STEPS = 5;
       const jogControllers = new Map(); // nodeId -> controller
 
       function sendJogRates(nodeId, azRate, elRate) {
@@ -1152,6 +1191,13 @@
         let pending = null;
         let sendTimer = null;
         let holdTimer = null;
+        let rampTimer = null;
+
+        function cancelRamp() {
+          if (rampTimer == null) return;
+          clearInterval(rampTimer);
+          rampTimer = null;
+        }
 
         function setKnob(nx, ny) {
           const r = radius();
@@ -1219,24 +1265,56 @@
 
         function stopJog(opts = {}) {
           const sendZero = opts.sendZero !== false;
+          const fromAz = heldRates.az || lastSent.az;
+          const fromEl = heldRates.el || lastSent.el;
           active = false;
           pointerId = null;
           stick.classList.remove("dragging");
           setKnob(0, 0);
           pending = null;
-          heldRates = { az: 0, el: 0 };
-          lastSent = { az: 0, el: 0 };
           stopHoldRepeat();
           if (sendTimer != null) {
             clearTimeout(sendTimer);
             sendTimer = null;
           }
-          if (sendZero) sendJogRates(nodeId, 0, 0);
+          if (!sendZero) {
+            cancelRamp();
+            heldRates = { az: 0, el: 0 };
+            lastSent = { az: 0, el: 0 };
+            return;
+          }
+          // Ramp velocity to 0 over ~200ms, then host hold_current + start.
+          cancelRamp();
+          if (Math.abs(fromAz) < 0.05 && Math.abs(fromEl) < 0.05) {
+            heldRates = { az: 0, el: 0 };
+            lastSent = { az: 0, el: 0 };
+            sendJogRates(nodeId, 0, 0);
+            return;
+          }
+          let step = 0;
+          const intervalMs = Math.max(16, JOG_RAMP_DOWN_MS / JOG_RAMP_STEPS);
+          rampTimer = setInterval(() => {
+            step += 1;
+            const t = Math.min(1, step / JOG_RAMP_STEPS);
+            const az = fromAz * (1 - t);
+            const el = fromEl * (1 - t);
+            lastSent = { az, el };
+            heldRates = { az, el };
+            meta.textContent = `az ${az.toFixed(1)}°/s · el ${el.toFixed(1)}°/s`;
+            sendJogRates(nodeId, az, el);
+            if (step >= JOG_RAMP_STEPS) {
+              cancelRamp();
+              heldRates = { az: 0, el: 0 };
+              lastSent = { az: 0, el: 0 };
+              sendJogRates(nodeId, 0, 0);
+            }
+          }, intervalMs);
         }
 
         stick.addEventListener("pointerdown", (event) => {
           if (wrap.hidden || wrap.classList.contains("is-disabled")) return;
           event.preventDefault();
+          cancelRamp();
           active = true;
           pointerId = event.pointerId;
           stick.classList.add("dragging");
@@ -1373,6 +1451,13 @@
             </div>
             <div class="mirror-secondary">
               <button class="tiny" data-action="home">Home</button>
+              <button
+                class="tiny playstop"
+                data-action="playstop"
+                data-running="0"
+                title="Start / stop position PID"
+                aria-label="Start position PID"
+              >▶</button>
               <button class="tiny" data-action="reset" title="Soft reset (protocol reset → ESP.restart)">Reset</button>
             </div>
             <details class="protocol">
@@ -1386,6 +1471,7 @@
                   <label>Command</label>
                   <select data-field="proto-command">
                     <option value="home">home</option>
+                    <option value="start">start</option>
                     <option value="stop">stop</option>
                     <option value="set_target">set_target</option>
                     <option value="set_velocity">set_velocity</option>
@@ -1403,6 +1489,10 @@
                     <option value="az">azimuth</option>
                     <option value="el">elevation</option>
                   </select>
+                </div>
+                <div class="protocol-row proto-field" data-fields="set_target" hidden>
+                  <label>Hold current</label>
+                  <input data-field="proto-hold-current" type="checkbox" />
                 </div>
                 <div class="protocol-row proto-field" data-fields="set_target" hidden>
                   <label>Azimuth °</label>
@@ -1478,6 +1568,11 @@
             if (action === "home") {
               jogControllers.get(String(nodeId))?.stop({ sendZero: false });
               post("/api/home_one", { node_id: id }).then(() => refreshState()).catch(console.error);
+            } else if (action === "playstop") {
+              jogControllers.get(String(nodeId))?.stop({ sendZero: false });
+              const running = button.getAttribute("data-running") === "1";
+              const endpoint = running ? "/api/stop_one" : "/api/start_one";
+              post(endpoint, { node_id: id }).then(() => refreshState()).catch(console.error);
             } else if (action === "reset") {
               jogControllers.get(String(nodeId))?.stop({ sendZero: false });
               button.disabled = true;
@@ -1500,7 +1595,6 @@
 
       function updateMirrorCards(state) {
         const mirrors = state.mirrors || {};
-        const targets = state.targets || {};
         const mirrorModes = state.mirror_modes || {};
         const traffic = state.protocol_traffic || [];
         const targetMirrors =
@@ -1511,7 +1605,10 @@
         const missById = Object.fromEntries(targetMirrors.map((m) => [String(m.node_id), m.miss_m]));
         Object.keys(mirrors).sort((a, b) => Number(a) - Number(b)).forEach((id) => {
           const status = mirrors[id];
-          const target = targets[id];
+          const targetAz =
+            status.target_azimuth_deg != null ? Number(status.target_azimuth_deg) : null;
+          const targetEl =
+            status.target_elevation_deg != null ? Number(status.target_elevation_deg) : null;
           const mirrorMode = normalizeMode(mirrorModes[id] || "track");
           const card = ensureMirrorCard(id);
           const statusPill = card.querySelector('[data-field="status-pill"]');
@@ -1539,6 +1636,25 @@
           }
           card.querySelector('[data-field="fw-mode"]').textContent = fwMode;
           card.querySelector('[data-field="home-state"]').textContent = `az ${azHome} · el ${elHome}`;
+          const playstop = card.querySelector('[data-action="playstop"]');
+          if (playstop) {
+            // Drive icon from firmware mode in get_status (not supervisor mode).
+            const running =
+              fwMode === "position" || fwMode === "velocity" || fwMode === "homing";
+            playstop.setAttribute("data-running", running ? "1" : "0");
+            playstop.textContent = running ? "⏹" : "▶";
+            playstop.setAttribute(
+              "aria-label",
+              running
+                ? (fwMode === "homing" ? "Stop homing" : "Stop motors")
+                : "Start position PID"
+            );
+            playstop.title = running
+              ? (fwMode === "homing"
+                ? "Stop homing (coast)"
+                : "Stop PID (coast; setpoint unchanged)")
+              : "Start position PID toward current setpoint";
+          }
           const azHallW = status.az_hall_width_deg;
           const elHallW = status.el_hall_width_deg;
           const hallWidthEl = card.querySelector('[data-field="hall-width"]');
@@ -1549,11 +1665,11 @@
           }
           const azNow = Number(status.azimuth_deg).toFixed(3);
           const elNow = Number(status.elevation_deg).toFixed(3);
-          if (target) {
+          if (targetAz != null && targetEl != null) {
             card.querySelector('[data-field="az"]').innerHTML =
-              `${azNow}° <span class="tgt">→ ${Number(target.azimuth_deg).toFixed(3)}°</span>`;
+              `${azNow}° <span class="tgt">→ ${targetAz.toFixed(3)}°</span>`;
             card.querySelector('[data-field="el"]').innerHTML =
-              `${elNow}° <span class="tgt">→ ${Number(target.elevation_deg).toFixed(3)}°</span>`;
+              `${elNow}° <span class="tgt">→ ${targetEl.toFixed(3)}°</span>`;
           } else {
             card.querySelector('[data-field="az"]').textContent = `${azNow}°`;
             card.querySelector('[data-field="el"]').textContent = `${elNow}°`;
@@ -1798,10 +1914,10 @@
       );
       scene.add(sunStem);
 
+      const liveGroup = new THREE.Group();
       const targetGroup = new THREE.Group();
-      const trueGroup = new THREE.Group();
+      scene.add(liveGroup);
       scene.add(targetGroup);
-      scene.add(trueGroup);
 
       function clearGroup(group) {
         while (group.children.length) {
@@ -1924,11 +2040,11 @@
         ovenGroup.add(handle);
       }
 
-      function renderGeometry(targetScene, truth) {
+      function renderGeometry(liveScene, targetScene) {
+        clearGroup(liveGroup);
         clearGroup(targetGroup);
-        clearGroup(trueGroup);
 
-        const source = targetScene || truth;
+        const source = liveScene || targetScene;
         if (source?.oven) renderOven(source.oven);
 
         if (source?.sun?.display_position) {
@@ -1945,11 +2061,12 @@
             `pos (${p[0].toFixed(2)}, ${p[1].toFixed(2)}, ${p[2].toFixed(2)})`;
         }
 
-        if (targetScene?.mirrors) {
-          targetScene.mirrors.forEach((mirror) => addMirrorAssembly(targetGroup, mirror, 0x7ec8ff));
+        // Blue = current reported pose; yellow = commanded target (hardware + SITL).
+        if (liveScene?.mirrors) {
+          liveScene.mirrors.forEach((mirror) => addMirrorAssembly(liveGroup, mirror, 0x7ec8ff));
         }
-        if (truth?.mirrors) {
-          truth.mirrors.forEach((mirror) => addMirrorAssembly(trueGroup, mirror, 0xffd166));
+        if (targetScene?.mirrors) {
+          targetScene.mirrors.forEach((mirror) => addMirrorAssembly(targetGroup, mirror, 0xffd166));
         }
       }
 
@@ -1962,11 +2079,10 @@
       }
 
       window.hotboxOnState = (state) => {
-        // Prefer live firmware angles so jog/home redraw immediately; keep
-        // commanded ``target`` available for overlays if needed later.
-        const primary =
-          state.geometry?.live || state.geometry?.estimated || state.geometry?.target;
-        renderGeometry(primary, state.geometry?.true);
+        const live =
+          state.geometry?.live || state.geometry?.estimated || null;
+        const target = state.geometry?.target || null;
+        renderGeometry(live, target);
       };
       if (window.hotboxLatestState) window.hotboxOnState(window.hotboxLatestState);
 

@@ -68,7 +68,7 @@ class HeatDemandRequest(BaseModel):
 class ProtocolCommandRequest(BaseModel):
     """Low-level wire command for mirror controllers (bypasses supervisor helpers).
 
-    Commands: home, stop, set_target, set_velocity, get_status, clear_error, reset,
+    Commands: home, stop, start, set_target, set_velocity, get_status, clear_error, reset,
     set_pid_pos, set_pid_vel, discover.
     ``discover`` rediscovers the fleet and ignores ``node_id``.
     Put the mirror in supervisor ``raw`` mode so Track/Park/Jog do not overwrite
@@ -80,6 +80,7 @@ class ProtocolCommandRequest(BaseModel):
     # set_target
     azimuth_deg: float | None = None
     elevation_deg: float | None = None
+    hold_current: bool | None = None
     mode: str | None = None
     # set_velocity
     azimuth_deg_s: float | None = None
@@ -100,6 +101,7 @@ PROTOCOL_COMMANDS = frozenset(
     {
         CommandName.HOME.value,
         CommandName.STOP.value,
+        CommandName.START.value,
         CommandName.SET_TARGET.value,
         CommandName.SET_VELOCITY.value,
         CommandName.GET_STATUS.value,
@@ -354,8 +356,67 @@ class ControllerApplication:
         self.fleet.home(node_id)
 
     def stop_one(self, node_id: int) -> None:
-        self.set_mirror_mode(node_id, "jog")
+        """Coast motors (PID off). Leaves the firmware setpoint unchanged."""
+        node_id = int(node_id)
+        # Leave Track/Park so the control loop does not immediately re-start PID.
+        # Do not seed/start a hold — we're stopping.
+        if self.node_mode(node_id) in {"track", "park"}:
+            self._node_modes[node_id] = "jog"
         self.fleet.stop(node_id)
+        self._halt_jog_rates(node_id)
+        node = self.fleet.nodes().get(node_id)
+        if node is not None:
+            prev = node.status
+            node.status = MirrorStatus(
+                node_id=prev.node_id,
+                azimuth_home=prev.azimuth_home,
+                elevation_home=prev.elevation_home,
+                fault=prev.fault,
+                azimuth_deg=prev.azimuth_deg,
+                elevation_deg=prev.elevation_deg,
+                target_azimuth_deg=prev.target_azimuth_deg,
+                target_elevation_deg=prev.target_elevation_deg,
+                azimuth_integral=prev.azimuth_integral,
+                elevation_integral=prev.elevation_integral,
+                pid_kp=prev.pid_kp,
+                pid_ki=prev.pid_ki,
+                pid_kd=prev.pid_kd,
+                pid_velocity_kp=prev.pid_velocity_kp,
+                pid_velocity_ki=prev.pid_velocity_ki,
+                pid_velocity_kd=prev.pid_velocity_kd,
+                az_hall_width_deg=prev.az_hall_width_deg,
+                el_hall_width_deg=prev.el_hall_width_deg,
+                mode="idle",
+            )
+
+    def start_one(self, node_id: int) -> None:
+        """Engage position PID toward the firmware's current setpoint."""
+        node_id = int(node_id)
+        self.fleet.start(node_id)
+        node = self.fleet.nodes().get(node_id)
+        if node is not None:
+            prev = node.status
+            node.status = MirrorStatus(
+                node_id=prev.node_id,
+                azimuth_home=prev.azimuth_home,
+                elevation_home=prev.elevation_home,
+                fault=prev.fault,
+                azimuth_deg=prev.azimuth_deg,
+                elevation_deg=prev.elevation_deg,
+                target_azimuth_deg=prev.target_azimuth_deg,
+                target_elevation_deg=prev.target_elevation_deg,
+                azimuth_integral=prev.azimuth_integral,
+                elevation_integral=prev.elevation_integral,
+                pid_kp=prev.pid_kp,
+                pid_ki=prev.pid_ki,
+                pid_kd=prev.pid_kd,
+                pid_velocity_kp=prev.pid_velocity_kp,
+                pid_velocity_ki=prev.pid_velocity_ki,
+                pid_velocity_kd=prev.pid_velocity_kd,
+                az_hall_width_deg=prev.az_hall_width_deg,
+                el_hall_width_deg=prev.el_hall_width_deg,
+                mode="position",
+            )
 
     def _halt_jog_rates(self, node_id: int) -> None:
         """Zero host jog rates without changing supervisor mode or releasing the hold pose."""
@@ -364,7 +425,7 @@ class ControllerApplication:
         self._jog_last_mono[node_id] = time.monotonic()
 
     def _seed_jog_hold(self, node_id: int) -> None:
-        """Capture current pose and command the firmware to hold it (position servo)."""
+        """Capture current pose as the firmware setpoint without starting the PID."""
         node_id = int(node_id)
         node = self.fleet.nodes().get(node_id)
         if node is None:
@@ -375,9 +436,31 @@ class ControllerApplication:
         self._jog_pose[node_id] = (az, el)
         self._jog_rates[node_id] = (0.0, 0.0)
         self._jog_last_mono[node_id] = time.monotonic()
-        self._apply_targets(
-            {node_id: TrackingTarget(azimuth_deg=az, elevation_deg=el, mode="tracking")},
-            allow_dual=False,
+        try:
+            # Capture live pose and engage position hold until the stick moves.
+            self.fleet.hold_current(node_id, start=True)
+        except ConnectionError:
+            return
+        node.status = MirrorStatus(
+            node_id=status.node_id,
+            azimuth_home=status.azimuth_home,
+            elevation_home=status.elevation_home,
+            fault=status.fault,
+            azimuth_deg=az,
+            elevation_deg=el,
+            target_azimuth_deg=az,
+            target_elevation_deg=el,
+            azimuth_integral=status.azimuth_integral,
+            elevation_integral=status.elevation_integral,
+            pid_kp=status.pid_kp,
+            pid_ki=status.pid_ki,
+            pid_kd=status.pid_kd,
+            pid_velocity_kp=status.pid_velocity_kp,
+            pid_velocity_ki=status.pid_velocity_ki,
+            pid_velocity_kd=status.pid_velocity_kd,
+            az_hall_width_deg=status.az_hall_width_deg,
+            el_hall_width_deg=status.el_hall_width_deg,
+            mode="position",
         )
 
     def _advance_jog(self, node_id: int, *, status: Any | None = None) -> None:
@@ -529,10 +612,28 @@ class ControllerApplication:
         targets = self._command_targets(sun, statuses)
         mirror_modes = {str(node_id): self.node_mode(node_id) for node_id in self.fleet.nodes()}
 
+        # Yellow overlay: firmware-reported position setpoints (from get_status),
+        # not the supervisor's desired track/park commands.
+        hardware_targets = {
+            int(node_id): TrackingTarget(
+                azimuth_deg=float(
+                    status.target_azimuth_deg
+                    if status.target_azimuth_deg is not None
+                    else status.azimuth_deg
+                ),
+                elevation_deg=float(
+                    status.target_elevation_deg
+                    if status.target_elevation_deg is not None
+                    else status.elevation_deg
+                ),
+                mode="tracking",
+            )
+            for node_id, status in statuses.items()
+        }
         target_scene = build_target_scene(
             sun=sun,
             absorber_world=self.absorber_world,
-            targets=targets,
+            targets=hardware_targets,
             calibrations=self.calibrations,
             absorber_height_m=self.config.oven.absorber_height_m,
             default_oa_distance_m=self.config.mirror.default_oa_distance_m,
@@ -615,11 +716,11 @@ class ControllerApplication:
         )
 
     def jog(self, request: JogRequest) -> None:
-        """Update host-side jog rates; nonzero → ``set_velocity``, zero → ``stop``."""
+        """Update host-side jog rates; nonzero → ``set_velocity``, zero → hold-current + start."""
         node_id = int(request.node_id)
         az = float(request.azimuth_rate_deg_s)
         el = float(request.elevation_rate_deg_s)
-        # Only enter Jog mode when commanding motion. A zero-rate "stop" must not
+        # Only enter Jog mode when commanding motion. A zero-rate release must not
         # override a concurrent Track/Park mode change (UI races on stick release).
         if abs(az) > 1e-9 or abs(el) > 1e-9:
             previous = self.node_mode(node_id)
@@ -633,17 +734,38 @@ class ControllerApplication:
         if abs(az) > 1e-9 or abs(el) > 1e-9:
             self._apply_velocities({node_id: (az, el)})
             return
-        # Stick centered / released: coast via stop (PID off). Do not chase a
-        # lagged set_target hold pose — that yanks the mirror backward.
+        # Stick centered / released: capture live pose as setpoint and engage
+        # position PID (do not coast via stop — that would leave an old setpoint).
         try:
-            self.fleet.stop(node_id)
+            self.fleet.hold_current(node_id, start=True)
         except ConnectionError:
             return
         node = self.fleet.nodes().get(node_id)
         if node is not None:
-            self._jog_pose[node_id] = (
-                float(node.status.azimuth_deg),
-                float(node.status.elevation_deg),
+            prev = node.status
+            az_now = float(prev.azimuth_deg)
+            el_now = float(prev.elevation_deg)
+            self._jog_pose[node_id] = (az_now, el_now)
+            node.status = MirrorStatus(
+                node_id=prev.node_id,
+                azimuth_home=prev.azimuth_home,
+                elevation_home=prev.elevation_home,
+                fault=prev.fault,
+                azimuth_deg=az_now,
+                elevation_deg=el_now,
+                target_azimuth_deg=az_now,
+                target_elevation_deg=el_now,
+                azimuth_integral=prev.azimuth_integral,
+                elevation_integral=prev.elevation_integral,
+                pid_kp=prev.pid_kp,
+                pid_ki=prev.pid_ki,
+                pid_kd=prev.pid_kd,
+                pid_velocity_kp=prev.pid_velocity_kp,
+                pid_velocity_ki=prev.pid_velocity_ki,
+                pid_velocity_kd=prev.pid_velocity_kd,
+                az_hall_width_deg=prev.az_hall_width_deg,
+                el_hall_width_deg=prev.el_hall_width_deg,
+                mode="position",
             )
 
     def send_protocol_command(self, request: ProtocolCommandRequest) -> dict[str, Any]:
@@ -683,12 +805,15 @@ class ControllerApplication:
 
         payload: dict[str, Any] = {}
         if command_name == CommandName.SET_TARGET.value:
-            # Thin client: pass the user's angles through unchanged. Firmware
-            # (or Track/Jog helpers) is responsible for joint-limit defense.
-            payload = {
-                "azimuth_deg": float(request.azimuth_deg if request.azimuth_deg is not None else 0.0),
-                "elevation_deg": float(request.elevation_deg if request.elevation_deg is not None else 0.0),
-            }
+            # Thin client: pass angles through unchanged unless hold_current.
+            hold_current = bool(request.hold_current)
+            if hold_current:
+                payload = {"hold_current": True}
+            else:
+                payload = {
+                    "azimuth_deg": float(request.azimuth_deg if request.azimuth_deg is not None else 0.0),
+                    "elevation_deg": float(request.elevation_deg if request.elevation_deg is not None else 0.0),
+                }
         elif command_name == CommandName.SET_VELOCITY.value:
             payload = {
                 "azimuth_deg_s": float(request.azimuth_deg_s if request.azimuth_deg_s is not None else 0.0),
@@ -724,6 +849,90 @@ class ControllerApplication:
             }
 
         self.transport.send(command)
+        if command_name == CommandName.SET_TARGET.value:
+            # Echo the setpoint into the status cache so the yellow overlay can
+            # update immediately (raw mode skips automatic get_status polls).
+            # Does not start the PID — use ``start`` for that.
+            node = self.fleet.nodes().get(node_id)
+            if node is not None:
+                prev = node.status
+                if bool(payload.get("hold_current")):
+                    taz = float(prev.azimuth_deg)
+                    tel = float(prev.elevation_deg)
+                else:
+                    taz = float(payload["azimuth_deg"])
+                    tel = float(payload["elevation_deg"])
+                node.status = MirrorStatus(
+                    node_id=prev.node_id,
+                    azimuth_home=prev.azimuth_home,
+                    elevation_home=prev.elevation_home,
+                    fault=prev.fault,
+                    azimuth_deg=prev.azimuth_deg,
+                    elevation_deg=prev.elevation_deg,
+                    target_azimuth_deg=taz,
+                    target_elevation_deg=tel,
+                    azimuth_integral=prev.azimuth_integral,
+                    elevation_integral=prev.elevation_integral,
+                    pid_kp=prev.pid_kp,
+                    pid_ki=prev.pid_ki,
+                    pid_kd=prev.pid_kd,
+                    pid_velocity_kp=prev.pid_velocity_kp,
+                    pid_velocity_ki=prev.pid_velocity_ki,
+                    pid_velocity_kd=prev.pid_velocity_kd,
+                    az_hall_width_deg=prev.az_hall_width_deg,
+                    el_hall_width_deg=prev.el_hall_width_deg,
+                    mode=prev.mode,
+                )
+        elif command_name == CommandName.START.value:
+            node = self.fleet.nodes().get(node_id)
+            if node is not None:
+                prev = node.status
+                node.status = MirrorStatus(
+                    node_id=prev.node_id,
+                    azimuth_home=prev.azimuth_home,
+                    elevation_home=prev.elevation_home,
+                    fault=prev.fault,
+                    azimuth_deg=prev.azimuth_deg,
+                    elevation_deg=prev.elevation_deg,
+                    target_azimuth_deg=prev.target_azimuth_deg,
+                    target_elevation_deg=prev.target_elevation_deg,
+                    azimuth_integral=prev.azimuth_integral,
+                    elevation_integral=prev.elevation_integral,
+                    pid_kp=prev.pid_kp,
+                    pid_ki=prev.pid_ki,
+                    pid_kd=prev.pid_kd,
+                    pid_velocity_kp=prev.pid_velocity_kp,
+                    pid_velocity_ki=prev.pid_velocity_ki,
+                    pid_velocity_kd=prev.pid_velocity_kd,
+                    az_hall_width_deg=prev.az_hall_width_deg,
+                    el_hall_width_deg=prev.el_hall_width_deg,
+                    mode="position",
+                )
+        elif command_name == CommandName.STOP.value:
+            node = self.fleet.nodes().get(node_id)
+            if node is not None:
+                prev = node.status
+                node.status = MirrorStatus(
+                    node_id=prev.node_id,
+                    azimuth_home=prev.azimuth_home,
+                    elevation_home=prev.elevation_home,
+                    fault=prev.fault,
+                    azimuth_deg=prev.azimuth_deg,
+                    elevation_deg=prev.elevation_deg,
+                    target_azimuth_deg=prev.target_azimuth_deg,
+                    target_elevation_deg=prev.target_elevation_deg,
+                    azimuth_integral=prev.azimuth_integral,
+                    elevation_integral=prev.elevation_integral,
+                    pid_kp=prev.pid_kp,
+                    pid_ki=prev.pid_ki,
+                    pid_kd=prev.pid_kd,
+                    pid_velocity_kp=prev.pid_velocity_kp,
+                    pid_velocity_ki=prev.pid_velocity_ki,
+                    pid_velocity_kd=prev.pid_velocity_kd,
+                    az_hall_width_deg=prev.az_hall_width_deg,
+                    el_hall_width_deg=prev.el_hall_width_deg,
+                    mode="idle",
+                )
         return {
             "status": "ok",
             "command": command_name,
@@ -774,6 +983,18 @@ class ControllerApplication:
 
             try:
                 self.stop_one(request.node_id)
+            except ConnectionError as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            return {"status": "ok"}
+
+        @app.post("/api/start_one")
+        def api_start_one(request: NodeRequest) -> dict[str, str]:
+            from fastapi import HTTPException
+
+            try:
+                self.start_one(request.node_id)
             except ConnectionError as exc:
                 raise HTTPException(status_code=503, detail=str(exc)) from exc
             except KeyError as exc:

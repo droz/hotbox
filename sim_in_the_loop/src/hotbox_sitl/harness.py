@@ -187,7 +187,7 @@ class SitlHarness:
             print("Control path: pure-Python simulator on all nodes")
         else:
             print(f"Control path: compiled firmware CIL on node {self.firmware_cil_node_id}, Python simulator on others")
-        print("Target geometry (blue) and true simulator geometry (yellow) are overlaid.")
+        print("Current pose (blue) and firmware target setpoint (yellow) are overlaid.")
         print("Use Home / Park / Auto / Jog in the UI to interact with the simulated mirrors.")
         try:
             uvicorn.run(

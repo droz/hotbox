@@ -46,6 +46,28 @@ bool readStringField(const String& line, const char* key, String* out) {
   return true;
 }
 
+bool readBoolField(const String& line, const char* key, bool* out) {
+  String needle = String("\"") + key + "\":";
+  int index = line.indexOf(needle);
+  if (index < 0) {
+    needle = String("\"") + key + "\": ";
+    index = line.indexOf(needle);
+  }
+  if (index < 0) {
+    return false;
+  }
+  const String rest = line.substring(index + needle.length());
+  if (rest.startsWith("true")) {
+    *out = true;
+    return true;
+  }
+  if (rest.startsWith("false")) {
+    *out = false;
+    return true;
+  }
+  return false;
+}
+
 }  // namespace
 
 ProtocolHandler::ProtocolHandler(MirrorMount* mount) : mount_(mount) {}
@@ -105,6 +127,7 @@ int ProtocolHandler::formatStatus(char* buf, size_t buflen) const {
       buflen,
       "{\"node_id\":%d,\"type\":\"status\",\"azimuth_home\":\"%s\",\"elevation_home\":\"%s\","
       "\"azimuth_deg\":%.3f,\"elevation_deg\":%.3f,"
+      "\"target_azimuth_deg\":%.3f,\"target_elevation_deg\":%.3f,"
       "\"azimuth_integral\":%.4f,\"elevation_integral\":%.4f,"
       "\"pid_kp\":%.4f,\"pid_ki\":%.4f,\"pid_kd\":%.4f,"
       "\"pid_velocity_kp\":%.4f,\"pid_velocity_ki\":%.4f,\"pid_velocity_kd\":%.4f,"
@@ -116,6 +139,8 @@ int ProtocolHandler::formatStatus(char* buf, size_t buflen) const {
       mount_->elevationHomeState(),
       static_cast<double>(mount_->azimuthDeg()),
       static_cast<double>(mount_->elevationDeg()),
+      static_cast<double>(mount_->targetAzimuthDeg()),
+      static_cast<double>(mount_->targetElevationDeg()),
       static_cast<double>(mount_->azimuthIntegralTerm()),
       static_cast<double>(mount_->elevationIntegralTerm()),
       static_cast<double>(mount_->pidKp()),
@@ -171,6 +196,9 @@ bool ProtocolHandler::handleBinary(const uint8_t* data, size_t len) {
     case kCanCmdStop:
       mount_->stop();
       return false;
+    case kCanCmdStart:
+      mount_->start();
+      return false;
     case kCanCmdClearError:
       mount_->clearError();
       return false;
@@ -181,9 +209,10 @@ bool ProtocolHandler::handleBinary(const uint8_t* data, size_t len) {
       if (len < 5) {
         return false;
       }
+      const bool hold_current = (len >= 6) && ((data[5] & 0x01) != 0);
       const int16_t az_c = static_cast<int16_t>(data[1] | (data[2] << 8));
       const int16_t el_c = static_cast<int16_t>(data[3] | (data[4] << 8));
-      mount_->setTarget(az_c / 100.0f, el_c / 100.0f);
+      mount_->setTarget(az_c / 100.0f, el_c / 100.0f, hold_current);
       return false;
     }
     case kCanCmdSetVelocity: {
@@ -247,6 +276,10 @@ void ProtocolHandler::handleLine(const String& line) {
     emitAck("stop", true);
     return;
   }
+  if (hasCommand(line, "start")) {
+    emitAck("start", mount_->start());
+    return;
+  }
   if (hasCommand(line, "clear_error")) {
     mount_->clearError();
     emitAck("clear_error", true);
@@ -262,11 +295,15 @@ void ProtocolHandler::handleLine(const String& line) {
     return;
   }
   if (hasCommand(line, "set_target")) {
+    bool hold_current = false;
+    readBoolField(line, "hold_current", &hold_current);
     float az = 0.0f;
     float el = 0.0f;
-    readFloatField(line, "azimuth_deg", &az);
-    readFloatField(line, "elevation_deg", &el);
-    emitAck("set_target", mount_->setTarget(az, el));
+    if (!hold_current) {
+      readFloatField(line, "azimuth_deg", &az);
+      readFloatField(line, "elevation_deg", &el);
+    }
+    emitAck("set_target", mount_->setTarget(az, el, hold_current));
     return;
   }
   if (hasCommand(line, "set_velocity")) {

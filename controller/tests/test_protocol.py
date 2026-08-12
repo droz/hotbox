@@ -3,6 +3,18 @@ from __future__ import annotations
 from hotbox_controller.protocol import CommandName, MirrorCommand, MirrorStatus
 
 
+def test_set_target_can_roundtrip_with_hold_current_flag() -> None:
+    command = MirrorCommand(
+        node_id=0,
+        command=CommandName.SET_TARGET,
+        payload={"hold_current": True},
+    )
+    frame = command.to_can_frame()
+    restored = MirrorCommand.from_can_frame(0, frame)
+    assert restored.command == CommandName.SET_TARGET
+    assert restored.payload["hold_current"] is True
+
+
 def test_set_velocity_can_roundtrip() -> None:
     command = MirrorCommand(
         node_id=0,
@@ -23,6 +35,8 @@ def test_mirror_status_wire_roundtrip() -> None:
         elevation_home="homed",
         azimuth_deg=10.5,
         elevation_deg=20.25,
+        target_azimuth_deg=12.0,
+        target_elevation_deg=25.5,
         azimuth_integral=0.1,
         elevation_integral=-0.2,
         pid_kp=1.2,
@@ -39,11 +53,24 @@ def test_mirror_status_wire_roundtrip() -> None:
     assert restored.elevation_home == "homed"
     assert restored.homed is True
     assert abs(restored.azimuth_deg - 10.5) < 1e-9
+    assert abs(restored.target_azimuth_deg - 12.0) < 1e-9
+    assert abs(restored.target_elevation_deg - 25.5) < 1e-9
     assert abs(restored.azimuth_integral - 0.1) < 1e-9
     assert abs(restored.elevation_integral - (-0.2)) < 1e-9
     assert restored.pid_kp == 1.2
     assert restored.pid_velocity_kp == 1.0
     assert restored.mode == "position"
+
+
+def test_mirror_status_wire_without_targets_is_backward_compatible() -> None:
+    wire = (
+        b'{"node_id":0,"type":"status","azimuth_home":"homed","elevation_home":"homed",'
+        b'"azimuth_deg":1.0,"elevation_deg":2.0,"mode":"idle"}'
+    )
+    status = MirrorStatus.from_wire(wire)
+    assert status.target_azimuth_deg is None
+    assert status.target_elevation_deg is None
+    assert "target_azimuth_deg" not in status.as_dict()
 
 
 def test_mirror_status_hall_width_roundtrip() -> None:

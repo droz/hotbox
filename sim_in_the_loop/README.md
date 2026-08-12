@@ -5,7 +5,7 @@ Fast development simulator for:
 - controller + simulated mirrors talking over the same protocol
 - continuous physics with a live web UI
 - simplified single-ray-per-facet geometry checks
-- estimated vs true geometry overlay
+- current pose vs commanded target geometry overlay
 
 ## Live interactive mode (default)
 
@@ -27,8 +27,8 @@ http://<your-lan-ip>:8000/
 
 The page shows:
 
-- estimated controller geometry (blue)
-- true simulator geometry (yellow)
+- current reported pose (blue)
+- firmware position setpoint / target (yellow)
 - GPS / sun / mirror status
 - Home, Park, Auto, and jog controls
 

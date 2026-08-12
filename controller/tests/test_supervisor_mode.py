@@ -10,6 +10,11 @@ class FakeTransport(MirrorTransport):
         self.node_ids = node_ids or [0]
         self.sent: list[MirrorCommand] = []
         self.polls: list[int] = []
+        self._pose: dict[int, tuple[float, float]] = {
+            int(n): (10.0, 20.0) for n in (node_ids or [0])
+        }
+        self._target: dict[int, tuple[float, float]] = dict(self._pose)
+        self._mode: dict[int, str] = {int(n): "idle" for n in (node_ids or [0])}
 
     def discover(self):
         for node_id in self.node_ids:
@@ -17,16 +22,34 @@ class FakeTransport(MirrorTransport):
 
     def send(self, command: MirrorCommand) -> None:
         self.sent.append(command)
+        nid = int(command.node_id)
+        if command.command == CommandName.SET_TARGET:
+            if bool(command.payload.get("hold_current")):
+                self._target[nid] = self._pose[nid]
+            else:
+                az = float(command.payload.get("azimuth_deg", self._target[nid][0]))
+                el = float(command.payload.get("elevation_deg", self._target[nid][1]))
+                self._target[nid] = (az, el)
+        elif command.command == CommandName.START:
+            self._mode[nid] = "position"
+        elif command.command == CommandName.STOP:
+            self._mode[nid] = "idle"
+        elif command.command == CommandName.SET_VELOCITY:
+            self._mode[nid] = "velocity"
 
     def poll_status(self, node_id: int) -> MirrorStatus:
         self.polls.append(int(node_id))
+        az, el = self._pose[int(node_id)]
+        taz, tel = self._target[int(node_id)]
         return MirrorStatus(
             node_id=node_id,
             azimuth_home="homed",
             elevation_home="homed",
-            azimuth_deg=10.0,
-            elevation_deg=20.0,
-            mode="idle",
+            azimuth_deg=az,
+            elevation_deg=el,
+            target_azimuth_deg=taz,
+            target_elevation_deg=tel,
+            mode=self._mode[int(node_id)],
         )
 
 
@@ -162,6 +185,34 @@ def test_set_mode_rejects_unknown() -> None:
         assert "unsupported" in str(exc)
 
 
+def test_geometry_target_uses_hardware_setpoint_not_supervisor() -> None:
+    """Yellow overlay follows firmware target_* from status, not track/park solve."""
+    from hotbox_controller.app import ProtocolCommandRequest
+
+    app, transport = _app()
+    # Seed status cache while still auto-polling, then switch to raw.
+    app.current_snapshot()
+    app.set_mirror_mode(0, "raw")
+    app.send_protocol_command(
+        ProtocolCommandRequest(
+            command="set_target",
+            node_id=0,
+            azimuth_deg=55.0,
+            elevation_deg=66.0,
+        )
+    )
+
+    snap = app.current_snapshot()
+    mirror = next(m for m in snap["geometry"]["target"]["mirrors"] if m["node_id"] == 0)
+    assert abs(mirror["azimuth_deg"] - 55.0) < 1e-6
+    assert abs(mirror["elevation_deg"] - 66.0) < 1e-6
+    live = next(m for m in snap["geometry"]["live"]["mirrors"] if m["node_id"] == 0)
+    assert abs(live["azimuth_deg"] - 10.0) < 1e-6
+    assert abs(live["elevation_deg"] - 20.0) < 1e-6
+    assert abs(snap["mirrors"]["0"]["target_azimuth_deg"] - 55.0) < 1e-6
+    assert abs(snap["mirrors"]["0"]["target_elevation_deg"] - 66.0) < 1e-6
+
+
 def test_send_protocol_command_raw_wire() -> None:
     from hotbox_controller.app import ProtocolCommandRequest
 
@@ -196,6 +247,19 @@ def test_send_protocol_command_raw_wire() -> None:
 
     discovered = app.send_protocol_command(ProtocolCommandRequest(command="discover"))
     assert {n["node_id"] for n in discovered["nodes"]} == {0, 1}
+
+
+def test_jog_release_holds_current_and_starts() -> None:
+    from hotbox_controller.app import JogRequest
+
+    app, transport = _app()
+    app.jog(JogRequest(node_id=0, azimuth_rate_deg_s=5.0, elevation_rate_deg_s=0.0))
+    transport.sent.clear()
+    app.jog(JogRequest(node_id=0, azimuth_rate_deg_s=0.0, elevation_rate_deg_s=0.0))
+    assert not any(c.command == CommandName.STOP for c in transport.sent)
+    holds = [c for c in transport.sent if c.command == CommandName.SET_TARGET]
+    assert holds and holds[-1].payload.get("hold_current") is True
+    assert any(c.command == CommandName.START for c in transport.sent)
 
 
 def test_send_protocol_command_rejects_unknown() -> None:

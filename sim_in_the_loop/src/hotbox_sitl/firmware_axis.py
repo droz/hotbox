@@ -257,6 +257,8 @@ class FirmwareMirrorNode:
             fault=fw.fault,
             azimuth_deg=self._az_angle_deg,
             elevation_deg=self._el_angle_deg,
+            target_azimuth_deg=fw.target_azimuth_deg,
+            target_elevation_deg=fw.target_elevation_deg,
             azimuth_integral=fw.azimuth_integral,
             elevation_integral=fw.elevation_integral,
             pid_kp=fw.pid_kp,

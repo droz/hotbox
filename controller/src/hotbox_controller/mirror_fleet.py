@@ -54,6 +54,9 @@ class MirrorFleet:
     def stop(self, node_id: int) -> None:
         self._transport.send(MirrorCommand(node_id=node_id, command=CommandName.STOP))
 
+    def start(self, node_id: int) -> None:
+        self._transport.send(MirrorCommand(node_id=node_id, command=CommandName.START))
+
     def poll(self) -> dict[int, MirrorStatus]:
         out: dict[int, MirrorStatus] = {}
         for node_id in self._nodes:
@@ -62,7 +65,7 @@ class MirrorFleet:
             out[node_id] = status
         return out
 
-    def apply_targets(self, targets: dict[int, TrackingTarget]) -> None:
+    def apply_targets(self, targets: dict[int, TrackingTarget], *, start: bool = True) -> None:
         for node_id, target in targets.items():
             self._transport.send(
                 MirrorCommand(
@@ -74,6 +77,21 @@ class MirrorFleet:
                     },
                 )
             )
+            if start:
+                self._transport.send(MirrorCommand(node_id=node_id, command=CommandName.START))
+
+    def hold_current(self, node_id: int, *, start: bool = False) -> None:
+        """set_target with hold_current; optionally engage position PID."""
+        node_id = int(node_id)
+        self._transport.send(
+            MirrorCommand(
+                node_id=node_id,
+                command=CommandName.SET_TARGET,
+                payload={"hold_current": True},
+            )
+        )
+        if start:
+            self._transport.send(MirrorCommand(node_id=node_id, command=CommandName.START))
 
     def apply_velocities(self, rates: dict[int, tuple[float, float]]) -> None:
         for node_id, (az_rate, el_rate) in rates.items():

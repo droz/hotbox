@@ -83,7 +83,7 @@ Responsibilities:
 - target generation for active tracking or safe parking
 - calibration file loading/saving
 - FastAPI server plus a lightweight Three.js web page
-- estimated vs true geometry overlay for simulation debugging
+- current pose vs commanded target geometry overlay in the web UI
 
 Current module split:
 
@@ -281,7 +281,7 @@ cd controller
 uv run hotbox-controller
 ```
 
-Open [http://127.0.0.1:8000/](http://127.0.0.1:8000/). You should see mirror **M0** with live az/el (not sim-only “true” geometry).
+Open [http://127.0.0.1:8000/](http://127.0.0.1:8000/). You should see mirror **M0** with current pose (blue) and commanded target (yellow).
 
 4. **Smoke-test from the UI**
 

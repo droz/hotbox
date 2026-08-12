@@ -96,16 +96,31 @@ class SimulatedMirrorNode:
                 self.azimuth_home = "unhomed"
             if self.elevation_home == "homing":
                 self.elevation_home = "unhomed"
+            self._vel_az = 0.0
+            self._vel_el = 0.0
             self.mode = "idle"
+        elif command.command == CommandName.START:
+            if self.mode == "homing" or not self.homed:
+                return
+            self._vel_az = 0.0
+            self._vel_el = 0.0
+            self.mode = "position"
+            self.fault = None
         elif command.command == CommandName.SET_TARGET:
             if self.mode == "homing" or not self.homed:
                 return
-            self.target_azimuth_deg = float(command.payload.get("azimuth_deg", self.target_azimuth_deg))
-            self.target_elevation_deg = float(command.payload.get("elevation_deg", self.target_elevation_deg))
-            self.mode = "position"
+            if bool(command.payload.get("hold_current")):
+                self.target_azimuth_deg = float(self.azimuth_axis.state.angle_deg)
+                self.target_elevation_deg = float(self.altitude_axis.state.angle_deg)
+            else:
+                self.target_azimuth_deg = float(
+                    command.payload.get("azimuth_deg", self.target_azimuth_deg)
+                )
+                self.target_elevation_deg = float(
+                    command.payload.get("elevation_deg", self.target_elevation_deg)
+                )
+            # Do not change mode — start engages position PID.
             self.fault = None
-            self._vel_az = 0.0
-            self._vel_el = 0.0
         elif command.command == CommandName.SET_VELOCITY:
             if self.mode == "homing" or not self.homed:
                 return
@@ -131,6 +146,8 @@ class SimulatedMirrorNode:
             fault=self.fault,
             azimuth_deg=self.azimuth_axis.state.angle_deg,
             elevation_deg=self.altitude_axis.state.angle_deg,
+            target_azimuth_deg=self.target_azimuth_deg,
+            target_elevation_deg=self.target_elevation_deg,
             mode=self.mode,
         )
 

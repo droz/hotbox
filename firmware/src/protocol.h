@@ -18,6 +18,7 @@ enum CanCommandId : uint8_t {
   kCanCmdSetPidPos = 7,
   kCanCmdSetVelocity = 8,
   kCanCmdSetPidVel = 9,
+  kCanCmdStart = 10,
 };
 
 constexpr uint32_t kCanCmdBaseId = 0x100;

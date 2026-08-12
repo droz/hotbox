@@ -221,13 +221,26 @@ void BrushedAxis::finishHoming(float mid_deg) {
   Serial.println("}");
   // Drive back to the new zero (hall midpoint).
   setTargetDeg(home_deg);
+  startPosition();
 }
 
 void BrushedAxis::setTargetDeg(float target_deg) {
   target_deg_ = target_deg;
   command_velocity_deg_s_ = 0.0f;
+  // Do not change mode — startPosition() / setVelocity / home own that.
+}
+
+void BrushedAxis::startPosition() {
+  if (mode_ == AxisMode::Position) {
+    return;
+  }
+  // Don't interrupt an incomplete home. finishHoming sets homed_ first, then
+  // calls startPosition to enter Position — that path must be allowed.
+  if (mode_ == AxisMode::Homing && !homed_) {
+    return;
+  }
+  command_velocity_deg_s_ = 0.0f;
   mode_ = AxisMode::Position;
-  // Switching loops: clear shared-ish state so leftover I doesn't punch.
   resetPidState();
   clearFault();
 }
@@ -242,6 +255,7 @@ void BrushedAxis::setVelocityDegS(float velocity_deg_s) {
 void BrushedAxis::stop() {
   mode_ = AxisMode::Idle;
   command_velocity_deg_s_ = 0.0f;
+  // Leave target_deg_ unchanged so a later start() resumes the prior setpoint.
   homing_phase_ = HomingPhase::Seek;
   resetPidState();
   driveMotor(0.0f);
@@ -585,13 +599,27 @@ void MirrorMount::stop() {
   refreshModeText();
 }
 
-bool MirrorMount::setTarget(float azimuth_deg, float elevation_deg) {
+bool MirrorMount::setTarget(float azimuth_deg, float elevation_deg, bool hold_current) {
   if (!isHomed()) {
     return false;
+  }
+  if (hold_current) {
+    azimuth_deg = azimuth_.positionDeg();
+    elevation_deg = elevation_.positionDeg();
   }
   clamp_joint_targets(&azimuth_deg, &elevation_deg);
   azimuth_.setTargetDeg(azimuth_deg);
   elevation_.setTargetDeg(elevation_deg);
+  refreshModeText();
+  return true;
+}
+
+bool MirrorMount::start() {
+  if (!isHomed()) {
+    return false;
+  }
+  azimuth_.startPosition();
+  elevation_.startPosition();
   refreshModeText();
   return true;
 }

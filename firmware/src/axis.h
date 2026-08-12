@@ -21,8 +21,12 @@ class BrushedAxis {
 
   void begin();
   void startHoming();
+  /** Update position setpoint only — does not engage the PID (see startPosition). */
   void setTargetDeg(float target_deg);
+  /** Engage position PID toward the current setpoint (no-op if already in Position). */
+  void startPosition();
   void setVelocityDegS(float velocity_deg_s);
+  /** Disengage PID / coast. Does not modify the position setpoint. */
   void stop();
   void clearFault();
   void update(float dt_s);
@@ -32,6 +36,7 @@ class BrushedAxis {
   void resetPidState();
 
   float positionDeg() const { return position_deg_; }
+  float targetDeg() const { return target_deg_; }
   float velocityDegS() const { return velocity_deg_s_; }
   /** Integral term contribution to duty command (position loop), before clamp. */
   float integralTerm() const { return ki_ * integral_; }
@@ -133,8 +138,14 @@ class MirrorMount {
   void homeAzimuth();
   void homeElevation();
   void stop();
-  /** Returns false if either axis is not yet homeed (command ignored). */
-  bool setTarget(float azimuth_deg, float elevation_deg);
+  /**
+   * Update position setpoints only (does not start the PID).
+   * When ``hold_current`` is true, ignore az/el and capture the live pose.
+   * Returns false if either axis is not yet homed (command ignored).
+   */
+  bool setTarget(float azimuth_deg, float elevation_deg, bool hold_current = false);
+  /** Engage position PID on both axes. Returns false if not yet homed. */
+  bool start();
   /** Returns false if either axis is not yet homeed (command ignored). */
   bool setVelocity(float azimuth_deg_s, float elevation_deg_s);
   void clearError();
@@ -146,6 +157,8 @@ class MirrorMount {
 
   float azimuthDeg() const { return azimuth_.positionDeg(); }
   float elevationDeg() const { return elevation_.positionDeg(); }
+  float targetAzimuthDeg() const { return azimuth_.targetDeg(); }
+  float targetElevationDeg() const { return elevation_.targetDeg(); }
   float azimuthIntegralTerm() const { return azimuth_.integralTerm(); }
   float elevationIntegralTerm() const { return elevation_.integralTerm(); }
   float pidKp() const { return pid_kp_; }
